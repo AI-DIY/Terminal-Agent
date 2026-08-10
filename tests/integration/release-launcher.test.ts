@@ -24,6 +24,7 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
   const stateDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-release-state-'))
   const profilePath = join(profileDirectory, '发布验证会话.conf')
   const copiedBridgePath = join(mappingDirectory, 'putty.exe')
+  const bridgeLogPath = join(mappingDirectory, 'putty-bridge.log')
   const password = 'release-fixture-password'
   let previousInstallPath: InstallPathRegistration | undefined
   let launcher: ChildProcess | undefined
@@ -69,6 +70,17 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
       username: 'release-fixture-user',
       pty: { columns: 132, rows: 43 },
     })
+    await waitForCondition('the correlated bridge diagnostic trace', async () => {
+      const trace = await readFile(bridgeLogPath, 'utf8').catch(() => '')
+      return trace.includes('"source":"bridge"')
+        && trace.includes('"event":"process-started"')
+        && trace.includes('"source":"runtime"')
+        && trace.includes('"event":"session-opened"')
+    })
+    const trace = await readFile(bridgeLogPath, 'utf8')
+    expect(trace).toContain('"runtime":"')
+    expect(trace).not.toContain(password)
+    expect(trace).not.toContain(profilePath)
   } catch (error) {
     primaryFailure = error
     throw error
@@ -94,6 +106,57 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
           rm(stateDirectory, { recursive: true, force: true }),
         ])
       },
+    ])
+  }
+})
+
+test.skipIf(process.platform !== 'win32')('a co-located bridge skips a stale registered install path', async () => {
+  await access(packagedBridgePath)
+
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-release-stale-registry-'))
+  const bridgeLogPath = join(releaseDirectory, 'putty-bridge.log')
+  let previousInstallPath: InstallPathRegistration | undefined
+  let launcher: ChildProcess | undefined
+  let runtimeProcessId: number | undefined
+  let primaryFailure: unknown
+  let launchAttempted = false
+  let preexistingRuntimeProcessIds = new Set<number>()
+
+  try {
+    previousInstallPath = await readInstallPathRegistration()
+    await rm(bridgeLogPath, { force: true })
+    await writeInstallPathRegistration(join(stateDirectory, 'missing-installation'))
+    preexistingRuntimeProcessIds = new Set(await findRuntimeProcessIds())
+    launchAttempted = true
+    launcher = spawn(packagedBridgePath, ['-raw', '-P', '1'], {
+      env: { ...process.env, APPDATA: stateDirectory, LOCALAPPDATA: stateDirectory },
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    await once(launcher, 'exit')
+    runtimeProcessId = await waitForCondition('the co-located runtime process', () => findNewRuntimeProcessId(preexistingRuntimeProcessIds))
+    await waitForCondition('the stale-registry bridge trace', async () => {
+      const trace = await readFile(bridgeLogPath, 'utf8').catch(() => '')
+      return trace.includes('"candidateSource":"registry"')
+        && trace.includes('"exists":"false"')
+        && trace.includes('"candidateSource":"bridge-directory"')
+        && trace.includes('"exists":"true"')
+        && trace.includes('"event":"process-started"')
+    })
+  } catch (error) {
+    primaryFailure = error
+    throw error
+  } finally {
+    let processIdToStop = runtimeProcessId
+    await runReleaseLauncherCleanup(primaryFailure, [
+      async () => {
+        if (launchAttempted) processIdToStop ??= await findNewRuntimeProcessId(preexistingRuntimeProcessIds)
+      },
+      async () => { if (processIdToStop !== undefined) await terminateProcessTree(processIdToStop) },
+      () => { if (launcher?.exitCode === null) launcher.kill() },
+      async () => { if (previousInstallPath !== undefined) await restoreInstallPathRegistration(previousInstallPath) },
+      async () => { await rm(stateDirectory, { recursive: true, force: true }) },
+      async () => { await rm(bridgeLogPath, { force: true }) },
     ])
   }
 })

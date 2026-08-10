@@ -1,4 +1,5 @@
-const launchFailureMessage = '无法建立 AccessClient 会话。请检查启动参数、连接状态和本次凭据。'
+import { extractBridgeLaunchMetadata } from './bridge-diagnostics'
+import { AccessClientLaunchFailure, formatAccessClientLaunchFailure } from './launch-failure'
 
 type AccessClientLauncher = {
   tryOpenFromArgv(argv: readonly string[]): Promise<boolean>
@@ -13,8 +14,11 @@ export class AccessClientLaunchController {
   async tryOpenFromArgv(argv: readonly string[]): Promise<boolean> {
     try {
       return await this.launcher.tryOpenFromArgv(argv)
-    } catch {
-      this.publishFailure(launchFailureMessage)
+    } catch (error) {
+      const failure = error instanceof AccessClientLaunchFailure
+        ? error
+        : new AccessClientLaunchFailure('transport-connect-failed')
+      this.publishFailure(formatAccessClientLaunchFailure(failure.code, extractBridgeLaunchMetadata(argv)?.logPath))
       return false
     }
   }
