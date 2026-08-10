@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { terminalAgentNamespace } from '../../../src/preload/api'
-import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, sessionModeSchema } from '../../../src/shared/contracts'
+import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema } from '../../../src/shared/contracts'
 
 const { exposeInMainWorld } = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn()
@@ -51,6 +51,18 @@ describe('agentStartRequestSchema', () => {
     expect(() => agentStartRequestSchema.parse({ sessionId: 'session-a', goal: '检查 nginx 服务' })).toThrow()
     expect(() => agentStartRequestSchema.parse({ sessionId: 'session-a', runId: 'not-a-uuid', goal: '检查 nginx 服务' })).toThrow()
     expect(() => agentStartRequestSchema.parse({ sessionId: 'session-a', goal: '检查 nginx', terminalExcerpt: 'secret output' })).toThrow()
+  })
+})
+
+describe('savedDirectSessionInputSchema', () => {
+  it('accepts a direct password profile but never exposes an AccessClient launch type', () => {
+    expect(savedDirectSessionInputSchema.parse({
+      id: 'prod-api', name: '生产 API', host: 'api.example.com', port: 22, username: 'ops',
+      auth: { kind: 'password', password: 'secret' },
+    })).toMatchObject({ id: 'prod-api', auth: { kind: 'password' } })
+    expect(() => savedDirectSessionInputSchema.parse({
+      id: 'jump', name: '堡垒机', host: '127.0.0.1', port: 22022, username: '', protocol: 'raw',
+    })).toThrow()
   })
 })
 
@@ -130,6 +142,32 @@ describe('terminalAgent preload API', () => {
     expect(invoke).toHaveBeenCalledWith('sessions:list')
     expect(listener).toHaveBeenCalledWith({ id: 's2', hostname: '127.0.0.1', title: 'Raw 22022', mode: 'copilot' })
     expect(removeListener).toHaveBeenCalledWith('sessions:opened', registeredListener)
+  })
+
+  it('routes direct session-book actions only through named profile IPC channels', async () => {
+    await import('../../../src/preload/index')
+    const [, api] = exposeInMainWorld.mock.calls[0] as [string, {
+      sessions: {
+        listProfiles: () => Promise<unknown>
+        saveProfile: (profile: unknown) => Promise<unknown>
+        openProfile: (id: string) => Promise<unknown>
+        deleteProfile: (id: string) => Promise<unknown>
+      }
+    }]
+    const profile = {
+      id: 'prod-api', name: '生产 API', host: 'api.example.com', port: 22, username: 'ops',
+      auth: { kind: 'password', password: 'secret' },
+    }
+
+    await api.sessions.listProfiles()
+    await api.sessions.saveProfile(profile)
+    await api.sessions.openProfile('prod-api')
+    await api.sessions.deleteProfile('prod-api')
+
+    expect(invoke).toHaveBeenCalledWith('sessions:profiles:list')
+    expect(invoke).toHaveBeenCalledWith('sessions:profiles:save', profile)
+    expect(invoke).toHaveBeenCalledWith('sessions:profiles:open', 'prod-api')
+    expect(invoke).toHaveBeenCalledWith('sessions:profiles:delete', 'prod-api')
   })
 
   it('exposes only named AccessClient launch-error methods', async () => {

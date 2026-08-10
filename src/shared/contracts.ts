@@ -77,3 +77,20 @@ export const rendererSessionRequestSchema = z.object({
   ]),
 })
 export type RendererSessionRequest = z.infer<typeof rendererSessionRequestSchema>
+
+export const savedDirectSessionInputSchema = z.object({
+  id: terminalSessionIdSchema,
+  name: z.string().trim().min(1).max(255),
+  host: hostnameSchema,
+  port: z.number().int().min(1).max(65_535),
+  username: z.string().trim().min(1).max(255),
+  auth: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('password'), password: z.string().max(8_192) }),
+    z.object({
+      kind: z.literal('privateKey'),
+      privateKeyPath: z.string().trim().min(1).max(4_096),
+      passphrase: z.string().max(8_192).optional(),
+    }),
+  ]),
+})
+export type SavedDirectSessionInput = z.infer<typeof savedDirectSessionInputSchema>

@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { KeyMaterialStore } from '../../../src/main/ssh/key-material-store'
 import type { SessionService } from '../../../src/main/ssh/session-service'
 import { registerSessionHandlers } from '../../../src/main/ipc/register-handlers'
@@ -135,6 +138,64 @@ describe('registerSessionHandlers', () => {
       id: 's1', hostname: 'bastion-target', title: '生产终端', mode: 'autonomous',
     })
   })
+
+  it('lists, saves, opens and removes only direct SSH profiles without returning credentials to the renderer', async () => {
+    const sessions = createSessions()
+    const keys = createKeys()
+    const profiles = createProfiles()
+    const sender = createSender()
+    const dispose = registerSessionHandlers(sessions, keys, sender as never, profiles)
+
+    await expect(invoke(handlerFor('sessions:profiles:list'), trustedEvent(sender))).resolves.toEqual([{
+      id: 'prod-api', name: '生产 API', host: 'api.example.com', port: 22, username: 'ops', authKind: 'password',
+    }])
+    await invoke(handlerFor('sessions:profiles:save'), trustedEvent(sender), {
+      id: 'prod-api', name: '生产 API', host: 'api.example.com', port: 22, username: 'ops',
+      auth: { kind: 'password', password: 'secret-password' },
+    })
+    await invoke(handlerFor('sessions:profiles:open'), trustedEvent(sender), 'prod-api')
+    await invoke(handlerFor('sessions:profiles:delete'), trustedEvent(sender), 'prod-api')
+
+    expect(profiles.save).toHaveBeenCalledWith({
+      id: 'prod-api', name: '生产 API', host: 'api.example.com', port: 22, username: 'ops',
+      auth: { kind: 'password', password: 'secret-password' },
+    })
+    expect(sessions.connect).toHaveBeenCalledWith({
+      host: 'api.example.com', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret-password' },
+    })
+    expect(profiles.remove).toHaveBeenCalledWith('prod-api')
+    expect(JSON.stringify(sender.send.mock.calls)).not.toContain('secret-password')
+
+    dispose()
+    expect(removeHandler.mock.calls.map(([channel]) => channel)).toContain('sessions:profiles:delete')
+  })
+
+  it('loads a saved private key only in the main process when reopening a direct profile', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-private-profile-'))
+    const privateKeyPath = join(directory, 'prod.key')
+    await writeFile(privateKeyPath, 'PRIVATE KEY CONTENT', 'utf8')
+    const sessions = createSessions()
+    const profiles = createProfiles()
+    profiles.load.mockResolvedValueOnce({
+      id: 'prod-api', name: '生产 API', host: 'api.example.com', port: 22, username: 'ops',
+      auth: { kind: 'privateKey', privateKeyPath, passphrase: 'key-phrase' },
+    })
+    const sender = createSender()
+    registerSessionHandlers(sessions, createKeys(), sender as never, profiles)
+
+    try {
+      await invoke(handlerFor('sessions:profiles:open'), trustedEvent(sender), 'prod-api')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+
+    expect(sessions.connect).toHaveBeenCalledWith({
+      host: 'api.example.com', port: 22, username: 'ops',
+      auth: { kind: 'privateKey', key: { fileName: 'prod.key', content: Buffer.from('PRIVATE KEY CONTENT'), passphrase: 'key-phrase' } },
+    })
+    expect(JSON.stringify(sender.send.mock.calls)).not.toContain('PRIVATE KEY CONTENT')
+    expect(JSON.stringify(sender.send.mock.calls)).not.toContain('key-phrase')
+  })
 })
 
 function handlerFor(channel: string): (...args: unknown[]) => unknown {
@@ -176,4 +237,18 @@ function createKeys() {
     take: vi.fn().mockReturnValue({ fileName: 'prod.ppk', content: Buffer.from('private key'), passphrase: 'phrase' }),
     clear: vi.fn(),
   } as unknown as KeyMaterialStore
+}
+
+function createProfiles() {
+  return {
+    list: vi.fn().mockResolvedValue([{
+      id: 'prod-api', name: '生产 API', host: 'api.example.com', port: 22, username: 'ops', authKind: 'password',
+    }]),
+    save: vi.fn().mockResolvedValue(undefined),
+    load: vi.fn().mockResolvedValue({
+      id: 'prod-api', name: '生产 API', host: 'api.example.com', port: 22, username: 'ops',
+      auth: { kind: 'password', password: 'secret-password' },
+    }),
+    remove: vi.fn().mockResolvedValue(undefined),
+  }
 }

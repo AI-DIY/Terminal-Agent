@@ -4,6 +4,7 @@ import { registerSessionHandlers } from './ipc/register-handlers'
 import { PpkToOpenSshConverter, PrivateKeyLoader } from './ssh/private-key-loader'
 import { KeyMaterialStore } from './ssh/key-material-store'
 import { SessionService } from './ssh/session-service'
+import { FileDirectSessionRepository } from './ssh/direct-session-repository'
 import { Ssh2ClientAdapter } from './ssh/ssh2-client-adapter'
 import { RawClientAdapter } from './ssh/raw-client-adapter'
 import { AccessClientService } from './access-client/access-client-service'
@@ -39,13 +40,15 @@ import { registerSessionObservation } from './observation/register-session-obser
 let mainWindow: BrowserWindow | undefined
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
 const keyMaterials = new KeyMaterialStore()
+const secretStore = new ElectronSecretStore()
+const directSessions = new FileDirectSessionRepository(join(app.getPath('userData'), 'direct-sessions.json'), secretStore)
 const sessionModes = new SessionModeController(new SessionModeService(), sessions)
 sessionModes.listen()
 const confirmations = new ConfirmationService()
 const candidateConfirmations = new CandidateConfirmationService(confirmations)
 sessions.onClosed(event => candidateConfirmations.closeSession(event.sessionId))
 const regexRules = new RegexRuleSettingsService(new FileRegexRuleRepository(join(app.getPath('userData'), 'regex-fence-rules.json')))
-const modelSettings = new ModelSettingsService(new JsonSettingsRepository(), new ElectronSecretStore())
+const modelSettings = new ModelSettingsService(new JsonSettingsRepository(), secretStore)
 const agentScheduler = new AgentScheduler(new AgentModelRuntime(modelSettings, new ChatCompletionsClient()))
 const executionGateway = new ExecutionGateway(
   sessionModes,
@@ -108,7 +111,7 @@ export function createMainWindow(): BrowserWindow {
     mainWindow = undefined
   })
 
-  unregisterSessionEvents = registerSessionHandlers(sessions, keyMaterials, mainWindow.webContents)
+  unregisterSessionEvents = registerSessionHandlers(sessions, keyMaterials, mainWindow.webContents, directSessions)
   unregisterAccessClientLaunchEvents = registerAccessClientLaunchHandlers(accessClientLaunches, mainWindow.webContents)
   unregisterSessionModeHandlers = registerSessionModeHandlers(sessionModes, mainWindow.webContents)
   unregisterConfirmationHandlers = registerConfirmationHandlers(candidateConfirmations, mainWindow.webContents)

@@ -2,14 +2,30 @@ import { ipcMain, type WebContents } from 'electron'
 import type { DirectSessionRequest, SessionService } from '../ssh/session-service'
 import {
   rendererSessionRequestSchema,
+  savedDirectSessionInputSchema,
   terminalResizeSchema,
   terminalSessionIdSchema,
   terminalWriteSchema,
   type RendererSessionRequest,
 } from '../../shared/contracts'
 import { KeyMaterialStore } from '../ssh/key-material-store'
+import type { DirectSessionProfile, DirectSessionSummary } from '../ssh/direct-session-repository'
+import { readFile } from 'node:fs/promises'
+import { basename } from 'node:path'
 
-export function registerSessionHandlers(sessions: SessionService, keyMaterials: KeyMaterialStore, sender: WebContents): () => void {
+type DirectSessionProfiles = {
+  list(): Promise<DirectSessionSummary[]>
+  save(profile: DirectSessionProfile): Promise<void>
+  load(id: string): Promise<DirectSessionProfile>
+  remove(id: string): Promise<void>
+}
+
+export function registerSessionHandlers(
+  sessions: SessionService,
+  keyMaterials: KeyMaterialStore,
+  sender: WebContents,
+  directProfiles?: DirectSessionProfiles,
+): () => void {
   ipcMain.handle('sessions:connect', async (event, request: unknown) => {
     assertTrustedSender(event, sender)
     const parsed = rendererSessionRequestSchema.parse(request)
@@ -37,6 +53,25 @@ export function registerSessionHandlers(sessions: SessionService, keyMaterials: 
     assertTrustedSender(event, sender)
     return sessions.snapshot()
   })
+  if (directProfiles) {
+    ipcMain.handle('sessions:profiles:list', async event => {
+      assertTrustedSender(event, sender)
+      return directProfiles.list()
+    })
+    ipcMain.handle('sessions:profiles:save', async (event, profile: unknown) => {
+      assertTrustedSender(event, sender)
+      await directProfiles.save(savedDirectSessionInputSchema.parse(profile))
+    })
+    ipcMain.handle('sessions:profiles:open', async (event, id: unknown) => {
+      assertTrustedSender(event, sender)
+      const profile = await directProfiles.load(terminalSessionIdSchema.parse(id))
+      return sessions.connect(await toSavedDirectRequest(profile))
+    })
+    ipcMain.handle('sessions:profiles:delete', async (event, id: unknown) => {
+      assertTrustedSender(event, sender)
+      await directProfiles.remove(terminalSessionIdSchema.parse(id))
+    })
+  }
 
   const unsubscribe = sessions.onData(event => sender.send('sessions:data', event))
   const unsubscribeClosed = sessions.onClosed(event => sender.send('sessions:closed', event))
@@ -55,6 +90,12 @@ export function registerSessionHandlers(sessions: SessionService, keyMaterials: 
     ipcMain.removeHandler('sessions:resize')
     ipcMain.removeHandler('sessions:close')
     ipcMain.removeHandler('sessions:list')
+    if (directProfiles) {
+      ipcMain.removeHandler('sessions:profiles:list')
+      ipcMain.removeHandler('sessions:profiles:save')
+      ipcMain.removeHandler('sessions:profiles:open')
+      ipcMain.removeHandler('sessions:profiles:delete')
+    }
   }
 }
 
@@ -66,4 +107,20 @@ function toDirectRequest(request: RendererSessionRequest, keyMaterials: KeyMater
   const common = { host: request.host, port: request.port, username: request.username }
   if (request.auth.kind === 'password') return { ...common, auth: request.auth }
   return { ...common, auth: { kind: 'privateKey', key: keyMaterials.take(request.auth.keyReference, request.auth.passphrase) } }
+}
+
+async function toSavedDirectRequest(profile: DirectSessionProfile): Promise<DirectSessionRequest> {
+  const common = { host: profile.host, port: profile.port, username: profile.username }
+  if (profile.auth.kind === 'password') return { ...common, auth: profile.auth }
+  return {
+    ...common,
+    auth: {
+      kind: 'privateKey',
+      key: {
+        fileName: basename(profile.auth.privateKeyPath),
+        content: await readFile(profile.auth.privateKeyPath),
+        ...(profile.auth.passphrase ? { passphrase: profile.auth.passphrase } : {}),
+      },
+    },
+  }
 }

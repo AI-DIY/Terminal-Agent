@@ -5,20 +5,26 @@ import type {
   AgentProposalEvent,
   AgentStartRequest,
   RendererSessionRequest,
+  SavedDirectSessionInput,
 } from '../shared/contracts'
 import type { RendererModelSettingsInput } from '../shared/validation'
 import type { RegexFenceRule } from '../main/agent/regex-fence-service'
+import type { DirectSessionSummary } from '../main/ssh/direct-session-repository'
 
 export const terminalAgentNamespace = 'terminalAgent' as const
 
 export type TerminalAgentApi = {
   sessions: {
     connect(request: RendererSessionRequest): Promise<{ id: string; hostname: string; mode: 'copilot' | 'autonomous' }>
-    selectPrivateKey(): Promise<{ id: string; fileName: string } | null>
+    selectPrivateKey(): Promise<{ id: string; fileName: string; filePath: string } | null>
     write(sessionId: string, data: string): Promise<void>
     resize(sessionId: string, columns: number, rows: number): Promise<void>
     close(sessionId: string): Promise<void>
     list(): Promise<ConnectedSession[]>
+    listProfiles(): Promise<DirectSessionSummary[]>
+    saveProfile(profile: SavedDirectSessionInput): Promise<void>
+    openProfile(id: string): Promise<{ id: string; hostname: string; mode: 'copilot' | 'autonomous' }>
+    deleteProfile(id: string): Promise<void>
     onData(listener: (event: TerminalDataEvent) => void): () => void
     onClosed(listener: (event: TerminalClosedEvent) => void): () => void
     onOpened(listener: (session: ConnectedSession) => void): () => void
@@ -55,11 +61,15 @@ export function createTerminalAgentApi(ipcRenderer: {
   return Object.freeze({
     sessions: Object.freeze({
       connect: (request: RendererSessionRequest) => ipcRenderer.invoke('sessions:connect', request) as Promise<{ id: string; hostname: string; mode: 'copilot' | 'autonomous' }>,
-      selectPrivateKey: () => ipcRenderer.invoke('sessions:selectPrivateKey') as Promise<{ id: string; fileName: string } | null>,
+      selectPrivateKey: () => ipcRenderer.invoke('sessions:selectPrivateKey') as Promise<{ id: string; fileName: string; filePath: string } | null>,
       write: async (sessionId: string, data: string) => { await ipcRenderer.invoke('sessions:write', sessionId, data) },
       resize: async (sessionId: string, columns: number, rows: number) => { await ipcRenderer.invoke('sessions:resize', sessionId, columns, rows) },
       close: async (sessionId: string) => { await ipcRenderer.invoke('sessions:close', sessionId) },
       list: () => ipcRenderer.invoke('sessions:list') as Promise<ConnectedSession[]>,
+      listProfiles: () => ipcRenderer.invoke('sessions:profiles:list') as Promise<DirectSessionSummary[]>,
+      saveProfile: async (profile: SavedDirectSessionInput) => { await ipcRenderer.invoke('sessions:profiles:save', profile) },
+      openProfile: (id: string) => ipcRenderer.invoke('sessions:profiles:open', id) as Promise<{ id: string; hostname: string; mode: 'copilot' | 'autonomous' }>,
+      deleteProfile: async (id: string) => { await ipcRenderer.invoke('sessions:profiles:delete', id) },
       onData: (listener: (event: TerminalDataEvent) => void) => {
         const handler = (_event: unknown, payload: unknown) => listener(payload as TerminalDataEvent)
         ipcRenderer.on('sessions:data', handler)
