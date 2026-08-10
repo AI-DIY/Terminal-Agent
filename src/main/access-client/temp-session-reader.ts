@@ -1,5 +1,6 @@
 import { readFile as readFileFromDisk } from 'node:fs/promises'
 import { parsePort } from './argv-parser'
+import { AccessClientLaunchFailure } from './launch-failure'
 
 export type TemporarySessionProfile = {
   host: string
@@ -21,7 +22,7 @@ export async function readTempSession(path: string, readFile: FileReader = readF
   try {
     content = await readFile(path)
   } catch {
-    throw new Error('Unable to read AccessClient session')
+    throw new AccessClientLaunchFailure('temporary-profile-unreadable')
   }
 
   const values = new Map<string, string>()
@@ -35,12 +36,19 @@ export async function readTempSession(path: string, readFile: FileReader = readF
   const host = values.get('HostName')?.trim() ?? ''
   const username = values.get('UserName')?.trim() ?? ''
   const protocol = values.get('Protocol')?.trim().toLowerCase()
-  if (protocol !== 'ssh' && protocol !== 'raw') throw new Error('Invalid AccessClient session configuration')
-  if (protocol === 'ssh' && (!host || !username)) throw new Error('Invalid AccessClient session configuration')
+  if (protocol !== 'ssh' && protocol !== 'raw') throw invalidTemporaryProfile()
+  if (protocol === 'ssh' && (!host || !username)) throw invalidTemporaryProfile()
 
-  const columns = parseDimension(values.get('TermWidth'), 80, 'TermWidth')
-  const rows = parseDimension(values.get('TermHeight'), 24, 'TermHeight')
-  const port = parsePort(values.get('PortNumber'))
+  let columns: number
+  let rows: number
+  let port: number
+  try {
+    columns = parseDimension(values.get('TermWidth'), 80, 'TermWidth')
+    rows = parseDimension(values.get('TermHeight'), 24, 'TermHeight')
+    port = parsePort(values.get('PortNumber'))
+  } catch {
+    throw invalidTemporaryProfile()
+  }
   return {
     host,
     port,
@@ -58,4 +66,8 @@ function parseDimension(value: string | undefined, fallback: number, field: stri
   const dimension = Number(value)
   if (!Number.isInteger(dimension) || dimension < 1 || dimension > 500) throw new Error(`Invalid ${field}`)
   return dimension
+}
+
+function invalidTemporaryProfile(): AccessClientLaunchFailure {
+  return new AccessClientLaunchFailure('temporary-profile-invalid')
 }

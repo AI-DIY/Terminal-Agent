@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseAccessClientArgv } from '../../../src/main/access-client/argv-parser'
+import { AccessClientLaunchFailure } from '../../../src/main/access-client/launch-failure'
 
 describe('parseAccessClientArgv', () => {
   it.each([
@@ -12,8 +13,18 @@ describe('parseAccessClientArgv', () => {
   })
 
   it('rejects malformed or unsupported invocations locally', () => {
-    expect(() => parseAccessClientArgv(['Terminal-Agent.exe', '-load'])).toThrow('Unsupported AccessClient invocation')
-    expect(() => parseAccessClientArgv(['Terminal-Agent.exe', '-raw', '-P', '0'])).toThrow('Invalid port')
-    expect(() => parseAccessClientArgv(['Terminal-Agent.exe', '-ssh', 'server-a'])).toThrow('Unsupported AccessClient invocation')
+    expectFailure(['Terminal-Agent.exe', '-load'], 'unsupported-launch-arguments')
+    expectFailure(['Terminal-Agent.exe', '-raw', '-P', '0'], 'unsupported-launch-arguments')
+    expectFailure(['Terminal-Agent.exe', '-ssh', 'server-a'], 'unsupported-launch-arguments')
   })
 })
+
+function expectFailure(argv: string[], code: AccessClientLaunchFailure['code']): void {
+  try {
+    parseAccessClientArgv(argv)
+    throw new Error('expected parser to fail')
+  } catch (error) {
+    expect(error).toBeInstanceOf(AccessClientLaunchFailure)
+    expect(error).toMatchObject({ code })
+  }
+}

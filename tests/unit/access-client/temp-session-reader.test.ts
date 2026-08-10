@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readTempSession } from '../../../src/main/access-client/temp-session-reader'
+import { AccessClientLaunchFailure } from '../../../src/main/access-client/launch-failure'
 
 describe('readTempSession', () => {
   it('accepts a Raw temporary profile without a hostname for the compatibility fallback', async () => {
@@ -31,14 +32,21 @@ describe('readTempSession', () => {
     })
   })
 
-  it('uses a fixed sanitized error when the temporary session file cannot be read', async () => {
+  it('uses a typed sanitized error when the temporary session file cannot be read', async () => {
     const temporaryPath = 'C:\\Users\\test-user\\AppData\\Local\\Temp\\sensitive-session.conf'
 
     await expect(readTempSession(temporaryPath, async () => {
       throw new Error('disk access denied')
-    })).rejects.toThrow('Unable to read AccessClient session')
+    })).rejects.toMatchObject({ code: 'temporary-profile-unreadable' } satisfies Partial<AccessClientLaunchFailure>)
     await expect(readTempSession(temporaryPath, async () => {
       throw new Error('disk access denied')
     })).rejects.not.toThrow(temporaryPath)
+  })
+
+  it('uses a typed error for an invalid temporary profile without exposing its path', async () => {
+    const temporaryPath = 'C:\\Users\\test-user\\AppData\\Local\\Temp\\sensitive-session.conf'
+
+    await expect(readTempSession(temporaryPath, async () => Buffer.from('Protocol=ssh\n', 'utf8')))
+      .rejects.toMatchObject({ code: 'temporary-profile-invalid' } satisfies Partial<AccessClientLaunchFailure>)
   })
 })
