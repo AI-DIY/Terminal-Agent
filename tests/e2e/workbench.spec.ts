@@ -36,6 +36,35 @@ test('renders two real SSH sessions in separate terminal panes with isolated out
   }
 })
 
+test('keeps an existing SSH terminal mounted after visiting settings and returning to the workbench', async () => {
+  const sshServer = await startSshServer()
+  let app: ElectronApplication | undefined
+
+  try {
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/main.js')] })
+    const page = await app.firstWindow()
+    const panes = page.locator('[data-testid^="terminal-pane-"]')
+
+    await connect(page, sshServer.port)
+    const originalPane = await panes.first().elementHandle()
+    if (!originalPane) throw new Error('Expected the connected SSH terminal pane')
+    await expect(panes).toHaveCount(1)
+    await expect(panes.first()).toContainText('ready')
+
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '设置' })).toBeVisible()
+    await page.getByRole('button', { name: '返回工作台', exact: true }).click()
+
+    await expect(panes).toHaveCount(1)
+    expect(await originalPane.evaluate(node => node.isConnected)).toBe(true)
+    await sendCommand(panes.first(), page, 'after-settings')
+    await expect(panes.first()).toContainText('echo:after-settings')
+  } finally {
+    await app?.close()
+    await closeServer(sshServer.server)
+  }
+})
+
 test('renders an AccessClient Raw startup session from the initial session snapshot', async () => {
   const rawServer = createServer()
   rawServer.listen(0, '127.0.0.1')
