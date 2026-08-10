@@ -21,6 +21,28 @@ describe('registerSessionObservation', () => {
     }))
   })
 
+  it('publishes the hostname before waiting for remaining observation commands', async () => {
+    const sessions = createSessions(true)
+    let releaseSlowCommand: (() => void) | undefined
+    sessions.executeReadOnly.mockImplementation((_sessionId: string, command: string) => {
+      if (command === 'hostname') return Promise.resolve('api-prod\n')
+      if (command !== 'uname -a') return Promise.resolve(commandOutput(command))
+      return new Promise<string>(resolve => {
+        releaseSlowCommand = () => resolve(commandOutput(command))
+      })
+    })
+    const facts = { observe: vi.fn().mockResolvedValue({ record: { hostname: 'api-prod' } }) }
+    registerSessionObservation(sessions, facts)
+
+    sessions.openedListener?.({ id: 's1', hostname: '10.0.0.12', mode: 'copilot' })
+
+    await vi.waitFor(() => expect(sessions.setObservedHostname).toHaveBeenCalledWith('s1', 'api-prod'))
+    expect(facts.observe).not.toHaveBeenCalled()
+
+    releaseSlowCommand?.()
+    await vi.waitFor(() => expect(facts.observe).toHaveBeenCalledOnce())
+  })
+
   it('does not observe a Raw TCP session', async () => {
     const sessions = createSessions(false)
     const facts = { observe: vi.fn().mockResolvedValue({ record: { hostname: 'api-prod' } }) }

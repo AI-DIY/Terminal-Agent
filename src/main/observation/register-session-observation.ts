@@ -22,6 +22,7 @@ async function observeSession(
   session: ConnectedSession,
 ): Promise<void> {
   const runner = new ObservationRunner(command => sessions.executeReadOnly(session.id, command))
-  const result = await facts.observe(await runner.collectFacts('linux'))
-  sessions.setObservedHostname(session.id, result.record.hostname)
+  await facts.observe(await runner.collectFacts('linux', undefined, hostname => {
+    sessions.setObservedHostname(session.id, hostname)
+  }))
 }

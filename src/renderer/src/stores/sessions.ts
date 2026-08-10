@@ -5,12 +5,17 @@ export const MAX_SESSION_BUFFER_CHARS = 200_000
 export type SessionView = {
   id: string
   hostname: string
+  observedHostname?: string
   title?: string
   mode: SessionMode
   buffer: string
 }
 
 export type NewSessionView = Omit<SessionView, 'buffer'>
+
+export function sessionLabel(session: SessionView): string {
+  return session.observedHostname ?? session.title ?? session.hostname
+}
 
 export function createSessionsStore() {
   const sessions = new Map<string, SessionView>()

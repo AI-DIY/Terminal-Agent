@@ -5,4 +5,4 @@ import SettingsView from './views/SettingsView.vue'
 const settingsOpen = ref(false)
 </script>
 
-<template><SettingsView v-if="settingsOpen" @close="settingsOpen=false"/><WorkbenchView v-else @show-settings="settingsOpen=true" /></template>
+<template><SettingsView v-show="settingsOpen" @close="settingsOpen=false"/><WorkbenchView v-show="!settingsOpen" @show-settings="settingsOpen=true" /></template>

@@ -116,6 +116,23 @@ describe('SessionService', () => {
     expect(() => service.setMode('missing', 'autonomous')).toThrow('Unknown terminal session')
   })
 
+  it('includes an observed hostname in snapshots and update events', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const updated: unknown[] = []
+    service.onUpdated(session => updated.push(session))
+    const session = await service.connect({
+      host: '10.0.0.12', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    service.setObservedHostname(session.id, ' api-prod\n')
+
+    const expected = { ...session, observedHostname: 'api-prod' }
+    expect(service.snapshot()).toEqual([expected])
+    expect(updated).toEqual([expected])
+  })
+
   it('sends password credentials only to the SSH adapter and starts in Copilot mode', async () => {
     const shell = createShell()
     const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }

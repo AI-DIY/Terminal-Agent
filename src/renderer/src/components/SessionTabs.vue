@@ -1,12 +1,8 @@
 <script setup lang="ts">
-import type { SessionView } from '../stores/sessions'
+import { sessionLabel, type SessionView } from '../stores/sessions'
 
 defineProps<{ sessions: SessionView[]; activeSessionId: string | null }>()
 const emit = defineEmits<{ select: [sessionId: string]; close: [sessionId: string] }>()
-
-function label(session: SessionView): string {
-  return session.title ?? session.hostname
-}
 </script>
 
 <template>
@@ -17,11 +13,11 @@ function label(session: SessionView): string {
       class="session-tab"
       :class="{ active: session.id === activeSessionId }"
     >
-      <button type="button" class="select" :aria-label="`选择终端会话 ${label(session)}`" @click="emit('select', session.id)">
-        <span>{{ label(session) }}</span>
+      <button type="button" class="select" :aria-label="`选择终端会话 ${sessionLabel(session)}`" @click="emit('select', session.id)">
+        <span>{{ sessionLabel(session) }}</span>
         <small>{{ session.mode === 'copilot' ? '辅助驾驶' : '全自动驾驶' }}</small>
       </button>
-      <button type="button" class="close" :aria-label="`关闭终端会话 ${label(session)}`" @click="emit('close', session.id)">×</button>
+      <button type="button" class="close" :aria-label="`关闭终端会话 ${sessionLabel(session)}`" @click="emit('close', session.id)">×</button>
     </div>
   </nav>
 </template>

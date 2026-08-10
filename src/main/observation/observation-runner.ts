@@ -11,15 +11,17 @@ export const linuxReadOnlyCommands = [
 
 export type ObservationOutput = Readonly<Record<string, string>>
 export type ReadOnlyCommandExecutor = (command: string) => Promise<string>
+type CommandOutputObserver = (command: string, output: string) => void
 
 export class ObservationRunner {
   constructor(private readonly execute: ReadOnlyCommandExecutor) {}
 
-  async run(platform: ObservationPlatform): Promise<ObservationOutput> {
+  async run(platform: ObservationPlatform, onCommandOutput?: CommandOutputObserver): Promise<ObservationOutput> {
     const output: Record<string, string> = {}
     for (const command of commandsFor(platform)) {
       try {
         output[command] = await this.execute(command)
+        onCommandOutput?.(command, output[command])
       } catch {
         output[command] = ''
       }
@@ -27,8 +29,16 @@ export class ObservationRunner {
     return output
   }
 
-  async collectFacts(platform: ObservationPlatform, observedAt = new Date().toISOString()): Promise<HostFacts> {
-    const output = await this.run(platform)
+  async collectFacts(
+    platform: ObservationPlatform,
+    observedAt = new Date().toISOString(),
+    onHostname?: (hostname: string) => void,
+  ): Promise<HostFacts> {
+    const output = await this.run(platform, (command, value) => {
+      if (command !== 'hostname') return
+      const hostname = firstLine(value)
+      if (hostname) onHostname?.(hostname)
+    })
     const hostname = firstLine(output.hostname)
     if (!hostname) throw new Error('Read-only observation did not return a hostname')
 
