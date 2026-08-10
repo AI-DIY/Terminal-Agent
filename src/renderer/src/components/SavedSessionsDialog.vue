@@ -2,7 +2,7 @@
 import type { DirectSessionSummary } from '../../../main/ssh/direct-session-repository'
 
 defineProps<{ profiles: DirectSessionSummary[] }>()
-const emit = defineEmits<{ close: []; create: []; connect: [id: string]; remove: [id: string] }>()
+const emit = defineEmits<{ close: []; create: []; connect: [id: string]; edit: [profile: DirectSessionSummary]; remove: [id: string] }>()
 </script>
 
 <template>
@@ -12,7 +12,7 @@ const emit = defineEmits<{ close: []; create: []; connect: [id: string]; remove:
     <ul v-else>
       <li v-for="profile in profiles" :key="profile.id">
         <div><strong>{{ profile.name }}</strong><span>{{ profile.username }}@{{ profile.host }}:{{ profile.port }} · {{ profile.authKind === 'password' ? '密码' : '私钥' }}</span></div>
-        <div class="actions"><button type="button" @click="emit('connect', profile.id)">连接</button><button type="button" class="delete" @click="emit('remove', profile.id)">删除</button></div>
+        <div class="actions"><button type="button" @click="emit('connect', profile.id)">连接</button><button type="button" @click="emit('edit', profile)">编辑</button><button type="button" class="delete" @click="emit('remove', profile.id)">删除</button></div>
       </li>
     </ul>
     <footer><button type="button" @click="emit('create')">新建 SSH 连接</button></footer>

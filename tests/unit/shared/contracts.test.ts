@@ -64,6 +64,13 @@ describe('savedDirectSessionInputSchema', () => {
       id: 'jump', name: '堡垒机', host: '127.0.0.1', port: 22022, username: '', protocol: 'raw',
     })).toThrow()
   })
+
+  it('allows an edit to omit an unchanged direct-session password', () => {
+    expect(savedDirectSessionInputSchema.parse({
+      id: 'prod-api', name: '生产 API', host: 'api.example.com', port: 22, username: 'ops',
+      auth: { kind: 'password' },
+    })).toMatchObject({ id: 'prod-api', auth: { kind: 'password' } })
+  })
 })
 
 describe('terminalAgent preload API', () => {

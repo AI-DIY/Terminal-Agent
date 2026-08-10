@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, test } from 'vitest'
 import { Server, type Connection } from 'ssh2'
+import { runReleaseLauncherCleanup } from '../helpers/release-launcher-cleanup'
 
 const execFileAsync = promisify(execFile)
 const releaseDirectory = join(process.cwd(), 'release', 'win-unpacked')
@@ -26,6 +27,7 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
   let previousInstallPath: InstallPathRegistration | undefined
   let launcher: ChildProcess | undefined
   let runtimeProcessId: number | undefined
+  let primaryFailure: unknown
 
   try {
     previousInstallPath = await readInstallPathRegistration()
@@ -62,32 +64,30 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
       username: 'release-fixture-user',
       pty: { columns: 132, rows: 43 },
     })
+  } catch (error) {
+    primaryFailure = error
+    throw error
   } finally {
-    const processIdToStop = runtimeProcessId ?? await findRuntimeProcessId(profilePath)
-    if (processIdToStop !== undefined) {
-      await terminateProcessTree(processIdToStop)
-      await waitForCondition('the test runtime process to terminate', async () => (await findRuntimeProcessId(profilePath)) === undefined)
-    }
-    if (launcher?.exitCode === null) launcher.kill()
-    try {
-      await fixture.close()
-    } finally {
-      try {
-        if (previousInstallPath !== undefined) await restoreInstallPathRegistration(previousInstallPath)
-      } finally {
-        let persistedSensitiveFiles: string[] | undefined
-        try {
-          persistedSensitiveFiles = await findFilesContaining(stateDirectory, [password, profilePath])
-        } finally {
-          await Promise.all([
-            rm(mappingDirectory, { recursive: true, force: true }),
-            rm(profileDirectory, { recursive: true, force: true }),
-            rm(stateDirectory, { recursive: true, force: true }),
-          ])
-        }
-        expect(persistedSensitiveFiles).toEqual([])
-      }
-    }
+    let processIdToStop = runtimeProcessId
+    await runReleaseLauncherCleanup(primaryFailure, [
+      async () => { processIdToStop ??= await findRuntimeProcessId(profilePath) },
+      async () => {
+        if (processIdToStop !== undefined) await terminateProcessTree(processIdToStop)
+      },
+      () => { if (launcher?.exitCode === null) launcher.kill() },
+      () => fixture.close(),
+      async () => { if (previousInstallPath !== undefined) await restoreInstallPathRegistration(previousInstallPath) },
+      async () => {
+        expect(await findFilesContaining(stateDirectory, [password, profilePath])).toEqual([])
+      },
+      async () => {
+        await Promise.all([
+          rm(mappingDirectory, { recursive: true, force: true }),
+          rm(profileDirectory, { recursive: true, force: true }),
+          rm(stateDirectory, { recursive: true, force: true }),
+        ])
+      },
+    ])
   }
 })
 
@@ -211,17 +211,14 @@ async function findRuntimeProcessId(profilePath: string): Promise<number | undef
   const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
     env: { ...process.env, TERMINAL_AGENT_RELEASE_PROFILE: profilePath },
     windowsHide: true,
+    timeout: 2_000,
   })
   const processId = Number(stdout.trim())
   return Number.isInteger(processId) && processId > 0 ? processId : undefined
 }
 
 async function terminateProcessTree(processId: number): Promise<void> {
-  try {
-    await execFileAsync('taskkill.exe', ['/PID', String(processId), '/T', '/F'], { windowsHide: true })
-  } catch {
-    // The exact runtime lookup below determines whether it actually exited.
-  }
+  await execFileAsync('taskkill.exe', ['/PID', String(processId), '/T', '/F'], { windowsHide: true })
 }
 
 async function waitForCondition<T>(description: string, condition: () => Promise<T | false>): Promise<T> {

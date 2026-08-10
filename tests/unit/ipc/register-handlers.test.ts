@@ -170,6 +170,49 @@ describe('registerSessionHandlers', () => {
     expect(removeHandler.mock.calls.map(([channel]) => channel)).toContain('sessions:profiles:delete')
   })
 
+  it('updates direct-session metadata with its stable ID while retaining an unchanged password only in the main process', async () => {
+    const sessions = createSessions()
+    const keys = createKeys()
+    const profiles = createProfiles()
+    const sender = createSender()
+    registerSessionHandlers(sessions, keys, sender as never, profiles)
+
+    await invoke(handlerFor('sessions:profiles:save'), trustedEvent(sender), {
+      id: 'prod-api', name: '生产 API（新名称）', host: 'api.internal.example', port: 2222, username: 'ops',
+      auth: { kind: 'password' },
+    })
+
+    expect(profiles.load).toHaveBeenCalledWith('prod-api')
+    expect(profiles.save).toHaveBeenCalledWith({
+      id: 'prod-api', name: '生产 API（新名称）', host: 'api.internal.example', port: 2222, username: 'ops',
+      auth: { kind: 'password', password: 'secret-password' },
+    })
+    expect(JSON.stringify(sender.send.mock.calls)).not.toContain('secret-password')
+  })
+
+  it('retains an unchanged private-key passphrase only in the main process while editing direct-session metadata', async () => {
+    const sessions = createSessions()
+    const keys = createKeys()
+    const profiles = createProfiles()
+    profiles.load.mockResolvedValueOnce({
+      id: 'prod-key', name: '生产密钥', host: 'key.example.com', port: 22, username: 'ops',
+      auth: { kind: 'privateKey', privateKeyPath: 'C:\\keys\\prod.key', passphrase: 'key-phrase' },
+    })
+    const sender = createSender()
+    registerSessionHandlers(sessions, keys, sender as never, profiles)
+
+    await invoke(handlerFor('sessions:profiles:save'), trustedEvent(sender), {
+      id: 'prod-key', name: '生产密钥（新名称）', host: 'key.internal.example', port: 2200, username: 'ops',
+      auth: { kind: 'privateKey', privateKeyPath: 'C:\\keys\\prod.key' },
+    })
+
+    expect(profiles.save).toHaveBeenCalledWith({
+      id: 'prod-key', name: '生产密钥（新名称）', host: 'key.internal.example', port: 2200, username: 'ops',
+      auth: { kind: 'privateKey', privateKeyPath: 'C:\\keys\\prod.key', passphrase: 'key-phrase' },
+    })
+    expect(JSON.stringify(sender.send.mock.calls)).not.toContain('key-phrase')
+  })
+
   it('loads a saved private key only in the main process when reopening a direct profile', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-private-profile-'))
     const privateKeyPath = join(directory, 'prod.key')

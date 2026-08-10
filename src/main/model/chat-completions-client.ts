@@ -41,7 +41,7 @@ export class ChatCompletionsClient {
     }
 
     if (!response.ok) {
-      throw new ModelConnectionError(`模型连接失败（HTTP ${response.status}）：${safePreview(await response.text())}`)
+      throw new ModelConnectionError(`模型连接失败（HTTP ${response.status}）：${safePreview(await response.text(), settings.apiKey)}`)
     }
     return { model: settings.model }
   }
@@ -75,7 +75,7 @@ export class ChatCompletionsClient {
     }
 
     if (!response.ok) {
-      throw new ModelConnectionError(`模型连接失败（HTTP ${response.status}）：${safePreview(await response.text())}`)
+      throw new ModelConnectionError(`模型连接失败（HTTP ${response.status}）：${safePreview(await response.text(), settings.apiKey)}`)
     }
 
     if (!response.body) {
@@ -137,8 +137,9 @@ export class ChatCompletionsClient {
   }
 }
 
-function safePreview(value: string): string {
-  const safe = value
+function safePreview(value: string, apiKey: string): string {
+  const withConfiguredKeyRedacted = apiKey ? value.split(apiKey).join('[REDACTED]') : value
+  const safe = withConfiguredKeyRedacted
     .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
     .replace(/\bsk-[A-Za-z0-9_-]+\b/g, '[REDACTED]')
     .replace(/\b(api[ _-]?key|token|password)\s*[:=]\s*\S+/gi, '$1=[REDACTED]')

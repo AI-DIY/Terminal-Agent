@@ -26,6 +26,18 @@ describe('ChatCompletionsClient', () => {
       .rejects.not.toThrow(apiKey)
   })
 
+  it('redacts the exact configured API key even when it does not use an sk- prefix', async () => {
+    const apiKey = 'tenant-credential-9aQ3'
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(`provider echoed supplied=${apiKey}`, { status: 401 }))
+      .mockResolvedValueOnce(new Response(`provider echoed supplied=${apiKey}`, { status: 401 }))
+    const client = new ChatCompletionsClient(fetcher)
+    const settings = { endpoint: 'https://compatible.example/v1/chat/completions', model: 'compatible-model', apiKey, contextLimit: 12_000 }
+
+    await expect(client.verify(settings)).rejects.not.toThrow(apiKey)
+    await expect(client.stream(settings, [{ role: 'user', content: 'ping' }], vi.fn())).rejects.not.toThrow(apiKey)
+  })
+
   it('turns a network failure into a diagnosable model-connection error without leaking the API key', async () => {
     const apiKey = 'sk-should-not-appear'
     const client = new ChatCompletionsClient(vi.fn().mockRejectedValue(new Error(`TLS failed for ${apiKey}`)))

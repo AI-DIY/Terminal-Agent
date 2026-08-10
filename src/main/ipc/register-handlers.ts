@@ -7,6 +7,7 @@ import {
   terminalSessionIdSchema,
   terminalWriteSchema,
   type RendererSessionRequest,
+  type SavedDirectSessionInput,
 } from '../../shared/contracts'
 import { KeyMaterialStore } from '../ssh/key-material-store'
 import type { DirectSessionProfile, DirectSessionSummary } from '../ssh/direct-session-repository'
@@ -60,7 +61,7 @@ export function registerSessionHandlers(
     })
     ipcMain.handle('sessions:profiles:save', async (event, profile: unknown) => {
       assertTrustedSender(event, sender)
-      await directProfiles.save(savedDirectSessionInputSchema.parse(profile))
+      await directProfiles.save(await profileWithRetainedCredentials(savedDirectSessionInputSchema.parse(profile), directProfiles))
     })
     ipcMain.handle('sessions:profiles:open', async (event, id: unknown) => {
       assertTrustedSender(event, sender)
@@ -123,4 +124,25 @@ async function toSavedDirectRequest(profile: DirectSessionProfile): Promise<Dire
       },
     },
   }
+}
+
+async function profileWithRetainedCredentials(
+  profile: SavedDirectSessionInput,
+  directProfiles: DirectSessionProfiles,
+): Promise<DirectSessionProfile> {
+  if (profile.auth.kind === 'password') {
+    if (profile.auth.password !== undefined) return profile as DirectSessionProfile
+    const existing = await directProfiles.load(profile.id).catch(() => undefined)
+    if (!existing || existing.auth.kind !== 'password') {
+      throw new Error('请输入密码后再保存新的 SSH 会话。')
+    }
+    return { ...profile, auth: existing.auth }
+  }
+
+  if (profile.auth.passphrase !== undefined) return profile as DirectSessionProfile
+  const existing = await directProfiles.load(profile.id).catch(() => undefined)
+  if (existing?.auth.kind === 'privateKey' && existing.auth.privateKeyPath === profile.auth.privateKeyPath) {
+    return { ...profile, auth: existing.auth }
+  }
+  return profile as DirectSessionProfile
 }

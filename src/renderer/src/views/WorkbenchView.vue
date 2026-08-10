@@ -4,6 +4,7 @@ import type { TerminalDataEvent } from '../../../shared/contracts'
 import ConnectionDialog from '../components/ConnectionDialog.vue'
 import type { ConnectionDialogRequest } from '../components/ConnectionDialog.vue'
 import SavedSessionsDialog from '../components/SavedSessionsDialog.vue'
+import type { DirectSessionSummary } from '../../../main/ssh/direct-session-repository'
 import SessionTabs from '../components/SessionTabs.vue'
 import TerminalPane from '../components/TerminalPane.vue'
 import ModeIndicator from '../components/ModeIndicator.vue'
@@ -20,6 +21,7 @@ const activeSessionId = ref<string | null>(null)
 const visibleSessionIds = ref<string[]>([])
 const showConnection = ref(false)
 const showSavedSessions = ref(false)
+const editingProfile = ref<DirectSessionSummary | null>(null)
 const connectionError = ref('')
 const savedProfiles = ref<Awaited<ReturnType<typeof window.terminalAgent.sessions.listProfiles>>>([])
 const autonomousUpgrade = createAutonomousUpgradeStore()
@@ -97,6 +99,34 @@ async function connect(request: ConnectionDialogRequest): Promise<void> {
   }
 }
 
+function createConnection(): void {
+  editingProfile.value = null
+  showConnection.value = true
+}
+
+function editSavedProfile(profile: DirectSessionSummary): void {
+  editingProfile.value = profile
+  showSavedSessions.value = false
+  showConnection.value = true
+}
+
+async function saveEditedProfile(profile: import('../../../shared/contracts').SavedDirectSessionInput): Promise<void> {
+  connectionError.value = ''
+  try {
+    await window.terminalAgent.sessions.saveProfile(profile)
+    await refreshSavedProfiles()
+    showConnection.value = false
+    editingProfile.value = null
+  } catch (error) {
+    connectionError.value = error instanceof Error ? error.message : '无法更新已保存的 SSH 会话。'
+  }
+}
+
+function closeConnectionDialog(): void {
+  showConnection.value = false
+  editingProfile.value = null
+}
+
 async function openSavedProfile(id: string): Promise<void> {
   connectionError.value = ''
   try {
@@ -164,7 +194,7 @@ onBeforeUnmount(() => {
     <header class="workbench-toolbar">
       <SessionTabs :sessions="sessions" :active-session-id="activeSessionId" @select="select" @close="close" />
       <div class="toolbar-actions">
-        <button class="connect-button" type="button" @click="showConnection = true">新建 SSH 连接</button>
+        <button class="connect-button" type="button" @click="createConnection">新建 SSH 连接</button>
         <button class="saved-sessions-button" type="button" @click="showSavedSessions = true">已保存会话</button>
         <ModeIndicator v-if="activeSession" :mode="activeSession.mode" />
         <button v-if="activeSession?.mode === 'copilot'" type="button" class="upgrade-button" @click="requestAutonomousUpgrade">升级为全自动驾驶</button>
@@ -184,15 +214,16 @@ onBeforeUnmount(() => {
     </section>
     <section v-else class="empty-state"><h1>Terminal-Agent</h1><p>请先通过连接面板创建 SSH 会话。</p></section>
     <div v-if="showConnection" class="connection-modal" role="dialog" aria-modal="true" aria-label="新建 SSH 连接">
-      <ConnectionDialog @connect="connect" />
-      <button class="cancel-button" type="button" @click="showConnection = false">取消</button>
+      <ConnectionDialog :editing-profile="editingProfile" @connect="connect" @save-profile="saveEditedProfile" />
+      <button class="cancel-button" type="button" @click="closeConnectionDialog">取消</button>
     </div>
     <div v-if="showSavedSessions" class="connection-modal" role="dialog" aria-modal="true" aria-label="已保存会话">
       <SavedSessionsDialog
         :profiles="savedProfiles"
         @close="showSavedSessions = false"
-        @create="showSavedSessions = false; showConnection = true"
+        @create="showSavedSessions = false; createConnection()"
         @connect="openSavedProfile"
+        @edit="editSavedProfile"
         @remove="deleteSavedProfile"
       />
     </div>
