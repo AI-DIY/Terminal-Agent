@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import { expect, test } from 'vitest'
 import { Server, type Connection } from 'ssh2'
 import { runReleaseLauncherCleanup } from '../helpers/release-launcher-cleanup'
+import { selectNewRuntimeProcessId } from '../helpers/release-runtime-processes'
 
 const execFileAsync = promisify(execFile)
 const releaseDirectory = join(process.cwd(), 'release', 'win-unpacked')
@@ -28,6 +29,8 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
   let launcher: ChildProcess | undefined
   let runtimeProcessId: number | undefined
   let primaryFailure: unknown
+  let launchAttempted = false
+  let preexistingRuntimeProcessIds = new Set<number>()
 
   try {
     previousInstallPath = await readInstallPathRegistration()
@@ -43,6 +46,8 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
       'TermHeight=43',
     ].join('\n'), 'utf8')
 
+    preexistingRuntimeProcessIds = new Set(await findRuntimeProcessIds())
+    launchAttempted = true
     launcher = spawn(copiedBridgePath, ['-load', `tmp:${profilePath}`, '-pw', password], {
       env: {
         ...process.env,
@@ -55,7 +60,7 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
 
     const [observedShell, discoveredRuntimeProcessId] = await Promise.all([
       fixture.waitForShell(),
-      waitForCondition('the runtime process started by this test', findRuntimeProcessId),
+      waitForCondition('the runtime process started by this test', () => findNewRuntimeProcessId(preexistingRuntimeProcessIds)),
       once(launcher, 'exit'),
     ]).then(([shell, processId]) => [shell, processId] as const)
     runtimeProcessId = discoveredRuntimeProcessId
@@ -70,7 +75,9 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
   } finally {
     let processIdToStop = runtimeProcessId
     await runReleaseLauncherCleanup(primaryFailure, [
-      async () => { processIdToStop ??= await findRuntimeProcessId() },
+      async () => {
+        if (launchAttempted) processIdToStop ??= await findNewRuntimeProcessId(preexistingRuntimeProcessIds)
+      },
       async () => {
         if (processIdToStop !== undefined) await terminateProcessTree(processIdToStop)
       },
@@ -202,19 +209,25 @@ async function startSshFixture(): Promise<{
   }
 }
 
-async function findRuntimeProcessId(): Promise<number | undefined> {
+async function findNewRuntimeProcessId(preexistingRuntimeProcessIds: ReadonlySet<number>): Promise<number | undefined> {
+  return selectNewRuntimeProcessId(await findRuntimeProcessIds(), preexistingRuntimeProcessIds)
+}
+
+async function findRuntimeProcessIds(): Promise<number[]> {
   const command = [
     "$runtime = Get-CimInstance Win32_Process -Filter \"Name = 'Terminal-Agent-runtime.exe'\"",
-    "$match = $runtime | Where-Object { $_.ExecutablePath -eq $env:TERMINAL_AGENT_RELEASE_RUNTIME -and $_.CommandLine -notmatch ' --type=' } | Select-Object -First 1",
-    'if ($null -ne $match) { [Console]::Write($match.ProcessId) }',
+    "$matches = $runtime | Where-Object { $_.ExecutablePath -eq $env:TERMINAL_AGENT_RELEASE_RUNTIME -and $_.CommandLine -notmatch ' --type=' }",
+    'foreach ($match in $matches) { [Console]::WriteLine($match.ProcessId) }',
   ].join('; ')
   const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
     env: { ...process.env, TERMINAL_AGENT_RELEASE_RUNTIME: join(releaseDirectory, 'Terminal-Agent-runtime.exe') },
     windowsHide: true,
     timeout: 2_000,
   })
-  const processId = Number(stdout.trim())
-  return Number.isInteger(processId) && processId > 0 ? processId : undefined
+  return stdout
+    .split(/\r?\n/)
+    .map(value => Number(value.trim()))
+    .filter(processId => Number.isInteger(processId) && processId > 0)
 }
 
 async function terminateProcessTree(processId: number): Promise<void> {
