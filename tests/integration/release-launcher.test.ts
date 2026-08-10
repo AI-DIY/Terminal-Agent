@@ -55,7 +55,7 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
 
     const [observedShell, discoveredRuntimeProcessId] = await Promise.all([
       fixture.waitForShell(),
-      waitForCondition('the runtime process started by this test', () => findRuntimeProcessId(profilePath)),
+      waitForCondition('the runtime process started by this test', findRuntimeProcessId),
       once(launcher, 'exit'),
     ]).then(([shell, processId]) => [shell, processId] as const)
     runtimeProcessId = discoveredRuntimeProcessId
@@ -70,7 +70,7 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
   } finally {
     let processIdToStop = runtimeProcessId
     await runReleaseLauncherCleanup(primaryFailure, [
-      async () => { processIdToStop ??= await findRuntimeProcessId(profilePath) },
+      async () => { processIdToStop ??= await findRuntimeProcessId() },
       async () => {
         if (processIdToStop !== undefined) await terminateProcessTree(processIdToStop)
       },
@@ -202,14 +202,14 @@ async function startSshFixture(): Promise<{
   }
 }
 
-async function findRuntimeProcessId(profilePath: string): Promise<number | undefined> {
+async function findRuntimeProcessId(): Promise<number | undefined> {
   const command = [
     "$runtime = Get-CimInstance Win32_Process -Filter \"Name = 'Terminal-Agent-runtime.exe'\"",
-    "$match = $runtime | Where-Object { $_.CommandLine -like ('*tmp:' + $env:TERMINAL_AGENT_RELEASE_PROFILE + '*') } | Select-Object -First 1",
+    "$match = $runtime | Where-Object { $_.ExecutablePath -eq $env:TERMINAL_AGENT_RELEASE_RUNTIME -and $_.CommandLine -notmatch ' --type=' } | Select-Object -First 1",
     'if ($null -ne $match) { [Console]::Write($match.ProcessId) }',
   ].join('; ')
   const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
-    env: { ...process.env, TERMINAL_AGENT_RELEASE_PROFILE: profilePath },
+    env: { ...process.env, TERMINAL_AGENT_RELEASE_RUNTIME: join(releaseDirectory, 'Terminal-Agent-runtime.exe') },
     windowsHide: true,
     timeout: 2_000,
   })
