@@ -95,7 +95,7 @@ test('shows a sanitized local error for an invalid AccessClient startup without 
     })
     const page = await app.firstWindow()
 
-    await expect(page.getByRole('alert')).toHaveText('无法建立 AccessClient 会话。请检查启动参数、连接状态和本次凭据。')
+    await expect(page.getByRole('alert')).toHaveText('无法读取堡垒机临时配置。')
     await expect(page.locator('body')).not.toContainText(temporaryPassword)
     await expect(page.locator('body')).not.toContainText(temporaryPath)
   } finally {

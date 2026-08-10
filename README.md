@@ -10,8 +10,10 @@ Build the Windows application directory with:
 npm run make:win:unpacked
 ```
 
-After installing Terminal-Agent, copy or map only `release/win-unpacked/putty.exe` into the Assess/Access Client mapping location. Do not copy `Terminal-Agent-runtime.exe`, `resources`, or any other Electron files. The portable `putty.exe` bridge locates the installed Terminal-Agent and forwards AccessClient-compatible arguments (including temporary bastion credentials) to the installed runtime without exposing them in application logs or persisted settings.
+After installing Terminal-Agent, copy or map only `release/win-unpacked/putty.exe` into the Assess/Access Client mapping location. Do not copy `Terminal-Agent-runtime.exe`, `resources`, or any other Electron files. The portable `putty.exe` bridge locates the installed Terminal-Agent and forwards AccessClient-compatible arguments (including temporary bastion credentials) to the installed runtime.
 
-The installer and each packaged Windows startup record the installed location for the bridge. If the bridge reports that Terminal-Agent cannot be found, install Terminal-Agent or start it once, then reopen the connection from Assess/Access Client.
+Every bastion jump appends a redacted diagnostic record to `putty-bridge.log` beside the mapped `putty.exe`. The log identifies the bridge, its runtime lookup, the safe argument shape, process start result, temporary-profile validation, and connection result. Passwords, tokens, private-key material, passphrases, and temporary-profile paths are not written to this log.
 
-`npm run make:win` additionally generates `Terminal-Agent-Setup-<version>.exe` when the Electron Builder NSIS resources are available from the network.
+The bridge first uses a valid registered install location and then safely checks a co-located runtime and standard Windows install locations. It does not modify the registry or delete files. If both the installation directory and its registry entry have been removed, no bridge can start the deleted runtime: run the Windows installer again, then reopen the connection from Assess/Access Client.
+
+`npm run make:win` generates `Terminal-Agent-Setup-<version>.exe`. A GitHub release includes both the Windows installer and the standalone `putty.exe` bridge for Assess/Access Client mapping.
