@@ -49,7 +49,8 @@ const candidateConfirmations = new CandidateConfirmationService(confirmations)
 sessions.onClosed(event => candidateConfirmations.closeSession(event.sessionId))
 const regexRules = new RegexRuleSettingsService(new FileRegexRuleRepository(join(app.getPath('userData'), 'regex-fence-rules.json')))
 const modelSettings = new ModelSettingsService(new JsonSettingsRepository(), secretStore)
-const agentScheduler = new AgentScheduler(new AgentModelRuntime(modelSettings, new ChatCompletionsClient()))
+const chatCompletions = new ChatCompletionsClient()
+const agentScheduler = new AgentScheduler(new AgentModelRuntime(modelSettings, chatCompletions))
 const executionGateway = new ExecutionGateway(
   sessionModes,
   confirmations,
@@ -117,7 +118,7 @@ export function createMainWindow(): BrowserWindow {
   unregisterConfirmationHandlers = registerConfirmationHandlers(candidateConfirmations, mainWindow.webContents)
   unregisterExecutionHandlers = registerExecutionHandlers(executionGateway, mainWindow.webContents)
   unregisterAgentHandlers = registerAgentHandlers(agentScheduler, sessions, hostFacts, candidateConfirmations, mainWindow.webContents, executionGateway)
-  unregisterSettingsHandlers = registerSettingsHandlers(modelSettings, regexRules, mainWindow.webContents)
+  unregisterSettingsHandlers = registerSettingsHandlers(modelSettings, regexRules, mainWindow.webContents, chatCompletions)
 
   return mainWindow
 }

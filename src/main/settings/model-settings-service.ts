@@ -44,9 +44,13 @@ export class ModelSettingsService {
   }
 
   async saveFromRenderer(input: RendererModelSettingsInput): Promise<void> {
+    await this.save(await this.prepareForConnectionTest(input))
+  }
+
+  async prepareForConnectionTest(input: RendererModelSettingsInput): Promise<ModelSettingsInput> {
     const existingKey = await this.secrets.load('model.apiKey')
     const apiKey = input.apiKey?.trim() || existingKey
     if (!apiKey) throw new Error('An API key is required for the first model connection save')
-    await this.save({ ...input, apiKey })
+    return modelSettingsInputSchema.parse({ ...input, apiKey })
   }
 }

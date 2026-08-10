@@ -42,4 +42,16 @@ describe('ModelSettingsService', () => {
     expect(secrets.save).toHaveBeenCalledWith('model.apiKey', 'sk-existing')
     expect(settings.save).toHaveBeenCalledWith({ endpoint, model: 'gpt-5-mini', contextLimit: 8_000 })
   })
+
+  it('prepares the current renderer input for a connection test without persisting it', async () => {
+    const settings = { save: vi.fn(), load: vi.fn().mockResolvedValue({ endpoint, model: 'gpt-5', contextLimit: 12_000 }) }
+    const secrets = { save: vi.fn(), load: vi.fn().mockResolvedValue('sk-existing') }
+    const service = new ModelSettingsService(settings, secrets)
+
+    await expect(service.prepareForConnectionTest({ endpoint, model: 'compatible-model', contextLimit: 8_000 }))
+      .resolves.toEqual({ endpoint, model: 'compatible-model', contextLimit: 8_000, apiKey: 'sk-existing' })
+
+    expect(settings.save).not.toHaveBeenCalled()
+    expect(secrets.save).not.toHaveBeenCalled()
+  })
 })

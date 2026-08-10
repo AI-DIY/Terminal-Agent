@@ -23,6 +23,25 @@ describe('registerSettingsHandlers', () => {
       'settings:model:get', 'settings:model:save', 'settings:regex-rules:get', 'settings:regex-rules:save',
     ])
   })
+
+  it('tests the unsaved renderer model input through the named connection checker', async () => {
+    const models = {
+      loadForRenderer: vi.fn(), saveFromRenderer: vi.fn(),
+      prepareForConnectionTest: vi.fn().mockResolvedValue({ endpoint: 'https://compatible.example/v1/chat/completions', model: 'compatible-model', contextLimit: 8_000, apiKey: 'sk-protected' }),
+    }
+    const tester = { verify: vi.fn().mockResolvedValue({ model: 'compatible-model' }) }
+    const sender = {}
+    registerSettingsHandlers(models, { list: vi.fn(() => []), save: vi.fn() }, sender as never, tester)
+
+    await expect(handler('settings:model:test')({ sender }, {
+      endpoint: 'https://compatible.example/v1/chat/completions', model: 'compatible-model', contextLimit: 8_000,
+    })).resolves.toEqual({ model: 'compatible-model' })
+
+    expect(models.prepareForConnectionTest).toHaveBeenCalledWith({
+      endpoint: 'https://compatible.example/v1/chat/completions', model: 'compatible-model', contextLimit: 8_000,
+    })
+    expect(tester.verify).toHaveBeenCalledWith({ endpoint: 'https://compatible.example/v1/chat/completions', model: 'compatible-model', contextLimit: 8_000, apiKey: 'sk-protected' })
+  })
 })
 
 function handler(channel: string): (event: { sender: unknown }, request?: unknown) => Promise<unknown> {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { AgentCandidate } from '../../shared/contracts'
-import type { ChatCompletionResponseFormat, ChatCompletionsClient, ChatMessage } from '../model/chat-completions-client'
+import type { ChatCompletionsClient, ChatMessage } from '../model/chat-completions-client'
 import type { ModelSettingsService, ModelSettings } from '../settings/model-settings-service'
 import type { AgentEventPublisher, SchedulerModelPort, SchedulerModelRequest } from './agent-contracts'
 import { containsSensitiveMaterial, redactSensitiveText, SensitiveTextStreamRedactor } from './sensitive-data'
@@ -18,37 +18,6 @@ const agentResultSchema = z.object({
     explanation: z.string().trim().min(1).max(1_000),
   }).strict().nullable(),
 }).strict()
-
-const responseFormat: ChatCompletionResponseFormat = {
-  type: 'json_schema',
-  json_schema: {
-    name: 'terminal_agent_analysis',
-    strict: true,
-    schema: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['analysis', 'evidenceStrategy', 'candidate'],
-      properties: {
-        analysis: { type: 'string' },
-        evidenceStrategy: { type: 'array', items: { type: 'string' } },
-        candidate: {
-          anyOf: [
-            { type: 'null' },
-            {
-              type: 'object',
-              additionalProperties: false,
-              required: ['command', 'explanation'],
-              properties: {
-                command: { type: 'string' },
-                explanation: { type: 'string' },
-              },
-            },
-          ],
-        },
-      },
-    },
-  },
-}
 
 export class ModelConfigurationError extends Error {}
 export class UnsafeAgentOutputError extends Error {}
@@ -70,9 +39,9 @@ export class AgentModelRuntime implements SchedulerModelPort {
       if (safeContent) publish({ kind: 'delta', content: safeContent })
     }
     if (request.signal) {
-      await this.client.stream(settings, createMessages(request), onDelta, responseFormat, request.signal)
+      await this.client.stream(settings, createMessages(request), onDelta, undefined, request.signal)
     } else {
-      await this.client.stream(settings, createMessages(request), onDelta, responseFormat)
+      await this.client.stream(settings, createMessages(request), onDelta)
     }
     const finalContent = output.finish()
     if (finalContent) await publish({ kind: 'delta', content: finalContent })
@@ -145,8 +114,14 @@ function sanitizeFacts(facts: SchedulerModelRequest['facts']): SchedulerModelReq
 
 function parseFinalResult(response: string): z.infer<typeof agentResultSchema> {
   try {
-    return agentResultSchema.parse(JSON.parse(response))
+    return agentResultSchema.parse(JSON.parse(unfenceJson(response)))
   } catch {
     throw new Error('AI returned an invalid analysis result')
   }
+}
+
+function unfenceJson(value: string): string {
+  const trimmed = value.trim()
+  const fenced = trimmed.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i)
+  return fenced?.[1] ?? trimmed
 }

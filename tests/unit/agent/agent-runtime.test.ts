@@ -107,8 +107,8 @@ describe('AgentModelRuntime', () => {
       expect.objectContaining({ apiKey: 'sk-real-key' }),
       expect.arrayContaining([expect.objectContaining({ role: 'system' }), expect.objectContaining({ role: 'user' })]),
       expect.any(Function),
-      expect.objectContaining({ type: 'json_schema', json_schema: expect.objectContaining({ strict: true }) }),
     )
+    expect(client.stream.mock.calls[0]).toHaveLength(3)
     const messages = client.stream.mock.calls[0]?.[1] as Array<{ content: string }>
     const modelInput = JSON.stringify(messages)
     expect(modelInput).not.toContain('hunter2')
@@ -139,6 +139,18 @@ describe('AgentModelRuntime', () => {
 
     await expect(runtime.stream(request, event => events.push(event))).rejects.toThrow('AI returned an invalid analysis result')
     expect(events).toEqual([{ kind: 'delta', content: '{"analysis":"missing fields"}' }])
+  })
+
+  it('accepts a single fenced JSON response from a standard Chat Completions model', async () => {
+    const client = { stream: vi.fn(async (_settings, _messages, onDelta) => onDelta('```json\n{"analysis":"服务正常","evidenceStrategy":[],"candidate":null}\n```')) }
+    const runtime = new AgentModelRuntime({ load: vi.fn().mockResolvedValue({
+      endpoint: 'https://api.openai.com/v1/chat/completions', model: 'compatible-model', apiKey: 'sk-real-key', contextLimit: 12_000,
+    }) }, client, () => 'candidate-1')
+    const events: unknown[] = []
+
+    await runtime.stream(request, event => events.push(event))
+
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'proposal', analysis: '服务正常' }))
   })
 
   it('does not publish credentials echoed by the model into renderer events', async () => {
@@ -172,6 +184,6 @@ describe('AgentModelRuntime', () => {
 
     await runtime.stream({ ...request, signal: controller.signal }, vi.fn())
 
-    expect(client.stream).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.any(Function), expect.anything(), controller.signal)
+    expect(client.stream).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.any(Function), undefined, controller.signal)
   })
 })

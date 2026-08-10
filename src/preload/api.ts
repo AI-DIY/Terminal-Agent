@@ -44,6 +44,7 @@ export type TerminalAgentApi = {
   settings: {
     getModel(): Promise<{ endpoint: string; model: string; contextLimit: number; hasApiKey: boolean } | null>
     saveModel(input: RendererModelSettingsInput): Promise<void>
+    testModel(input: RendererModelSettingsInput): Promise<{ model: string }>
     getRegexRules(): Promise<RegexFenceRule[]>
     saveRegexRules(rules: RegexFenceRule[]): Promise<void>
   }
@@ -105,6 +106,7 @@ export function createTerminalAgentApi(ipcRenderer: {
     settings: Object.freeze({
       getModel: () => ipcRenderer.invoke('settings:model:get') as Promise<{ endpoint: string; model: string; contextLimit: number; hasApiKey: boolean } | null>,
       saveModel: (input: RendererModelSettingsInput) => ipcRenderer.invoke('settings:model:save', input) as Promise<void>,
+      testModel: (input: RendererModelSettingsInput) => ipcRenderer.invoke('settings:model:test', input) as Promise<{ model: string }>,
       getRegexRules: () => ipcRenderer.invoke('settings:regex-rules:get') as Promise<RegexFenceRule[]>,
       saveRegexRules: (rules: RegexFenceRule[]) => ipcRenderer.invoke('settings:regex-rules:save', rules) as Promise<void>,
     }),

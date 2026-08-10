@@ -170,6 +170,18 @@ describe('terminalAgent preload API', () => {
     expect(invoke).toHaveBeenCalledWith('sessions:profiles:delete', 'prod-api')
   })
 
+  it('tests a model connection through a named settings channel without persisting it', async () => {
+    await import('../../../src/preload/index')
+    const [, api] = exposeInMainWorld.mock.calls[0] as [string, {
+      settings: { testModel: (input: unknown) => Promise<unknown> }
+    }]
+    const input = { endpoint: 'https://compatible.example/v1/chat/completions', model: 'compatible-model', contextLimit: 8_000 }
+
+    await api.settings.testModel(input)
+
+    expect(invoke).toHaveBeenCalledWith('settings:model:test', input)
+  })
+
   it('exposes only named AccessClient launch-error methods', async () => {
     invoke.mockResolvedValueOnce(['无法建立 AccessClient 会话。请检查启动参数、连接状态和本次凭据。'])
     await import('../../../src/preload/index')

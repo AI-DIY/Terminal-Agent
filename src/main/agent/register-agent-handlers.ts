@@ -1,6 +1,7 @@
 import { ipcMain, type WebContents } from 'electron'
 import { agentStartRequestSchema, type AgentCandidate, type AgentStreamEvent, type SessionMode } from '../../shared/contracts'
 import { ModelConfigurationError, UnsafeAgentOutputError } from './agent-model-runtime'
+import { ModelConnectionError } from '../model/chat-completions-client'
 import type { AgentEventPublisher, AgentGoalContext } from './agent-contracts'
 import type { AgentExecutionResult } from './execution-gateway'
 import { containsSensitiveMaterial, SensitiveTextStreamRedactor } from './sensitive-data'
@@ -210,6 +211,9 @@ function sendError(sender: WebContents, sessionId: string, runId: string, messag
 function publicErrorMessage(error: unknown): string {
   if (error instanceof ModelConfigurationError) {
     return '未配置 AI 模型。请前往设置完成模型连接后重试。'
+  }
+  if (error instanceof ModelConnectionError) {
+    return error.message
   }
   if (error instanceof UnsafeAgentOutputError) {
     return 'AI 响应包含敏感内容，已拒绝显示和执行。'
