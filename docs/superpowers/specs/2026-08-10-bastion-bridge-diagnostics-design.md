@@ -15,7 +15,7 @@ No Electron runtime files, resources, or DLLs are copied into the Assess Client 
 
 ## Architecture
 
-The native bridge creates a unique launch identifier and appends its own start, runtime-location, argument-classification, and process-start result to `putty-bridge.log`. It passes the log path and launch identifier to the started Terminal-Agent runtime through private child-process environment variables.
+The native bridge creates a unique launch identifier and appends its own start, runtime-location, argument-classification, and process-start result to `putty-bridge.log`. It passes the log path and launch identifier to the started Terminal-Agent runtime as private command-line metadata. Electron forwards that metadata to the already-running primary application during a second-instance launch, so every jump reaches the same trace even when the Terminal-Agent window is already open.
 
 The runtime appends the matching argument parsing, temporary-profile validation, transport-opening, session-opened, or failure event to the same file. This creates one trace from the external `putty.exe` invocation through the SSH or Raw connection attempt.
 
