@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('electron', () => ({ dialog: { showOpenDialog: vi.fn() } }))
+
 import { KeyMaterialStore } from '../../../src/main/ssh/key-material-store'
 
 describe('KeyMaterialStore', () => {
@@ -10,7 +13,7 @@ describe('KeyMaterialStore', () => {
       createId: () => 'key-reference',
     })
 
-    await expect(store.select()).resolves.toEqual({ id: 'key-reference', fileName: 'prod.ppk' })
+    await expect(store.select()).resolves.toEqual({ id: 'key-reference', fileName: 'prod.ppk', filePath: 'C:\\keys\\prod.ppk' })
     expect(readFile).toHaveBeenCalledWith('C:\\keys\\prod.ppk')
 
     expect(store.take('key-reference', 'passphrase')).toEqual({

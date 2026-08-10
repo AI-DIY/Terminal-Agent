@@ -4,7 +4,7 @@ import { basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { PrivateKeyInput } from './private-key-loader'
 
-export type KeyMaterialReference = { id: string; fileName: string }
+export type KeyMaterialReference = { id: string; fileName: string; filePath: string }
 
 type OpenDialogResult = {
   canceled: boolean
@@ -60,7 +60,7 @@ export class KeyMaterialStore {
       input: { fileName, content },
       expiresAt: this.dependencies.now() + this.dependencies.ttlMs,
     })
-    return { id, fileName }
+    return { id, fileName, filePath }
   }
 
   take(id: string, passphrase?: string): PrivateKeyInput {

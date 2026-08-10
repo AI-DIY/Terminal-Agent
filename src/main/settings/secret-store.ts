@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 export interface SecretStore {
   load(key: string): Promise<string | null>
   save(key: string, value: string): Promise<void>
+  remove(key: string): Promise<void>
 }
 
 type EncryptedValues = Record<string, string>
@@ -29,6 +30,16 @@ export class ElectronSecretStore implements SecretStore {
 
     const values = await this.readValues()
     values[key] = safeStorage.encryptString(value).toString('base64')
+    await mkdir(dirname(this.filePath), { recursive: true })
+    const temporaryPath = `${this.filePath}.tmp`
+    await writeFile(temporaryPath, JSON.stringify(values), 'utf8')
+    await rename(temporaryPath, this.filePath)
+  }
+
+  async remove(key: string): Promise<void> {
+    const values = await this.readValues()
+    if (!(key in values)) return
+    delete values[key]
     await mkdir(dirname(this.filePath), { recursive: true })
     const temporaryPath = `${this.filePath}.tmp`
     await writeFile(temporaryPath, JSON.stringify(values), 'utf8')

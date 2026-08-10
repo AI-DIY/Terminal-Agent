@@ -13,7 +13,7 @@ export type RendererModelSettingsInput = PersistedModelSettings & { apiKey?: str
 export class ModelSettingsService {
   constructor(
     private readonly settings: SettingsRepository,
-    private readonly secrets: SecretStore,
+    private readonly secrets: Pick<SecretStore, 'load' | 'save'>,
   ) {}
 
   async save(input: ModelSettingsInput): Promise<void> {
