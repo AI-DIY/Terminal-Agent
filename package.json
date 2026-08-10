@@ -1,0 +1,80 @@
+{
+  "name": "terminal-agent-v2",
+  "version": "1.0.0",
+  "description": "",
+  "main": "./out/main/main.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build && vue-tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "pretest:e2e": "npm run build",
+    "test:e2e": "playwright test",
+    "build:launcher": "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force build/launcher | Out-Null; & x86_64-w64-mingw32-g++.exe -std=c++17 -O2 -s -municode scripts/windows/terminal-agent-launcher.cpp -o build/launcher/Terminal-Agent.exe -lshell32\"",
+    "make:win:unpacked": "npm run build && npm run build:launcher && electron-builder --win dir --x64",
+    "make:win": "npm run make:win:unpacked && electron-builder --win nsis --x64"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "build": {
+    "appId": "com.ai-diy.terminal-agent",
+    "productName": "Terminal-Agent",
+    "directories": {
+      "output": "release"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "asarUnpack": [
+      "node_modules/ssh2/**"
+    ],
+    "extraFiles": [
+      {
+        "from": "build/launcher/Terminal-Agent.exe",
+        "to": "Terminal-Agent.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "executableName": "Terminal-Agent-runtime"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Terminal-Agent-Setup-${version}.${ext}"
+    }
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron-vite": "^5.0.0",
+    "ppk-to-openssh": "^3.2.0",
+    "ssh2": "^1.17.0",
+    "vue": "^3.5.41",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
+    "@types/ssh2": "^1.15.5",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "electron": "^43.3.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.8.1",
+    "playwright": "^1.62.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.66.0",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^3.3.9"
+  }
+}

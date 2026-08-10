@@ -1,0 +1,213 @@
+import { spawn, type ChildProcess, execFile } from 'node:child_process'
+import { generateKeyPairSync } from 'node:crypto'
+import { once } from 'node:events'
+import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { type AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+import { expect, test } from 'vitest'
+import { Server, type Connection } from 'ssh2'
+
+const execFileAsync = promisify(execFile)
+const launcherPath = join(process.cwd(), 'release', 'win-unpacked', 'Terminal-Agent.exe')
+
+test.skipIf(process.platform !== 'win32')('the public launcher forwards a temporary SSH AccessClient profile through password authentication and shell opening', async () => {
+  await access(launcherPath)
+
+  const fixture = await startSshFixture()
+  const profileDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-release-profile-'))
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-release-state-'))
+  const profilePath = join(profileDirectory, '发布验证会话.conf')
+  const password = 'release-fixture-password'
+  let launcher: ChildProcess | undefined
+  let runtimeProcessId: number | undefined
+
+  try {
+    await writeFile(profilePath, [
+      'HostName=127.0.0.1',
+      `PortNumber=${fixture.port}`,
+      'UserName=release-fixture-user',
+      'Protocol=ssh',
+      'WinTitle=发布验证终端',
+      'TermWidth=132',
+      'TermHeight=43',
+    ].join('\n'), 'utf8')
+
+    launcher = spawn(launcherPath, ['-load', `tmp:${profilePath}`, '-pw', password], {
+      env: {
+        ...process.env,
+        APPDATA: stateDirectory,
+        LOCALAPPDATA: stateDirectory,
+      },
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+
+    const [observedShell, discoveredRuntimeProcessId] = await Promise.all([
+      fixture.waitForShell(),
+      waitForCondition('the runtime process started by this test', () => findRuntimeProcessId(profilePath)),
+      once(launcher, 'exit'),
+    ]).then(([shell, processId]) => [shell, processId] as const)
+    runtimeProcessId = discoveredRuntimeProcessId
+
+    expect(observedShell).toEqual({
+      username: 'release-fixture-user',
+      pty: { columns: 132, rows: 43 },
+    })
+  } finally {
+    const processIdToStop = runtimeProcessId ?? await findRuntimeProcessId(profilePath)
+    if (processIdToStop !== undefined) {
+      await terminateProcessTree(processIdToStop)
+      await waitForCondition('the test runtime process to terminate', async () => (await findRuntimeProcessId(profilePath)) === undefined)
+    }
+    if (launcher?.exitCode === null) launcher.kill()
+    try {
+      await fixture.close()
+    } finally {
+      let persistedSensitiveFiles: string[] | undefined
+      try {
+        persistedSensitiveFiles = await findFilesContaining(stateDirectory, [password, profilePath])
+      } finally {
+        await Promise.all([
+          rm(profileDirectory, { recursive: true, force: true }),
+          rm(stateDirectory, { recursive: true, force: true }),
+        ])
+      }
+      expect(persistedSensitiveFiles).toEqual([])
+    }
+  }
+})
+
+async function startSshFixture(): Promise<{
+  port: number
+  waitForShell(): Promise<{ username: string; pty: { columns: number; rows: number } }>
+  close(): Promise<void>
+}> {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2_048 })
+  const clients = new Set<Connection>()
+  let resolveShell: ((value: { username: string; pty: { columns: number; rows: number } }) => void) | undefined
+  let rejectShell: ((reason: Error) => void) | undefined
+  const shellOpened = new Promise<{ username: string; pty: { columns: number; rows: number } }>((resolve, reject) => {
+    resolveShell = resolve
+    rejectShell = reject
+  })
+  let authenticatedUsername: string | undefined
+  let pty: { columns: number; rows: number } | undefined
+  let shellWasOpened = false
+  const maybeResolveShell = () => {
+    if (authenticatedUsername !== undefined && pty !== undefined && shellWasOpened) {
+      resolveShell?.({ username: authenticatedUsername, pty })
+      resolveShell = undefined
+    }
+  }
+  const server = new Server({ hostKeys: [privateKey.export({ type: 'pkcs1', format: 'pem' })] }, client => {
+    clients.add(client)
+    client.once('close', () => clients.delete(client))
+    client.on('authentication', context => {
+      if (context.method === 'password' && context.username === 'release-fixture-user' && context.password === 'release-fixture-password') {
+        authenticatedUsername = context.username
+        context.accept()
+        return
+      }
+      context.reject()
+    }).on('ready', () => {
+      client.on('session', accept => {
+        const session = accept()
+        session.on('pty', (acceptPty, _rejectPty, info) => {
+          pty = { columns: info.cols, rows: info.rows }
+          acceptPty()
+          maybeResolveShell()
+        }).on('shell', acceptShell => {
+          const stream = acceptShell()
+          shellWasOpened = true
+          stream.write('release-fixture-ready\r\n')
+          maybeResolveShell()
+        })
+      })
+    }).once('error', error => rejectShell?.(error))
+  })
+
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  return {
+    port: (server.address() as AddressInfo).port,
+    waitForShell: () => waitForPromise('password authentication and shell opening', shellOpened),
+    close: async () => {
+      for (const client of clients) client.end()
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    },
+  }
+}
+
+async function findRuntimeProcessId(profilePath: string): Promise<number | undefined> {
+  const command = [
+    "$runtime = Get-CimInstance Win32_Process -Filter \"Name = 'Terminal-Agent-runtime.exe'\"",
+    "$match = $runtime | Where-Object { $_.CommandLine -like ('*tmp:' + $env:TERMINAL_AGENT_RELEASE_PROFILE + '*') } | Select-Object -First 1",
+    'if ($null -ne $match) { [Console]::Write($match.ProcessId) }',
+  ].join('; ')
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    env: { ...process.env, TERMINAL_AGENT_RELEASE_PROFILE: profilePath },
+    windowsHide: true,
+  })
+  const processId = Number(stdout.trim())
+  return Number.isInteger(processId) && processId > 0 ? processId : undefined
+}
+
+async function terminateProcessTree(processId: number): Promise<void> {
+  try {
+    await execFileAsync('taskkill.exe', ['/PID', String(processId), '/T', '/F'], { windowsHide: true })
+  } catch {
+    // The exact runtime lookup below determines whether it actually exited.
+  }
+}
+
+async function waitForCondition<T>(description: string, condition: () => Promise<T | false>): Promise<T> {
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline) {
+    const result = await condition()
+    if (result !== false && result !== undefined) return result
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error(`Timed out waiting for ${description}`)
+}
+
+async function waitForPromise<T>(description: string, promise: Promise<T>): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(`Timed out waiting for ${description}`)), 20_000)
+      }),
+    ])
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout)
+  }
+}
+
+async function findFilesContaining(directory: string, values: readonly string[]): Promise<string[]> {
+  const matches: string[] = []
+  const needles = values.map(value => Buffer.from(value, 'utf8'))
+  const visit = async (currentDirectory: string): Promise<void> => {
+    let entries
+    try {
+      entries = await readdir(currentDirectory, { withFileTypes: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    for (const entry of entries) {
+      const path = join(currentDirectory, entry.name)
+      if (entry.isDirectory()) {
+        await visit(path)
+      } else if (entry.isFile()) {
+        const content = await readFile(path)
+        if (needles.some(needle => content.includes(needle))) matches.push(path)
+      }
+    }
+  }
+
+  await visit(directory)
+  return matches
+}

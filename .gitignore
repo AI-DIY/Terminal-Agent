@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+release/
+build/
+coverage/
+playwright-report/
+test-results/
+.worktrees/
+.env
+.env.*
+!*.example
+*.log
+
+# Local Electron runtime data and generated design companion artifacts.
+.superpowers/
+.worktrees/

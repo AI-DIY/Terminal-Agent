@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <title>Terminal-Agent | 产品蓝图</title>
+  <style>
+    :root {
+      --ink: #17292f;
+      --muted: #607176;
+      --line: #d5dfde;
+      --canvas: #eef3f2;
+      --paper: #fbfcfc;
+      --teal: #087f82;
+      --teal-soft: #e2f2ef;
+      --blue: #286f9a;
+      --blue-soft: #e9f1f6;
+      --amber: #9e6215;
+      --amber-soft: #fff2dc;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { background: var(--canvas); }
+
+    body {
+      min-width: 320px;
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    .deck { padding: 24px 0; }
+
+    .slide {
+      display: grid;
+      min-height: calc(100vh - 48px);
+      grid-template-rows: auto 1fr auto;
+      width: min(1440px, calc(100% - 72px));
+      margin: 0 auto 24px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      box-shadow: 0 10px 28px rgb(33 53 58 / 7%);
+    }
+
+    .slide:last-child { margin-bottom: 0; }
+
+    .slide-header,
+    .slide-main,
+    .slide-footer { padding-left: 46px; padding-right: 46px; }
+
+    .slide-header {
+      display: flex;
+      min-height: 61px;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .brand { color: var(--ink); font-weight: 760; }
+    .page-index { color: var(--teal); font-weight: 760; }
+
+    .transition-slide .slide-main {
+      display: grid;
+      align-content: center;
+      padding-top: 40px;
+      padding-bottom: 38px;
+    }
+
+    .eyebrow {
+      margin: 0 0 13px;
+      color: var(--teal);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      max-width: 980px;
+      margin-bottom: 17px;
+      color: var(--ink);
+      font-size: 48px;
+      font-weight: 760;
+      letter-spacing: 0;
+      line-height: 1.18;
+    }
+
+    .intro {
+      max-width: 840px;
+      margin-bottom: 32px;
+      color: #43565c;
+      font-size: 18px;
+      line-height: 1.7;
+    }
+
+    .intro strong { color: var(--teal); font-weight: 760; }
+
+    .turning-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .turning-item { min-height: 186px; padding: 24px 27px 22px 0; }
+
+    .turning-item + .turning-item {
+      border-left: 1px solid var(--line);
+      padding-left: 28px;
+    }
+
+    .turning-label {
+      display: inline-block;
+      margin-bottom: 15px;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .turning-item:nth-child(2) .turning-label { color: var(--blue); }
+    .turning-item:nth-child(3) .turning-label { color: var(--amber); }
+
+    .turning-item h2 {
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-size: 18px;
+      font-weight: 760;
+      line-height: 1.38;
+    }
+
+    .turning-item p {
+      max-width: 355px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.68;
+    }
+
+    .transition-statement {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 22px;
+      margin-top: 26px;
+      color: var(--ink);
+      font-size: 17px;
+      font-weight: 700;
+      line-height: 1.5;
+    }
+
+    .transition-statement span:first-child { color: var(--muted); text-align: right; }
+    .transition-statement span:last-child { color: var(--teal); }
+    .arrow { color: var(--teal); font-size: 26px; font-weight: 400; }
+
+    .slide-footer {
+      min-height: 60px;
+      display: flex;
+      align-items: center;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .function-slide .slide-main { padding-top: 36px; padding-bottom: 28px; }
+
+    .function-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 32px;
+      margin-bottom: 26px;
+    }
+
+    .function-heading h2 {
+      margin-bottom: 0;
+      color: var(--ink);
+      font-size: 34px;
+      font-weight: 760;
+      line-height: 1.22;
+    }
+
+    .function-heading p {
+      max-width: 460px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: right;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .feature {
+      display: flex;
+      min-height: 250px;
+      flex-direction: column;
+      padding: 23px 19px 20px;
+    }
+
+    .feature + .feature { border-left: 1px solid var(--line); }
+
+    .feature-index {
+      display: block;
+      margin-bottom: 19px;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .feature:nth-child(2) .feature-index,
+    .feature:nth-child(3) .feature-index { color: var(--blue); }
+    .feature:nth-child(4) .feature-index { color: var(--amber); }
+
+    .feature h3 {
+      min-height: 56px;
+      margin-bottom: 10px;
+      color: var(--ink);
+      font-size: 17px;
+      font-weight: 760;
+      line-height: 1.4;
+    }
+
+    .feature p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .feature em {
+      color: var(--ink);
+      font-style: normal;
+      font-weight: 700;
+    }
+
+    .mode-summary {
+      display: grid;
+      grid-template-columns: 0.45fr 1.55fr;
+      gap: 28px;
+      margin-top: 22px;
+      padding: 17px 20px;
+      border-left: 3px solid var(--teal);
+      background: var(--teal-soft);
+    }
+
+    .mode-summary strong { color: #076c70; font-size: 14px; }
+    .mode-summary p { margin-bottom: 0; color: #3e5b5d; font-size: 14px; }
+
+    @media (max-width: 1120px) {
+      .feature-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .feature:nth-child(4) { border-left: 0; border-top: 1px solid var(--line); }
+      .feature:nth-child(5) { border-top: 1px solid var(--line); }
+    }
+
+    @media (max-width: 760px) {
+      .deck { padding: 0; }
+      .slide { width: 100%; min-height: 100vh; margin: 0; border-width: 0 0 1px; box-shadow: none; }
+      .slide-header, .slide-main, .slide-footer { padding-left: 22px; padding-right: 22px; }
+      .transition-slide .slide-main { padding-top: 34px; padding-bottom: 32px; }
+      h1 { font-size: 34px; }
+      .intro { margin-bottom: 26px; font-size: 16px; }
+      .turning-grid { grid-template-columns: 1fr; }
+      .turning-item, .turning-item + .turning-item { min-height: 0; padding: 19px 0; border-left: 0; }
+      .turning-item + .turning-item { border-top: 1px solid var(--line); }
+      .transition-statement { grid-template-columns: 1fr; gap: 4px; margin-top: 20px; }
+      .transition-statement span:first-child { text-align: left; }
+      .arrow { line-height: 1; transform: rotate(90deg); }
+      .function-slide .slide-main { padding-top: 30px; }
+      .function-heading { display: block; margin-bottom: 20px; }
+      .function-heading h2 { margin-bottom: 10px; font-size: 28px; }
+      .function-heading p { text-align: left; }
+      .feature-grid { grid-template-columns: 1fr; }
+      .feature, .feature:nth-child(4) { min-height: 0; padding: 18px; border-left: 0; }
+      .feature + .feature, .feature:nth-child(4) { border-top: 1px solid var(--line); }
+      .feature h3 { min-height: 0; margin-bottom: 6px; }
+      .feature-index { margin-bottom: 8px; }
+      .mode-summary { grid-template-columns: 1fr; gap: 5px; margin-top: 16px; }
+    }
+
+    @media print {
+      .deck { padding: 0; }
+      .slide {
+        width: 100%;
+        min-height: 100vh;
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+        break-after: page;
+        page-break-after: always;
+      }
+      .slide:last-child { break-after: auto; page-break-after: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="deck">
+    <section class="slide transition-slide" aria-labelledby="transition-title">
+      <header class="slide-header">
+        <span class="brand">Terminal-Agent</span>
+        <span class="page-index">01 / 产品转折</span>
+      </header>
+      <div class="slide-main">
+        <p class="eyebrow">为什么要从“分析”走向“真正干活”</p>
+        <h1 id="transition-title">从“会分析”，到“在终端里真正干活”</h1>
+        <p class="intro"><strong>自动巡检已经体现出实际价值</strong>：当 Agent 能承担明确的检查工作、减少重复操作时，才能真正融入管理员的日常工作。</p>
+
+        <div class="turning-grid">
+          <article class="turning-item">
+            <span class="turning-label">已有价值</span>
+            <h2>自动巡检在分担工作</h2>
+            <p>系统管理员需要的，不只是信息和建议，而是能减少重复劳动、可以长期使用的协作能力。</p>
+          </article>
+          <article class="turning-item">
+            <span class="turning-label">已有基础</span>
+            <h2>告警分析提供理解能力</h2>
+            <p>告警分析 Agent 具备 ReAct 的环境理解与推理基础，但它还主要停留在终端之外分析问题。</p>
+          </article>
+          <article class="turning-item">
+            <span class="turning-label">当前方向</span>
+            <h2>把 Agent 放进终端现场</h2>
+            <p>将已有分析能力融入管理员正在使用的终端，让 Agent 围绕目标参与实际工作，并保留明确的安全控制。</p>
+          </article>
+        </div>
+
+        <div class="transition-statement" aria-label="产品演进方向">
+          <span>终端之外的分析与建议</span>
+          <span class="arrow" aria-hidden="true">→</span>
+          <span>终端之内、受控参与实际工作</span>
+        </div>
+      </div>
+      <footer class="slide-footer">不是重新做一个 Agent，而是在已有 ReAct 能力基础上，把它放进系统管理员的一线工作环境。</footer>
+    </section>
+
+    <section class="slide function-slide" aria-labelledby="functions-title">
+      <header class="slide-header">
+        <span class="brand">Terminal-Agent</span>
+        <span class="page-index">02 / 当前产品设计</span>
+      </header>
+      <div class="slide-main">
+        <div class="function-heading">
+          <div>
+            <p class="eyebrow">面向真实终端工作流</p>
+            <h2 id="functions-title">Terminal-Agent 当前产品设计</h2>
+          </div>
+          <p>围绕连接、环境理解、目标协作和执行控制，形成一套嵌入终端的工作台。</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature">
+            <span class="feature-index">01</span>
+            <h3>进入终端工作现场</h3>
+            <p>支持用户名 + 密码、私钥和 AccessClient 兼容启动；提供 SSH 会话、标签与多主机工作台。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-index">02</span>
+            <h3>理解主机环境</h3>
+            <p>新建连接后进行只读观察，按主机名沉淀软件、进程、服务和日志位置等结构化事实。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-index">03</span>
+            <h3>围绕目标协作</h3>
+            <p>Agent 结合用户目标、当前会话和主机事实，安排需要收集的信息与后续操作步骤。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-index">04</span>
+            <h3>两种驾驶模式</h3>
+            <p><em>辅助驾驶</em>默认启用；用户明确为当前会话升级后，才进入<em>全自动驾驶</em>。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-index">05</span>
+            <h3>安全控制</h3>
+            <p>精确命令确认、本地正则安全围栏和敏感信息隔离，共同约束 Agent 的执行边界。</p>
+          </article>
+        </div>
+
+        <div class="mode-summary">
+          <strong>执行原则</strong>
+          <p>辅助驾驶下，查询和观察可执行，变更命令需要用户确认；全自动驾驶仅在用户明确升级当前会话后启用。</p>
+        </div>
+      </div>
+      <footer class="slide-footer">产品重点不是增加一个分析入口，而是让 Agent 在清晰的安全边界内，逐步分担系统管理员的工作。</footer>
+    </section>
+  </main>
+</body>
+</html>
