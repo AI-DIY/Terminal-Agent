@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess, execFile } from 'node:child_process'
 import { generateKeyPairSync } from 'node:crypto'
 import { once } from 'node:events'
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,20 +10,27 @@ import { expect, test } from 'vitest'
 import { Server, type Connection } from 'ssh2'
 
 const execFileAsync = promisify(execFile)
-const launcherPath = join(process.cwd(), 'release', 'win-unpacked', 'Terminal-Agent.exe')
+const releaseDirectory = join(process.cwd(), 'release', 'win-unpacked')
+const packagedBridgePath = join(releaseDirectory, 'putty.exe')
 
-test.skipIf(process.platform !== 'win32')('the public launcher forwards a temporary SSH AccessClient profile through password authentication and shell opening', async () => {
-  await access(launcherPath)
+test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temporary SSH AccessClient profile through the installed runtime', async () => {
+  await access(packagedBridgePath)
 
   const fixture = await startSshFixture()
+  const mappingDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-assess-mapping-'))
   const profileDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-release-profile-'))
   const stateDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-release-state-'))
   const profilePath = join(profileDirectory, '发布验证会话.conf')
+  const copiedBridgePath = join(mappingDirectory, 'putty.exe')
   const password = 'release-fixture-password'
+  let previousInstallPath: InstallPathRegistration | undefined
   let launcher: ChildProcess | undefined
   let runtimeProcessId: number | undefined
 
   try {
+    previousInstallPath = await readInstallPathRegistration()
+    await copyFile(packagedBridgePath, copiedBridgePath)
+    await writeInstallPathRegistration(releaseDirectory)
     await writeFile(profilePath, [
       'HostName=127.0.0.1',
       `PortNumber=${fixture.port}`,
@@ -34,7 +41,7 @@ test.skipIf(process.platform !== 'win32')('the public launcher forwards a tempor
       'TermHeight=43',
     ].join('\n'), 'utf8')
 
-    launcher = spawn(launcherPath, ['-load', `tmp:${profilePath}`, '-pw', password], {
+    launcher = spawn(copiedBridgePath, ['-load', `tmp:${profilePath}`, '-pw', password], {
       env: {
         ...process.env,
         APPDATA: stateDirectory,
@@ -65,19 +72,74 @@ test.skipIf(process.platform !== 'win32')('the public launcher forwards a tempor
     try {
       await fixture.close()
     } finally {
-      let persistedSensitiveFiles: string[] | undefined
       try {
-        persistedSensitiveFiles = await findFilesContaining(stateDirectory, [password, profilePath])
+        if (previousInstallPath !== undefined) await restoreInstallPathRegistration(previousInstallPath)
       } finally {
-        await Promise.all([
-          rm(profileDirectory, { recursive: true, force: true }),
-          rm(stateDirectory, { recursive: true, force: true }),
-        ])
+        let persistedSensitiveFiles: string[] | undefined
+        try {
+          persistedSensitiveFiles = await findFilesContaining(stateDirectory, [password, profilePath])
+        } finally {
+          await Promise.all([
+            rm(mappingDirectory, { recursive: true, force: true }),
+            rm(profileDirectory, { recursive: true, force: true }),
+            rm(stateDirectory, { recursive: true, force: true }),
+          ])
+        }
+        expect(persistedSensitiveFiles).toEqual([])
       }
-      expect(persistedSensitiveFiles).toEqual([])
     }
   }
 })
+
+type InstallPathRegistration =
+  | { exists: false }
+  | { exists: true; kind: 'String'; value: string }
+
+async function readInstallPathRegistration(): Promise<InstallPathRegistration> {
+  const script = [
+    "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\\Terminal-Agent', $false)",
+    'if ($null -eq $key) { [Console]::Write(\'{"exists":false}\'); exit 0 }',
+    "$value = $key.GetValue('InstallPath', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",
+    "if ($null -eq $value) { $key.Dispose(); [Console]::Write('{\"exists\":false}'); exit 0 }",
+    "$kind = $key.GetValueKind('InstallPath')",
+    '$key.Dispose()',
+    "if ($kind -ne [Microsoft.Win32.RegistryValueKind]::String) { throw 'InstallPath must be a REG_SZ value for this release test.' }",
+    '[Console]::Write((@{ exists = $true; kind = \'String\'; value = [string]$value } | ConvertTo-Json -Compress))',
+  ].join('; ')
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    windowsHide: true,
+  })
+  return JSON.parse(stdout) as InstallPathRegistration
+}
+
+async function writeInstallPathRegistration(installPath: string): Promise<void> {
+  const script = [
+    "$key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\\Terminal-Agent')",
+    "$key.SetValue('InstallPath', $env:TERMINAL_AGENT_RELEASE_INSTALL_PATH, [Microsoft.Win32.RegistryValueKind]::String)",
+    '$key.Dispose()',
+  ].join('; ')
+  await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: { ...process.env, TERMINAL_AGENT_RELEASE_INSTALL_PATH: installPath },
+    windowsHide: true,
+  })
+}
+
+async function restoreInstallPathRegistration(previous: InstallPathRegistration): Promise<void> {
+  const script = previous.exists
+    ? [
+        "$key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\\Terminal-Agent')",
+        "$key.SetValue('InstallPath', $env:TERMINAL_AGENT_RELEASE_INSTALL_PATH, [Microsoft.Win32.RegistryValueKind]::String)",
+        '$key.Dispose()',
+      ].join('; ')
+    : [
+        "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\\Terminal-Agent', $true)",
+        "if ($null -ne $key) { $key.DeleteValue('InstallPath', $false); $key.Dispose() }",
+      ].join('; ')
+  await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: previous.exists ? { ...process.env, TERMINAL_AGENT_RELEASE_INSTALL_PATH: previous.value } : process.env,
+    windowsHide: true,
+  })
+}
 
 async function startSshFixture(): Promise<{
   port: number

@@ -10,6 +10,8 @@ Build the Windows application directory with:
 npm run make:win:unpacked
 ```
 
-The public entry point is `release/win-unpacked/Terminal-Agent.exe`. It forwards AccessClient-compatible arguments to `Terminal-Agent-runtime.exe` without exposing credentials in application logs or persisted settings.
+After installing Terminal-Agent, copy or map only `release/win-unpacked/putty.exe` into the Assess/Access Client mapping location. Do not copy `Terminal-Agent-runtime.exe`, `resources`, or any other Electron files. The portable `putty.exe` bridge locates the installed Terminal-Agent and forwards AccessClient-compatible arguments (including temporary bastion credentials) to the installed runtime without exposing them in application logs or persisted settings.
+
+The installer and each packaged Windows startup record the installed location for the bridge. If the bridge reports that Terminal-Agent cannot be found, install Terminal-Agent or start it once, then reopen the connection from Assess/Access Client.
 
 `npm run make:win` additionally generates `Terminal-Agent-Setup-<version>.exe` when the Electron Builder NSIS resources are available from the network.

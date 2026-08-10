@@ -36,6 +36,7 @@ import { registerSettingsHandlers } from './settings/register-settings-handlers'
 import { FileHostFactsRepository } from './facts/host-facts-repository'
 import { HostFactsService } from './facts/host-facts-service'
 import { registerSessionObservation } from './observation/register-session-observation'
+import { recordPackagedWindowsInstallPath, writeWindowsInstallPath } from './windows/install-location'
 
 let mainWindow: BrowserWindow | undefined
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
@@ -127,6 +128,12 @@ const isPrimaryInstance = configureAccessClientSingleInstance(app, accessClientL
 
 if (isPrimaryInstance) {
   app.whenReady().then(() => {
+    void recordPackagedWindowsInstallPath({
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      execPath: process.execPath,
+      writeInstallPath: writeWindowsInstallPath,
+    })
     void regexRules.load().catch(() => undefined)
     createMainWindow()
     void accessClientLaunches.tryOpenFromArgv(process.argv)
