@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess, execFile } from 'node:child_process'
 import { generateKeyPairSync } from 'node:crypto'
 import { once } from 'node:events'
-import { access, copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { access, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -161,6 +161,65 @@ test.skipIf(process.platform !== 'win32')('a co-located bridge skips a stale reg
   }
 })
 
+test.skipIf(process.platform !== 'win32')('a co-located bridge falls back to a local log when its mapped log location cannot be opened', async () => {
+  await access(packagedBridgePath)
+
+  const mappingDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-unwritable-log-mapping-'))
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-unwritable-log-state-'))
+  const copiedBridgePath = join(mappingDirectory, 'putty.exe')
+  const copiedRuntimePath = join(mappingDirectory, 'Terminal-Agent-runtime.exe')
+  const unusablePrimaryLogPath = join(mappingDirectory, 'putty-bridge.log')
+  const fallbackLogPath = join(stateDirectory, 'Terminal-Agent', 'putty-bridge.log')
+  let previousInstallPath: InstallPathRegistration | undefined
+  let launcher: ChildProcess | undefined
+  let runtimeProcessId: number | undefined
+  let primaryFailure: unknown
+  let launchAttempted = false
+  let preexistingRuntimeProcessIds = new Set<number>()
+
+  try {
+    previousInstallPath = await readInstallPathRegistration()
+    await cp(releaseDirectory, mappingDirectory, { recursive: true })
+    await mkdir(unusablePrimaryLogPath)
+    await writeInstallPathRegistration(join(stateDirectory, 'missing-installation'))
+    preexistingRuntimeProcessIds = new Set(await findRuntimeProcessIds(copiedRuntimePath))
+    launchAttempted = true
+    launcher = spawn(copiedBridgePath, ['-raw', '-P', '1'], {
+      env: { ...process.env, APPDATA: stateDirectory, LOCALAPPDATA: stateDirectory },
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    await once(launcher, 'exit')
+    runtimeProcessId = await waitForCondition('the co-located runtime process with fallback diagnostics', () => findNewRuntimeProcessId(preexistingRuntimeProcessIds, copiedRuntimePath))
+    await waitForCondition('the local fallback bridge diagnostic trace', async () => {
+      const trace = await readFile(fallbackLogPath, 'utf8').catch(() => '')
+      return trace.includes('"source":"bridge"')
+        && trace.includes('"event":"process-started"')
+        && trace.includes('"source":"runtime"')
+        && trace.includes('"event":"invocation-parsed"')
+    })
+  } catch (error) {
+    primaryFailure = error
+    throw error
+  } finally {
+    let processIdToStop = runtimeProcessId
+    await runReleaseLauncherCleanup(primaryFailure, [
+      async () => {
+        if (launchAttempted) processIdToStop ??= await findNewRuntimeProcessId(preexistingRuntimeProcessIds, copiedRuntimePath)
+      },
+      async () => { if (processIdToStop !== undefined) await terminateProcessTree(processIdToStop) },
+      () => { if (launcher?.exitCode === null) launcher.kill() },
+      async () => { if (previousInstallPath !== undefined) await restoreInstallPathRegistration(previousInstallPath) },
+      async () => {
+        await Promise.all([
+          rm(mappingDirectory, { recursive: true, force: true }),
+          rm(stateDirectory, { recursive: true, force: true }),
+        ])
+      },
+    ])
+  }
+})
+
 type InstallPathRegistration =
   | { exists: false }
   | { exists: true; kind: 'String'; value: string }
@@ -272,18 +331,18 @@ async function startSshFixture(): Promise<{
   }
 }
 
-async function findNewRuntimeProcessId(preexistingRuntimeProcessIds: ReadonlySet<number>): Promise<number | undefined> {
-  return selectNewRuntimeProcessId(await findRuntimeProcessIds(), preexistingRuntimeProcessIds)
+async function findNewRuntimeProcessId(preexistingRuntimeProcessIds: ReadonlySet<number>, runtimePath = join(releaseDirectory, 'Terminal-Agent-runtime.exe')): Promise<number | undefined> {
+  return selectNewRuntimeProcessId(await findRuntimeProcessIds(runtimePath), preexistingRuntimeProcessIds)
 }
 
-async function findRuntimeProcessIds(): Promise<number[]> {
+async function findRuntimeProcessIds(runtimePath = join(releaseDirectory, 'Terminal-Agent-runtime.exe')): Promise<number[]> {
   const command = [
     "$runtime = Get-CimInstance Win32_Process -Filter \"Name = 'Terminal-Agent-runtime.exe'\"",
     "$matches = $runtime | Where-Object { $_.ExecutablePath -eq $env:TERMINAL_AGENT_RELEASE_RUNTIME -and $_.CommandLine -notmatch ' --type=' }",
     'foreach ($match in $matches) { [Console]::WriteLine($match.ProcessId) }',
   ].join('; ')
   const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
-    env: { ...process.env, TERMINAL_AGENT_RELEASE_RUNTIME: join(releaseDirectory, 'Terminal-Agent-runtime.exe') },
+    env: { ...process.env, TERMINAL_AGENT_RELEASE_RUNTIME: runtimePath },
     windowsHide: true,
     timeout: 2_000,
   })

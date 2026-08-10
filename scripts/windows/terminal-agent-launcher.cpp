@@ -179,16 +179,23 @@ bool AppendUtf8(const std::wstring& path, const std::wstring& line) {
   return success != FALSE && written == bytes.size();
 }
 
+bool CanAppend(const std::wstring& path) {
+  HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  CloseHandle(file);
+  return true;
+}
+
 std::wstring ResolveLogPath(const std::wstring& bridgeDirectory) {
   const std::wstring primary = JoinPath(bridgeDirectory, L"putty-bridge.log");
-  if (!primary.empty() && AppendUtf8(primary, L"")) return primary;
+  if (!primary.empty() && CanAppend(primary)) return primary;
 
   const std::wstring localAppData = EnvironmentDirectory(L"LOCALAPPDATA");
   if (localAppData.empty()) return primary;
   const std::wstring directory = JoinPath(localAppData, L"Terminal-Agent");
   CreateDirectoryW(directory.c_str(), nullptr);
   const std::wstring fallback = JoinPath(directory, L"putty-bridge.log");
-  return AppendUtf8(fallback, L"") ? fallback : primary;
+  return CanAppend(fallback) ? fallback : primary;
 }
 
 void WriteBridgeLog(const std::wstring& logPath, const std::wstring& launchId, const std::wstring& event, const LogFields& fields = {}) {
