@@ -1,7 +1,15 @@
+import { appendFile } from 'node:fs/promises'
+
 export type BridgeLaunchMetadata = {
   logPath: string
   launchId: string
 }
+
+export type BridgeDiagnostics = {
+  record(metadata: BridgeLaunchMetadata | undefined, event: string, fields?: Record<string, string | number | boolean>): Promise<void>
+}
+
+type BridgeDiagnosticWriter = (path: string, line: string) => Promise<void>
 
 const secretOptions = new Set([
   '-pw',
@@ -29,8 +37,32 @@ export function redactLaunchArguments(argv: readonly string[]): string[] {
   })
 }
 
+export function createBridgeDiagnostics(write: BridgeDiagnosticWriter = appendDiagnosticLine): BridgeDiagnostics {
+  return {
+    async record(metadata, event, fields = {}) {
+      if (!metadata) return
+      const line = `${JSON.stringify({
+        timestamp: new Date().toISOString(),
+        launchId: metadata.launchId,
+        source: 'runtime',
+        event,
+        ...fields,
+      })}\n`
+      try {
+        await write(metadata.logPath, line)
+      } catch {
+        // Diagnostics must not prevent an otherwise valid bastion launch.
+      }
+    },
+  }
+}
+
 function argumentValue(argv: readonly string[], name: string): string | undefined {
   const index = argv.indexOf(name)
   const value = index >= 0 ? argv[index + 1]?.trim() : undefined
   return value || undefined
+}
+
+async function appendDiagnosticLine(path: string, line: string): Promise<void> {
+  await appendFile(path, line, 'utf8')
 }

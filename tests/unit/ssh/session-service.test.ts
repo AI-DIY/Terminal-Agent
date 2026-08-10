@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SessionService } from '../../../src/main/ssh/session-service'
+import { AccessClientLaunchFailure } from '../../../src/main/access-client/launch-failure'
 
 describe('SessionService', () => {
   it('opens an AccessClient SSH session without converting an absent password into an empty password', async () => {
@@ -34,6 +35,25 @@ describe('SessionService', () => {
     expect(client.connect).toHaveBeenCalledWith({ host: 'server-a', port: 2222, username: 'ops', password: 'temporary-secret' })
     expect(connection.openShell).toHaveBeenCalledWith(120, 40)
     expect(session).toMatchObject({ hostname: 'server-a', title: '生产终端' })
+  })
+
+  it('classifies an AccessClient transport failure without changing direct-session errors', async () => {
+    const client = { connect: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) }
+    const service = new SessionService(client, { load: vi.fn() })
+
+    await expect(service.connectAccessSsh({
+      host: 'server-a', port: 2222, username: 'ops', title: '生产终端', columns: 120, rows: 40,
+    })).rejects.toMatchObject({ code: 'transport-connect-failed' } satisfies Partial<AccessClientLaunchFailure>)
+  })
+
+  it('classifies an AccessClient terminal-open failure after closing its connection', async () => {
+    const connection = { close: vi.fn(), openShell: vi.fn().mockRejectedValue(new Error('PTY denied')) }
+    const service = new SessionService({ connect: vi.fn().mockResolvedValue(connection) }, { load: vi.fn() })
+
+    await expect(service.connectAccessSsh({
+      host: 'server-a', port: 2222, username: 'ops', title: '生产终端', columns: 120, rows: 40,
+    })).rejects.toMatchObject({ code: 'terminal-open-failed' } satisfies Partial<AccessClientLaunchFailure>)
+    expect(connection.close).toHaveBeenCalledOnce()
   })
 
   it('opens an internal raw terminal session without adding SSH credentials', async () => {

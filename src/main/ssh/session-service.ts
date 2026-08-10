@@ -1,5 +1,6 @@
 import type { SessionMode } from '../../shared/contracts'
 import { StringDecoder } from 'node:string_decoder'
+import { AccessClientLaunchFailure } from '../access-client/launch-failure'
 import type { PrivateKeyInput } from './private-key-loader'
 import type { SshClientPort, SshConnection, SshShell } from './ssh-client-port'
 
@@ -76,7 +77,7 @@ export class SessionService {
   }
 
   async connectAccessSsh(request: AccessSshSessionRequest): Promise<ConnectedSession> {
-    return this.connectWithClient(this.client, {
+    return this.connectAccessClientWith(this.client, {
       host: request.host,
       port: request.port,
       username: request.username,
@@ -91,7 +92,7 @@ export class SessionService {
 
   async connectRaw(request: RawSessionRequest): Promise<ConnectedSession> {
     if (!this.rawClient) throw new Error('Raw terminal transport is unavailable')
-    return this.connectWithClient(this.rawClient, {
+    return this.connectAccessClientWith(this.rawClient, {
       host: request.host,
       port: request.port,
     }, {
@@ -109,6 +110,33 @@ export class SessionService {
     supportsReadOnlyObservation: boolean,
   ): Promise<ConnectedSession> {
     const connection = await client.connect(options)
+    return this.openConnectedSession(connection, sessionOptions, supportsReadOnlyObservation)
+  }
+
+  private async connectAccessClientWith(
+    client: SshClientPort,
+    options: { host: string; port: number; username?: string; password?: string },
+    sessionOptions: { hostname: string; title?: string; columns?: number; rows?: number },
+    supportsReadOnlyObservation: boolean,
+  ): Promise<ConnectedSession> {
+    let connection: SshConnection
+    try {
+      connection = await client.connect(options)
+    } catch {
+      throw new AccessClientLaunchFailure('transport-connect-failed')
+    }
+    try {
+      return await this.openConnectedSession(connection, sessionOptions, supportsReadOnlyObservation)
+    } catch {
+      throw new AccessClientLaunchFailure('terminal-open-failed')
+    }
+  }
+
+  private async openConnectedSession(
+    connection: SshConnection,
+    sessionOptions: { hostname: string; title?: string; columns?: number; rows?: number },
+    supportsReadOnlyObservation: boolean,
+  ): Promise<ConnectedSession> {
     const id = `s${this.nextId++}`
     const decoder = new StringDecoder('utf8')
     const columns = sessionOptions.columns ?? 80

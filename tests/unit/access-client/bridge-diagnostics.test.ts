@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractBridgeLaunchMetadata, redactLaunchArguments } from '../../../src/main/access-client/bridge-diagnostics'
+import { createBridgeDiagnostics, extractBridgeLaunchMetadata, redactLaunchArguments } from '../../../src/main/access-client/bridge-diagnostics'
 
 describe('bridge diagnostics', () => {
   it('extracts bridge metadata without treating it as an AccessClient option', () => {
@@ -25,5 +25,20 @@ describe('bridge diagnostics', () => {
       '--api-key', '[REDACTED]',
       '--passphrase', '[REDACTED]',
     ])
+  })
+
+  it('writes a correlated runtime event without credentials', async () => {
+    const writes: Array<{ path: string; line: string }> = []
+    const diagnostics = createBridgeDiagnostics(async (path, line) => { writes.push({ path, line }) })
+
+    await diagnostics.record({ logPath: 'D:\\Assess\\putty-bridge.log', launchId: 'launch-002' }, 'invocation-parsed', {
+      protocol: 'ssh', port: 22,
+    })
+
+    expect(writes).toHaveLength(1)
+    expect(writes[0]?.path).toBe('D:\\Assess\\putty-bridge.log')
+    expect(writes[0]?.line).toContain('"launchId":"launch-002"')
+    expect(writes[0]?.line).toContain('"source":"runtime"')
+    expect(writes[0]?.line).not.toContain('password-secret')
   })
 })
