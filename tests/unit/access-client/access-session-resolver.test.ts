@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AccessSessionResolver } from '../../../src/main/access-client/access-session-resolver'
 import { SavedSessionRepository } from '../../../src/main/access-client/saved-session-repository'
 import { readTempSession } from '../../../src/main/access-client/temp-session-reader'
@@ -38,7 +38,7 @@ describe('AccessSessionResolver', () => {
   })
 
   it('reads only supported tmp fields and does not persist the launch password', async () => {
-    const profiles = new SavedSessionRepository()
+    const profiles = { load: vi.fn(), save: vi.fn() }
     const resolver = createResolver(profiles)
 
     const result = await resolver.resolve({ kind: 'temporary-session', path: 'C:\\temp\\session.conf', password: 'secret' })
@@ -58,7 +58,7 @@ describe('AccessSessionResolver', () => {
     expect(JSON.stringify(result.persistentProfile)).not.toContain('secret')
     expect(JSON.stringify(result.persistentProfile)).not.toContain('websid')
     expect(JSON.stringify(result.persistentProfile)).not.toContain('mode')
-    await expect(profiles.load('生产终端')).resolves.toEqual(result.persistentProfile)
+    expect(profiles.save).not.toHaveBeenCalled()
   })
 
   it('resolves a saved profile and reports a missing name locally', async () => {
@@ -74,9 +74,9 @@ describe('AccessSessionResolver', () => {
   })
 })
 
-function createResolver(profiles = new SavedSessionRepository()): AccessSessionResolver {
+function createResolver(profiles: { load(name: string): Promise<unknown>; save(profile: unknown): Promise<void> } = new SavedSessionRepository()): AccessSessionResolver {
   return new AccessSessionResolver(
-    profiles,
+    profiles as SavedSessionRepository,
     path => readTempSession(path, async () => Buffer.from(temporarySession, 'utf8')),
   )
 }

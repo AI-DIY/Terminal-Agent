@@ -32,7 +32,6 @@ export class AccessSessionResolver {
     if (invocation.kind === 'temporary-session') {
       const profile = await this.loadTemporary(invocation.path)
       const persistentProfile: SavedSessionProfile = { ...profile, name: profile.title }
-      await this.savedSessions.save(persistentProfile)
       return {
         connection: { ...connectionFromProfile(profile), ...(invocation.password ? { password: invocation.password } : {}) },
         persistentProfile,
