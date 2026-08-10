@@ -53,3 +53,7 @@ The following values never appear in the log or UI: values after `-pw`, values a
 ## Testing
 
 Tests must prove that the bridge log is emitted beside a copied `putty.exe`, contains runtime lookup and process-start evidence, and does not contain the test password. Runtime tests must prove that a temporary-profile read failure and a connection failure produce the matching safe category and that temporary bastion launches remain unsaved. The Windows release integration test must still establish a real local SSH shell through a copied bridge and verify one correlated log trace.
+
+## Release
+
+After the implementation and verification pass, publish this as patch release `v1.0.1`. Update the application version and release notes, build the Windows installer and portable artifacts, push `main` to the configured `origin`, and create the corresponding GitHub Release with the verified artifacts and their checksums.
