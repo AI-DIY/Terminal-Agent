@@ -8,6 +8,7 @@
     "build": "electron-vite build && vue-tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "pretest:e2e": "npm run build",
     "test:e2e": "playwright test",
     "build:launcher": "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force build/launcher | Out-Null; & x86_64-w64-mingw32-g++.exe -std=c++17 -O2 -s -municode scripts/windows/terminal-agent-launcher.cpp -o build/launcher/putty.exe -lshell32 -ladvapi32\"",

@@ -226,7 +226,7 @@ Keep the test Windows-only. Save and restore the original per-user registry valu
 
 - [ ] **Step 2: Run those tests and confirm the old sibling-only resolution fails the new expectation.**
 
-Run: `npm test -- tests/integration/release-launcher.test.ts`
+Run: `npm run test:integration -- tests/integration/release-launcher.test.ts`
 
 - [ ] **Step 3: Implement registry registration in the installed Electron runtime.**
 
@@ -242,7 +242,7 @@ Use `RegOpenKeyExW`/`RegQueryValueExW` to load the per-user path, append `Termin
 
 - [ ] **Step 6: Build and run Windows-oriented verification, then commit.**
 
-Run: `npm run build:launcher && npm run make:win:unpacked && npm test -- tests/integration/release-launcher.test.ts`
+Run: `npm run build:launcher && npm run make:win:unpacked && npm run test:integration -- tests/integration/release-launcher.test.ts`
 
 Commit: `git add scripts package.json src/main/main.ts README.md tests && git commit -m "feat: add portable putty access-client bridge"`
 
@@ -264,7 +264,7 @@ Expected: all selected checks pass. If Electron binary download is unavailable, 
 
 - [ ] **Step 3: Run E2E and release checks when the local Electron binary is present.**
 
-Run: `npm run test:e2e && npm test -- tests/integration/release-launcher.test.ts`
+Run: `npm run test:e2e && npm run test:integration -- tests/integration/release-launcher.test.ts`
 
 Expected: settings persistence, grid behavior, raw/Access Client same-workbench behavior and release launcher all pass.
 
