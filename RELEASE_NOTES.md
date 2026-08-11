@@ -1,3 +1,24 @@
+# Terminal-Agent v1.0.2
+
+Release date: 2026-08-11
+
+## Bastion warm-launch fix
+
+- The standalone `putty.exe` now places its private bridge metadata after Electron's argument boundary, so a bastion jump remains correlated when Terminal-Agent is already open.
+- Runtime metadata validation rejects shifted Chromium option names instead of creating a stray file named `--terminal-agent-bridge-id`.
+- AccessClient temporary profiles that omit `Protocol` now follow the `-load tmp:...` SSH meaning used by the real client; explicit `raw` profiles remain supported and explicit unknown protocols remain invalid.
+- A packaged warm-launch regression test opens a real SSH fixture through an existing Terminal-Agent primary instance and verifies that the bridge and runtime share one launch ID without logging credentials or temporary-profile paths.
+
+## Upgrade instructions
+
+1. Install `Terminal-Agent-Setup-1.0.2.exe`.
+2. Replace the AccessClient-mapped executable with the included v1.0.2 `putty.exe`.
+3. After a jump, inspect `putty-bridge.log` beside that mapped `putty.exe`. The legacy `accessclient-launch.log` is not used by this bridge and may remain empty.
+
+Both the runtime and mapped bridge must be updated; keeping the v1.0.1 mapped `putty.exe` preserves the old warm-launch argument order.
+
+---
+
 # Terminal-Agent v1.0.1
 
 Release date: 2026-08-10

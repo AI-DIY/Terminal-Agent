@@ -59,12 +59,11 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
       windowsHide: true,
     })
 
-    const [observedShell, discoveredRuntimeProcessId] = await Promise.all([
+    const [observedShell] = await Promise.all([
       fixture.waitForShell(),
-      waitForCondition('the runtime process started by this test', () => findNewRuntimeProcessId(preexistingRuntimeProcessIds)),
       once(launcher, 'exit'),
-    ]).then(([shell, processId]) => [shell, processId] as const)
-    runtimeProcessId = discoveredRuntimeProcessId
+    ])
+    runtimeProcessId = await findNewRuntimeProcessId(preexistingRuntimeProcessIds)
 
     expect(observedShell).toEqual({
       username: 'release-fixture-user',
@@ -240,7 +239,7 @@ test.skipIf(process.platform !== 'win32')('a co-located bridge skips a stale reg
       windowsHide: true,
     })
     await once(launcher, 'exit')
-    runtimeProcessId = await waitForCondition('the co-located runtime process', () => findNewRuntimeProcessId(preexistingRuntimeProcessIds))
+    runtimeProcessId = await findNewRuntimeProcessId(preexistingRuntimeProcessIds)
     await waitForCondition('the stale-registry bridge trace', async () => {
       const trace = await readFile(bridgeLogPath, 'utf8').catch(() => '')
       return trace.includes('"candidateSource":"registry"')
@@ -282,6 +281,7 @@ test.skipIf(process.platform !== 'win32')('a co-located bridge falls back to a l
   let primaryFailure: unknown
   let launchAttempted = false
   let preexistingRuntimeProcessIds = new Set<number>()
+  let preexistingAllRuntimeProcessIds = new Set<number>()
 
   try {
     previousInstallPath = await readInstallPathRegistration()
@@ -289,6 +289,7 @@ test.skipIf(process.platform !== 'win32')('a co-located bridge falls back to a l
     await mkdir(unusablePrimaryLogPath)
     await writeInstallPathRegistration(join(stateDirectory, 'missing-installation'))
     preexistingRuntimeProcessIds = new Set(await findRuntimeProcessIds(copiedRuntimePath))
+    preexistingAllRuntimeProcessIds = new Set(await findAllRuntimeProcessIds(copiedRuntimePath))
     launchAttempted = true
     launcher = spawn(copiedBridgePath, ['-raw', '-P', '1'], {
       env: { ...process.env, APPDATA: stateDirectory, LOCALAPPDATA: stateDirectory },
@@ -296,7 +297,7 @@ test.skipIf(process.platform !== 'win32')('a co-located bridge falls back to a l
       windowsHide: true,
     })
     await once(launcher, 'exit')
-    runtimeProcessId = await waitForCondition('the co-located runtime process with fallback diagnostics', () => findNewRuntimeProcessId(preexistingRuntimeProcessIds, copiedRuntimePath))
+    runtimeProcessId = await findNewRuntimeProcessId(preexistingRuntimeProcessIds, copiedRuntimePath)
     await waitForCondition('the local fallback bridge diagnostic trace', async () => {
       const trace = await readFile(fallbackLogPath, 'utf8').catch(() => '')
       return trace.includes('"source":"bridge"')
@@ -315,10 +316,16 @@ test.skipIf(process.platform !== 'win32')('a co-located bridge falls back to a l
       },
       async () => { if (processIdToStop !== undefined) await terminateProcessTree(processIdToStop) },
       () => { if (launcher?.exitCode === null) launcher.kill() },
+      async () => {
+        await waitForCondition('the fallback-log secondary runtime processes to exit', async () => {
+          const processIds = await findAllRuntimeProcessIds(copiedRuntimePath)
+          return processIds.every(processId => preexistingAllRuntimeProcessIds.has(processId))
+        })
+      },
       async () => { if (previousInstallPath !== undefined) await restoreInstallPathRegistration(previousInstallPath) },
       async () => {
         await Promise.all([
-          rm(mappingDirectory, { recursive: true, force: true }),
+          removeDirectoryWhenUnlocked(mappingDirectory),
           rm(stateDirectory, { recursive: true, force: true }),
         ])
       },
@@ -510,7 +517,21 @@ async function hasRendererProcess(parentProcessId: number, runtimePath: string):
 }
 
 async function terminateProcessTree(processId: number): Promise<void> {
-  await execFileAsync('taskkill.exe', ['/PID', String(processId), '/T', '/F'], { windowsHide: true })
+  try {
+    await execFileAsync('taskkill.exe', ['/PID', String(processId), '/T', '/F'], { windowsHide: true })
+  } catch (error) {
+    const command = [
+      '$process = Get-Process -Id ([int]$env:TERMINAL_AGENT_PROCESS_ID) -ErrorAction SilentlyContinue',
+      "if ($null -eq $process) { [Console]::Write('missing') } else { [Console]::Write('running') }",
+    ].join('; ')
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      env: { ...process.env, TERMINAL_AGENT_PROCESS_ID: String(processId) },
+      windowsHide: true,
+      timeout: 2_000,
+    })
+    if (stdout.trim() === 'missing') return
+    throw error
+  }
 }
 
 async function waitForCondition<T>(description: string, condition: () => Promise<T | false>): Promise<T> {
