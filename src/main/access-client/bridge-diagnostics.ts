@@ -60,7 +60,7 @@ export function createBridgeDiagnostics(write: BridgeDiagnosticWriter = appendDi
 function argumentValue(argv: readonly string[], name: string): string | undefined {
   const index = argv.indexOf(name)
   const value = index >= 0 ? argv[index + 1]?.trim() : undefined
-  return value || undefined
+  return value && !value.startsWith('-') ? value : undefined
 }
 
 async function appendDiagnosticLine(path: string, line: string): Promise<void> {
