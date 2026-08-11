@@ -11,6 +11,25 @@ describe('bridge diagnostics', () => {
     ])).toEqual({ logPath: 'D:\\Assess\\putty-bridge.log', launchId: 'launch-001' })
   })
 
+  it('extracts bridge metadata after the Electron argument boundary', () => {
+    expect(extractBridgeLaunchMetadata([
+      'Terminal-Agent-runtime.exe',
+      '--',
+      '--terminal-agent-bridge-log', 'D:\\Assess\\putty-bridge.log',
+      '--terminal-agent-bridge-id', '39612-69704187',
+      '-load', 'tmp:C:\\Temp\\session.conf', '-pw', 'secret',
+    ])).toEqual({ logPath: 'D:\\Assess\\putty-bridge.log', launchId: '39612-69704187' })
+  })
+
+  it('rejects option-shaped metadata values produced by a shifted second-instance argv', () => {
+    expect(extractBridgeLaunchMetadata([
+      'Terminal-Agent-runtime.exe',
+      '--terminal-agent-bridge-log', '--terminal-agent-bridge-id',
+      '--terminal-agent-bridge-id', '--allow-file-access-from-files',
+      '--', '-load', 'tmp:C:\\Temp\\session.conf',
+    ])).toBeUndefined()
+  })
+
   it('redacts every configured credential option value', () => {
     expect(redactLaunchArguments([
       '-load', 'tmp:C:\\Temp\\session.conf',
