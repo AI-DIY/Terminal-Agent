@@ -16,4 +16,4 @@ Every bastion jump appends a redacted diagnostic record to `putty-bridge.log` be
 
 The bridge first uses a valid registered install location and then safely checks a co-located runtime and standard Windows install locations. It does not modify the registry or delete files. If both the installation directory and its registry entry have been removed, no bridge can start the deleted runtime: run the Windows installer again, then reopen the connection from Assess/Access Client.
 
-`npm run make:win` generates `Terminal-Agent-Setup-<version>.exe`. A GitHub release includes both the Windows installer and the standalone `putty.exe` bridge for Assess/Access Client mapping.
+`npm run make:win` generates `Terminal-Agent-Setup-<version>.exe` and `Terminal-Agent-Uninstall-Cleanup-<version>.zip`. A GitHub release includes the Windows installer, the standalone `putty.exe` bridge for Assess/Access Client mapping, and the cleanup ZIP for removing stale Terminal-Agent entries from the Windows installed-apps list.

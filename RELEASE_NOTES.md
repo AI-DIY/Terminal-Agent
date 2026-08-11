@@ -1,3 +1,15 @@
+# Terminal-Agent v1.0.3
+
+Release date: 2026-08-11
+
+## Windows uninstall-entry cleanup
+
+- Added `Terminal-Agent-Uninstall-Cleanup-1.0.3.zip` for cleaning Terminal-Agent entries left in the Windows installed-apps list.
+- After extracting the ZIP, users can double-click `清理 Terminal-Agent 卸载残留.cmd`; it requests administrator permission, lists every matching entry, and requires an explicit `Y` before changing the registry.
+- Each matching uninstall entry is exported to a `.reg` backup before deletion. The tool does not uninstall Terminal-Agent, remove application files or user data, or remove `HKCU\Software\Terminal-Agent\InstallPath`.
+
+---
+
 # Terminal-Agent v1.0.2
 
 Release date: 2026-08-11
