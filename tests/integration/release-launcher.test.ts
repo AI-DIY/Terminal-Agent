@@ -128,6 +128,7 @@ test.skipIf(process.platform !== 'win32')('a warm putty bridge launch preserves 
   let primaryRuntimeProcessId: number | undefined
   let primaryFailure: unknown
   let preexistingRuntimeProcessIds = new Set<number>()
+  let preexistingBridgeRuntimeProcessIds = new Set<number>()
 
   try {
     previousInstallPath = await readInstallPathRegistration()
@@ -166,6 +167,7 @@ test.skipIf(process.platform !== 'win32')('a warm putty bridge launch preserves 
       )
     }
 
+    preexistingBridgeRuntimeProcessIds = new Set(await findAllRuntimeProcessIds(copiedRuntimePath))
     launcher = spawn(copiedBridgePath, ['-load', `tmp:${profilePath}`, '-pw', 'release-fixture-password'], {
       env: testEnvironment,
       stdio: 'ignore',
@@ -199,9 +201,15 @@ test.skipIf(process.platform !== 'win32')('a warm putty bridge launch preserves 
       async () => { if (processIdToStop !== undefined) await terminateProcessTree(processIdToStop) },
       () => { if (launcher?.exitCode === null) launcher.kill() },
       () => { if (primaryRuntime?.exitCode === null) primaryRuntime.kill() },
+      async () => {
+        await waitForCondition('the warm-launch secondary runtime process to exit', async () => {
+          const processIds = await findAllRuntimeProcessIds(copiedRuntimePath)
+          return processIds.every(processId => preexistingBridgeRuntimeProcessIds.has(processId))
+        })
+      },
       () => fixture.close(),
       async () => { if (previousInstallPath !== undefined) await restoreInstallPathRegistration(previousInstallPath) },
-      async () => { await rm(mappingDirectory, { recursive: true, force: true }) },
+      () => removeDirectoryWhenUnlocked(mappingDirectory),
       async () => { await rm(profileDirectory, { recursive: true, force: true }) },
       async () => { await rm(stateDirectory, { recursive: true, force: true }) },
     ])
@@ -466,6 +474,23 @@ async function findAnyRuntimeProcessIds(): Promise<number[]> {
     .filter(processId => Number.isInteger(processId) && processId > 0)
 }
 
+async function findAllRuntimeProcessIds(runtimePath: string): Promise<number[]> {
+  const command = [
+    "$runtime = Get-CimInstance Win32_Process -Filter \"Name = 'Terminal-Agent-runtime.exe'\"",
+    '$matches = $runtime | Where-Object { $_.ExecutablePath -eq $env:TERMINAL_AGENT_RELEASE_RUNTIME }',
+    'foreach ($match in $matches) { [Console]::WriteLine($match.ProcessId) }',
+  ].join('; ')
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    env: { ...process.env, TERMINAL_AGENT_RELEASE_RUNTIME: runtimePath },
+    windowsHide: true,
+    timeout: 2_000,
+  })
+  return stdout
+    .split(/\r?\n/)
+    .map(value => Number(value.trim()))
+    .filter(processId => Number.isInteger(processId) && processId > 0)
+}
+
 async function hasRendererProcess(parentProcessId: number, runtimePath: string): Promise<boolean> {
   const command = [
     "$runtime = Get-CimInstance Win32_Process -Filter \"Name = 'Terminal-Agent-runtime.exe'\"",
@@ -510,6 +535,19 @@ async function waitForPromise<T>(description: string, promise: Promise<T>): Prom
   } finally {
     if (timeout !== undefined) clearTimeout(timeout)
   }
+}
+
+async function removeDirectoryWhenUnlocked(directory: string): Promise<void> {
+  await waitForCondition(`the directory to become removable: ${directory}`, async () => {
+    try {
+      await rm(directory, { recursive: true, force: true })
+      return true
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EBUSY' || code === 'EPERM') return false
+      throw error
+    }
+  })
 }
 
 async function findFilesContaining(directory: string, values: readonly string[]): Promise<string[]> {

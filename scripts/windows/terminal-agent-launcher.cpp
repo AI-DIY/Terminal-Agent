@@ -288,10 +288,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     return 1;
   }
 
-  std::wstring commandLine = QuoteWindowsArgument(runtime)
+  std::wstring commandLine = QuoteWindowsArgument(runtime) + L" --"
     + L" --terminal-agent-bridge-log " + QuoteWindowsArgument(logPath)
-    + L" --terminal-agent-bridge-id " + QuoteWindowsArgument(launchId)
-    + L" --";
+    + L" --terminal-agent-bridge-id " + QuoteWindowsArgument(launchId);
   for (int index = 1; index < argumentCount; ++index) {
     commandLine += L" " + QuoteWindowsArgument(arguments[index]);
   }
