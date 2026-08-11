@@ -3,6 +3,30 @@ import { readTempSession } from '../../../src/main/access-client/temp-session-re
 import { AccessClientLaunchFailure } from '../../../src/main/access-client/launch-failure'
 
 describe('readTempSession', () => {
+  it('defaults an AccessClient direct-mode temporary profile without Protocol to SSH', async () => {
+    await expect(readTempSession('C:\\temp\\access-client.conf', async () => Buffer.from([
+      'NoRemoteWinTitle=0',
+      'LineCodePage=UTF-8',
+      'HostName=192.0.2.10',
+      'mode=direct',
+      'PortNumber=22',
+      'TermHeight=24',
+      'TermWidth=80',
+      'UserName=test-user',
+      'websid=00000000-0000-0000-0000-000000000000',
+      'WinTitle=AccessClient session',
+    ].join('\n'), 'utf8'))).resolves.toEqual({
+      host: '192.0.2.10',
+      port: 22,
+      username: 'test-user',
+      protocol: 'ssh',
+      title: 'AccessClient session',
+      columns: 80,
+      rows: 24,
+      lineCodePage: 'UTF-8',
+    })
+  })
+
   it('accepts a Raw temporary profile without a hostname for the compatibility fallback', async () => {
     await expect(readTempSession('C:\\temp\\raw.conf', async () => Buffer.from([
       'PortNumber=22022',

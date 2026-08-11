@@ -110,6 +110,104 @@ test.skipIf(process.platform !== 'win32')('a copied putty bridge forwards a temp
   }
 })
 
+test.skipIf(process.platform !== 'win32')('a warm putty bridge launch preserves metadata when Terminal-Agent is already running', async () => {
+  await access(packagedBridgePath)
+
+  const fixture = await startSshFixture()
+  const mappingDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-warm-launch-mapping-'))
+  const profileDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-warm-launch-profile-'))
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-warm-launch-state-'))
+  const profilePath = join(profileDirectory, '暖启动验证会话.conf')
+  const copiedBridgePath = join(mappingDirectory, 'putty.exe')
+  const copiedRuntimePath = join(mappingDirectory, 'Terminal-Agent-runtime.exe')
+  const bridgeLogPath = join(mappingDirectory, 'putty-bridge.log')
+  const testEnvironment = { ...process.env, APPDATA: stateDirectory, LOCALAPPDATA: stateDirectory }
+  let previousInstallPath: InstallPathRegistration | undefined
+  let launcher: ChildProcess | undefined
+  let primaryRuntime: ChildProcess | undefined
+  let primaryRuntimeProcessId: number | undefined
+  let primaryFailure: unknown
+  let preexistingRuntimeProcessIds = new Set<number>()
+
+  try {
+    previousInstallPath = await readInstallPathRegistration()
+    await cp(releaseDirectory, mappingDirectory, { recursive: true })
+    await writeInstallPathRegistration(mappingDirectory)
+    await writeFile(profilePath, [
+      'HostName=127.0.0.1',
+      `PortNumber=${fixture.port}`,
+      'UserName=release-fixture-user',
+      'Protocol=ssh',
+      'WinTitle=暖启动验证终端',
+      'TermWidth=132',
+      'TermHeight=43',
+    ].join('\n'), 'utf8')
+
+    const runningPrimaryProcessIds = await findAnyRuntimeProcessIds()
+    if (runningPrimaryProcessIds.length === 0) {
+      preexistingRuntimeProcessIds = new Set(await findRuntimeProcessIds(copiedRuntimePath))
+      primaryRuntime = spawn(copiedRuntimePath, [], {
+        env: testEnvironment,
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      primaryRuntimeProcessId = await waitForCondition(
+        'the primary runtime process started for the warm-launch test',
+        () => findNewRuntimeProcessId(preexistingRuntimeProcessIds, copiedRuntimePath),
+      )
+      await waitForCondition(
+        'the primary runtime renderer started for the warm-launch test',
+        () => {
+          if (primaryRuntime?.exitCode !== null) {
+            throw new Error(`Primary warm-launch runtime exited before its renderer started (exit ${primaryRuntime?.exitCode ?? 'unknown'})`)
+          }
+          return hasRendererProcess(primaryRuntimeProcessId ?? 0, copiedRuntimePath)
+        },
+      )
+    }
+
+    launcher = spawn(copiedBridgePath, ['-load', `tmp:${profilePath}`, '-pw', 'release-fixture-password'], {
+      env: testEnvironment,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    await Promise.all([fixture.waitForShell(), once(launcher, 'exit')])
+
+    const trace = await waitForCondition('the warm-launch runtime trace', async () => {
+      const value = await readFile(bridgeLogPath, 'utf8').catch(() => '')
+      return value.includes('"event":"process-started"')
+        && value.includes('"event":"invocation-parsed"')
+        && value.includes('"event":"session-opened"')
+        ? value : false
+    })
+    const records = trace.trim().split(/\r?\n/).map(line => JSON.parse(line) as { launchId?: string; source?: string; event?: string })
+    const bridgeStart = records.find(record => record.source === 'bridge' && record.event === 'process-started')
+    const runtimeSession = records.find(record => record.source === 'runtime' && record.event === 'session-opened')
+    expect(runtimeSession?.launchId).toBe(bridgeStart?.launchId)
+    expect(await findFilesNamed(mappingDirectory, '--terminal-agent-bridge-id')).toEqual([])
+    expect(trace).not.toContain('release-fixture-password')
+    expect(trace).not.toContain(profilePath)
+  } catch (error) {
+    primaryFailure = error
+    throw error
+  } finally {
+    let processIdToStop = primaryRuntimeProcessId
+    await runReleaseLauncherCleanup(primaryFailure, [
+      async () => {
+        if (primaryRuntime) processIdToStop ??= await findNewRuntimeProcessId(preexistingRuntimeProcessIds, copiedRuntimePath)
+      },
+      async () => { if (processIdToStop !== undefined) await terminateProcessTree(processIdToStop) },
+      () => { if (launcher?.exitCode === null) launcher.kill() },
+      () => { if (primaryRuntime?.exitCode === null) primaryRuntime.kill() },
+      () => fixture.close(),
+      async () => { if (previousInstallPath !== undefined) await restoreInstallPathRegistration(previousInstallPath) },
+      async () => { await rm(mappingDirectory, { recursive: true, force: true }) },
+      async () => { await rm(profileDirectory, { recursive: true, force: true }) },
+      async () => { await rm(stateDirectory, { recursive: true, force: true }) },
+    ])
+  }
+})
+
 test.skipIf(process.platform !== 'win32')('a co-located bridge skips a stale registered install path', async () => {
   await access(packagedBridgePath)
 
@@ -352,6 +450,40 @@ async function findRuntimeProcessIds(runtimePath = join(releaseDirectory, 'Termi
     .filter(processId => Number.isInteger(processId) && processId > 0)
 }
 
+async function findAnyRuntimeProcessIds(): Promise<number[]> {
+  const command = [
+    "$runtime = Get-CimInstance Win32_Process -Filter \"Name = 'Terminal-Agent-runtime.exe'\"",
+    "$matches = $runtime | Where-Object { $_.CommandLine -notmatch ' --type=' }",
+    'foreach ($match in $matches) { [Console]::WriteLine($match.ProcessId) }',
+  ].join('; ')
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    windowsHide: true,
+    timeout: 2_000,
+  })
+  return stdout
+    .split(/\r?\n/)
+    .map(value => Number(value.trim()))
+    .filter(processId => Number.isInteger(processId) && processId > 0)
+}
+
+async function hasRendererProcess(parentProcessId: number, runtimePath: string): Promise<boolean> {
+  const command = [
+    "$runtime = Get-CimInstance Win32_Process -Filter \"Name = 'Terminal-Agent-runtime.exe'\"",
+    "$match = $runtime | Where-Object { $_.ParentProcessId -eq [uint32]$env:TERMINAL_AGENT_PRIMARY_PID -and $_.ExecutablePath -eq $env:TERMINAL_AGENT_RELEASE_RUNTIME -and $_.CommandLine -match ' --type=renderer' } | Select-Object -First 1",
+    "if ($null -ne $match) { [Console]::Write('ready') }",
+  ].join('; ')
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    env: {
+      ...process.env,
+      TERMINAL_AGENT_PRIMARY_PID: String(parentProcessId),
+      TERMINAL_AGENT_RELEASE_RUNTIME: runtimePath,
+    },
+    windowsHide: true,
+    timeout: 2_000,
+  })
+  return stdout.trim() === 'ready'
+}
+
 async function terminateProcessTree(processId: number): Promise<void> {
   await execFileAsync('taskkill.exe', ['/PID', String(processId), '/T', '/F'], { windowsHide: true })
 }
@@ -398,6 +530,30 @@ async function findFilesContaining(directory: string, values: readonly string[])
       } else if (entry.isFile()) {
         const content = await readFile(path)
         if (needles.some(needle => content.includes(needle))) matches.push(path)
+      }
+    }
+  }
+
+  await visit(directory)
+  return matches
+}
+
+async function findFilesNamed(directory: string, fileName: string): Promise<string[]> {
+  const matches: string[] = []
+  const visit = async (currentDirectory: string): Promise<void> => {
+    let entries
+    try {
+      entries = await readdir(currentDirectory, { withFileTypes: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    for (const entry of entries) {
+      const path = join(currentDirectory, entry.name)
+      if (entry.isDirectory()) {
+        await visit(path)
+      } else if (entry.isFile() && entry.name === fileName) {
+        matches.push(path)
       }
     }
   }

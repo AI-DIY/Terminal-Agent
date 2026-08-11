@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task with verification checkpoints.
 
-**Goal:** Preserve AccessClient bridge metadata when a packaged Terminal-Agent is already running, prevent malformed metadata from becoming a log path, and ship verified 1.0.2 Windows artifacts.
+**Goal:** Preserve AccessClient bridge metadata when a packaged Terminal-Agent is already running, accept the real AccessClient temporary SSH profile shape, prevent malformed metadata from becoming a log path, and ship verified 1.0.2 Windows artifacts.
 
-**Architecture:** Keep the native bridge as the only process launcher. Move its private metadata and the original AccessClient arguments behind the Windows/Electron `--` boundary so Chromium does not reinterpret their values during a second-instance launch. Keep the TypeScript metadata extractor as a small defensive boundary, and prove the warm-launch path with a real SSH fixture and an isolated copied release directory.
+**Architecture:** Keep the native bridge as the only process launcher. Move its private metadata and the original AccessClient arguments behind the Windows/Electron `--` boundary so Chromium does not reinterpret their values during a second-instance launch. Keep the TypeScript metadata extractor and temporary-profile reader as small defensive boundaries, and prove the warm-launch path with a real SSH fixture and a copied release directory without terminating any pre-existing user runtime.
 
 **Tech Stack:** C++17 Win32 launcher, Electron 43, TypeScript/Vitest, Node `ssh2` integration fixture, electron-vite/electron-builder, NSIS.
 
@@ -71,7 +71,7 @@ git commit -m "test: cover malformed bastion bridge metadata"
 
 - [ ] **Step 1: Add a test that isolates a primary runtime and invokes the bridge a second time**
 
-Insert a Windows-only test after the existing first-launch test. It must copy `release/win-unpacked` into a temporary mapping directory, set the registry install path to that copied directory, start the copied `Terminal-Agent-runtime.exe` with temporary `APPDATA` and `LOCALAPPDATA`, wait for its PID, then invoke the copied `putty.exe` with the temporary SSH profile. Use the existing `startSshFixture`, `findRuntimeProcessIds`, `findNewRuntimeProcessId`, `runReleaseLauncherCleanup`, and `terminateProcessTree` helpers. The core setup and assertions must be:
+Insert a Windows-only test after the existing first-launch test. It must copy `release/win-unpacked` into a temporary mapping directory, set the registry install path to that copied directory, detect whether any Terminal-Agent primary instance already exists, and start the copied runtime only when none exists. It then invokes the copied `putty.exe` with the temporary SSH profile. Use the existing cleanup helpers and add `findAnyRuntimeProcessIds`, `hasRendererProcess`, and `findFilesNamed` so the test never terminates a pre-existing user runtime. The core setup and assertions must be:
 
 ```ts
 await cp(releaseDirectory, mappingDirectory, { recursive: true })
@@ -79,13 +79,16 @@ await writeInstallPathRegistration(mappingDirectory)
 const copiedRuntimePath = join(mappingDirectory, 'Terminal-Agent-runtime.exe')
 const copiedBridgePath = join(mappingDirectory, 'putty.exe')
 const bridgeLogPath = join(mappingDirectory, 'putty-bridge.log')
-const malformedLogPath = join(mappingDirectory, 'Terminal-Agent-runtime', '--terminal-agent-bridge-id')
-preexistingRuntimeProcessIds = new Set(await findRuntimeProcessIds(copiedRuntimePath))
-primaryRuntime = spawn(copiedRuntimePath, [], { env: testEnvironment, stdio: 'ignore', windowsHide: true })
-primaryRuntimeProcessId = await waitForCondition(
-  'the primary runtime process started for the warm-launch test',
-  () => findNewRuntimeProcessId(preexistingRuntimeProcessIds, copiedRuntimePath),
-)
+const runningPrimaryProcessIds = await findAnyRuntimeProcessIds()
+if (runningPrimaryProcessIds.length === 0) {
+  preexistingRuntimeProcessIds = new Set(await findRuntimeProcessIds(copiedRuntimePath))
+  primaryRuntime = spawn(copiedRuntimePath, [], { env: testEnvironment, stdio: 'ignore', windowsHide: true })
+  primaryRuntimeProcessId = await waitForCondition(
+    'the primary runtime process started for the warm-launch test',
+    () => findNewRuntimeProcessId(preexistingRuntimeProcessIds, copiedRuntimePath),
+  )
+  await waitForCondition('the primary renderer', () => hasRendererProcess(primaryRuntimeProcessId, copiedRuntimePath))
+}
 await writeFile(profilePath, [
   'HostName=127.0.0.1',
   `PortNumber=${fixture.port}`,
@@ -107,7 +110,7 @@ const trace = await waitForCondition('the warm-launch runtime trace', async () =
     ? value : false
 })
 expect(trace.match(/"source":"runtime"/g)).not.toBeNull()
-expect(await access(malformedLogPath).then(() => true, () => false)).toBe(false)
+expect(await findFilesNamed(mappingDirectory, '--terminal-agent-bridge-id')).toEqual([])
 ```
 
 The test must stop the copied primary process tree before removing temporary files and restore the previous registry value in `finally`, including cleanup after a failed assertion.
@@ -161,7 +164,56 @@ git add scripts/windows/terminal-agent-launcher.cpp
 git commit -m "fix: preserve bastion metadata across warm launches"
 ```
 
-### Task 4: Harden runtime metadata extraction and turn the unit test green
+### Task 4: Accept the actual AccessClient temporary SSH profile
+
+**Files:**
+- Modify: `tests/unit/access-client/temp-session-reader.test.ts`
+- Modify: `src/main/access-client/temp-session-reader.ts`
+
+- [ ] **Step 1: Add the redacted real-world profile regression test**
+
+Use the observed fields `NoRemoteWinTitle`, `LineCodePage`, `HostName`, `mode=direct`, `PortNumber`, `TermHeight`, `TermWidth`, `UserName`, `websid`, and `WinTitle`, omitting `Protocol`. Assert that `readTempSession` resolves to an SSH profile with the expected sanitized fixture host, username, port, dimensions, title, and line code page.
+
+- [ ] **Step 2: Run the focused test and verify the current strict parser fails**
+
+Run:
+
+```text
+npm test -- tests/unit/access-client/temp-session-reader.test.ts
+```
+
+Expected before implementation: exactly one test fails with `temporary-profile-invalid` because `Protocol` is absent.
+
+- [ ] **Step 3: Default only a missing or blank Protocol to SSH**
+
+Use:
+
+```ts
+const protocolValue = values.get('Protocol')?.trim().toLowerCase()
+const protocol = protocolValue || 'ssh'
+if (protocol !== 'ssh' && protocol !== 'raw') throw invalidTemporaryProfile()
+```
+
+Do not accept any other explicit protocol value and do not persist ignored AccessClient metadata.
+
+- [ ] **Step 4: Run the temporary-profile and resolver suites**
+
+Run:
+
+```text
+npm test -- tests/unit/access-client/temp-session-reader.test.ts tests/unit/access-client/access-session-resolver.test.ts
+```
+
+Expected: both files pass and the observed profile shape resolves as SSH.
+
+- [ ] **Step 5: Commit the compatibility fix**
+
+```text
+git add src/main/access-client/temp-session-reader.ts tests/unit/access-client/temp-session-reader.test.ts
+git commit -m "fix: accept AccessClient temporary SSH profiles"
+```
+
+### Task 5: Harden runtime metadata extraction and turn the unit test green
 
 **Files:**
 - Modify: `src/main/access-client/bridge-diagnostics.ts`
@@ -199,7 +251,7 @@ git add src/main/access-client/bridge-diagnostics.ts tests/unit/access-client/br
 git commit -m "fix: reject shifted bastion metadata values"
 ```
 
-### Task 5: Version and release the verified fix
+### Task 6: Version and release the verified fix
 
 **Files:**
 - Modify: `package.json:3`
