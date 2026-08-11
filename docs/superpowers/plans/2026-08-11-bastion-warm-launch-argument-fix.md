@@ -16,7 +16,7 @@
 - Modify: `tests/unit/access-client/bridge-diagnostics.test.ts`
 - Modify: `src/main/access-client/bridge-diagnostics.ts`
 
-- [ ] **Step 1: Write a failing test for metadata after the Electron boundary**
+- [x] **Step 1: Write a failing test for metadata after the Electron boundary**
 
 Add a case to `describe('bridge diagnostics')` using the exact warm-launch shape:
 
@@ -32,7 +32,7 @@ it('extracts bridge metadata after the Electron argument boundary', () => {
 })
 ```
 
-- [ ] **Step 2: Write a failing test for option-shaped values**
+- [x] **Step 2: Write a failing test for option-shaped values**
 
 Add a case proving the malformed screenshot shape has no metadata:
 
@@ -47,7 +47,7 @@ it('rejects option-shaped metadata values produced by a shifted second-instance 
 })
 ```
 
-- [ ] **Step 3: Run the focused tests and verify they fail for the missing behavior**
+- [x] **Step 3: Run the focused tests and verify they fail for the missing behavior**
 
 Run:
 
@@ -57,7 +57,7 @@ npm test -- tests/unit/access-client/bridge-diagnostics.test.ts
 
 Expected before implementation: the boundary case passes with the current scanner, while the option-shaped case fails because `extractBridgeLaunchMetadata` currently accepts those option names as values. The command must report exactly one failed test and no TypeScript error.
 
-- [ ] **Step 4: Commit the test-only red state**
+- [x] **Step 4: Commit the test-only red state**
 
 ```text
 git add tests/unit/access-client/bridge-diagnostics.test.ts
@@ -69,7 +69,7 @@ git commit -m "test: cover malformed bastion bridge metadata"
 **Files:**
 - Modify: `tests/integration/release-launcher.test.ts`
 
-- [ ] **Step 1: Add a test that isolates a primary runtime and invokes the bridge a second time**
+- [x] **Step 1: Add a test that isolates a primary runtime and invokes the bridge a second time**
 
 Insert a Windows-only test after the existing first-launch test. It must copy `release/win-unpacked` into a temporary mapping directory, set the registry install path to that copied directory, detect whether any Terminal-Agent primary instance already exists, and start the copied runtime only when none exists. It then invokes the copied `putty.exe` with the temporary SSH profile. Use the existing cleanup helpers and add `findAnyRuntimeProcessIds`, `hasRendererProcess`, and `findFilesNamed` so the test never terminates a pre-existing user runtime. The core setup and assertions must be:
 
@@ -115,7 +115,7 @@ expect(await findFilesNamed(mappingDirectory, '--terminal-agent-bridge-id')).toE
 
 The test must stop the copied primary process tree before removing temporary files and restore the previous registry value in `finally`, including cleanup after a failed assertion.
 
-- [ ] **Step 2: Run only the new integration test against the current release artifact**
+- [x] **Step 2: Run only the new integration test against the current release artifact**
 
 Run:
 
@@ -130,7 +130,7 @@ Expected before the launcher fix: the test reaches the runtime but fails waiting
 **Files:**
 - Modify: `scripts/windows/terminal-agent-launcher.cpp:291-297`
 
-- [ ] **Step 1: Change only the command-line construction**
+- [x] **Step 1: Change only the command-line construction**
 
 Build the command line with the boundary before all private and original arguments:
 
@@ -145,7 +145,7 @@ for (int index = 1; index < argumentCount; ++index) {
 
 Do not change runtime lookup, logging, or redaction in this task. The resulting order is `runtime -- metadata original-arguments`, which is the smallest change that protects warm launches.
 
-- [ ] **Step 2: Rebuild only the launcher and rerun the new integration test**
+- [x] **Step 2: Rebuild only the launcher and rerun the new integration test**
 
 Run:
 
@@ -157,7 +157,7 @@ npm run test:integration -- tests/integration/release-launcher.test.ts -t "warm-
 
 Expected: the launcher build exits 0, the rebuilt bridge replaces only the ignored unpacked test artifact, and the warm-launch integration test reaches the SSH fixture and correlated runtime trace.
 
-- [ ] **Step 3: Commit the native fix after the red test is available**
+- [x] **Step 3: Commit the native fix after the red test is available**
 
 ```text
 git add scripts/windows/terminal-agent-launcher.cpp
@@ -170,11 +170,11 @@ git commit -m "fix: preserve bastion metadata across warm launches"
 - Modify: `tests/unit/access-client/temp-session-reader.test.ts`
 - Modify: `src/main/access-client/temp-session-reader.ts`
 
-- [ ] **Step 1: Add the redacted real-world profile regression test**
+- [x] **Step 1: Add the redacted real-world profile regression test**
 
 Use the observed fields `NoRemoteWinTitle`, `LineCodePage`, `HostName`, `mode=direct`, `PortNumber`, `TermHeight`, `TermWidth`, `UserName`, `websid`, and `WinTitle`, omitting `Protocol`. Assert that `readTempSession` resolves to an SSH profile with the expected sanitized fixture host, username, port, dimensions, title, and line code page.
 
-- [ ] **Step 2: Run the focused test and verify the current strict parser fails**
+- [x] **Step 2: Run the focused test and verify the current strict parser fails**
 
 Run:
 
@@ -184,7 +184,7 @@ npm test -- tests/unit/access-client/temp-session-reader.test.ts
 
 Expected before implementation: exactly one test fails with `temporary-profile-invalid` because `Protocol` is absent.
 
-- [ ] **Step 3: Default only a missing or blank Protocol to SSH**
+- [x] **Step 3: Default only a missing or blank Protocol to SSH**
 
 Use:
 
@@ -196,7 +196,7 @@ if (protocol !== 'ssh' && protocol !== 'raw') throw invalidTemporaryProfile()
 
 Do not accept any other explicit protocol value and do not persist ignored AccessClient metadata.
 
-- [ ] **Step 4: Run the temporary-profile and resolver suites**
+- [x] **Step 4: Run the temporary-profile and resolver suites**
 
 Run:
 
@@ -206,7 +206,7 @@ npm test -- tests/unit/access-client/temp-session-reader.test.ts tests/unit/acce
 
 Expected: both files pass and the observed profile shape resolves as SSH.
 
-- [ ] **Step 5: Commit the compatibility fix**
+- [x] **Step 5: Commit the compatibility fix**
 
 ```text
 git add src/main/access-client/temp-session-reader.ts tests/unit/access-client/temp-session-reader.test.ts
@@ -219,7 +219,7 @@ git commit -m "fix: accept AccessClient temporary SSH profiles"
 - Modify: `src/main/access-client/bridge-diagnostics.ts`
 - Modify: `tests/unit/access-client/bridge-diagnostics.test.ts`
 
-- [ ] **Step 1: Implement a single value validator**
+- [x] **Step 1: Implement a single value validator**
 
 Change `argumentValue` to return `undefined` when the option is absent, the following value is empty, or the following value starts with `-`:
 
@@ -233,7 +233,7 @@ function argumentValue(argv: readonly string[], name: string): string | undefine
 
 Keep `extractBridgeLaunchMetadata` and all diagnostic redaction behavior unchanged.
 
-- [ ] **Step 2: Run the focused unit tests and then the related AccessClient suite**
+- [x] **Step 2: Run the focused unit tests and then the related AccessClient suite**
 
 Run:
 
@@ -244,7 +244,7 @@ npm test -- tests/unit/access-client/bridge-diagnostics.test.ts tests/unit/acces
 
 Expected: both commands exit 0; the focused file has 5 tests and the related suite has 11 tests, with no credential text in output.
 
-- [ ] **Step 3: Commit the runtime hardening**
+- [x] **Step 3: Commit the runtime hardening**
 
 ```text
 git add src/main/access-client/bridge-diagnostics.ts tests/unit/access-client/bridge-diagnostics.test.ts
@@ -258,11 +258,11 @@ git commit -m "fix: reject shifted bastion metadata values"
 - Modify: `package-lock.json` (root package version only, using npm metadata update)
 - Modify: `RELEASE_NOTES.md`
 
-- [ ] **Step 1: Bump the patch version and document the warm-launch fix**
+- [x] **Step 1: Bump the patch version and document the warm-launch fix**
 
 Set the package version to `1.0.2`, update the lockfile root package version through `npm version 1.0.2 --no-git-tag-version`, and prepend release notes that say the bridge metadata now crosses Electron's argument boundary safely and that users must remap the included `putty.exe` after installing the new runtime.
 
-- [ ] **Step 2: Run the full source verification before packaging**
+- [x] **Step 2: Run the full source verification before packaging**
 
 Run:
 
@@ -274,7 +274,7 @@ npm run build
 
 Expected: each command exits 0; Vitest reports zero failed tests; ESLint reports zero errors; electron-vite and vue-tsc both complete successfully.
 
-- [ ] **Step 3: Build the Windows unpacked release and installer**
+- [x] **Step 3: Build the Windows unpacked release and installer**
 
 Run:
 
@@ -284,7 +284,7 @@ npm run make:win
 
 Expected: `release/win-unpacked/putty.exe`, `release/win-unpacked/Terminal-Agent-runtime.exe`, and `release/Terminal-Agent-Setup-1.0.2.exe` exist, and the launcher binary timestamp is newer than the source fix.
 
-- [ ] **Step 4: Run the complete Windows release-launcher integration suite against the new artifacts**
+- [x] **Step 4: Run the complete Windows release-launcher integration suite against the new artifacts**
 
 Run:
 
@@ -294,7 +294,7 @@ npm run test:integration -- tests/integration/release-launcher.test.ts
 
 Expected: all warm-launch, stale-registry, and fallback-log tests pass; the suite leaves no temporary process, registry override, or credential-containing file.
 
-- [ ] **Step 5: Inspect the final diff and commit release metadata**
+- [x] **Step 5: Inspect the final diff and commit release metadata**
 
 Run:
 

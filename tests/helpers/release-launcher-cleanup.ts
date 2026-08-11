@@ -12,7 +12,9 @@ export async function runReleaseLauncherCleanup(
       failures.push(error)
     }
   }
-  if (primaryFailure === undefined && failures.length > 0) {
-    throw new AggregateError(failures, 'Release launcher cleanup failed')
-  }
+  if (failures.length === 0) return
+  throw new AggregateError(
+    primaryFailure === undefined ? failures : [primaryFailure, ...failures],
+    'Release launcher cleanup failed',
+  )
 }
