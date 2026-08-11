@@ -35,7 +35,8 @@ export async function readTempSession(path: string, readFile: FileReader = readF
 
   const host = values.get('HostName')?.trim() ?? ''
   const username = values.get('UserName')?.trim() ?? ''
-  const protocol = values.get('Protocol')?.trim().toLowerCase()
+  const protocolValue = values.get('Protocol')?.trim().toLowerCase()
+  const protocol = protocolValue || 'ssh'
   if (protocol !== 'ssh' && protocol !== 'raw') throw invalidTemporaryProfile()
   if (protocol === 'ssh' && (!host || !username)) throw invalidTemporaryProfile()
 

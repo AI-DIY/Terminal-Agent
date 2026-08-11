@@ -73,4 +73,14 @@ describe('readTempSession', () => {
     await expect(readTempSession(temporaryPath, async () => Buffer.from('Protocol=ssh\n', 'utf8')))
       .rejects.toMatchObject({ code: 'temporary-profile-invalid' } satisfies Partial<AccessClientLaunchFailure>)
   })
+
+  it('rejects an explicitly unsupported temporary profile protocol', async () => {
+    await expect(readTempSession('C:\\temp\\unsupported.conf', async () => Buffer.from([
+      'HostName=192.0.2.10',
+      'PortNumber=23',
+      'UserName=test-user',
+      'Protocol=telnet',
+    ].join('\n'), 'utf8')))
+      .rejects.toMatchObject({ code: 'temporary-profile-invalid' } satisfies Partial<AccessClientLaunchFailure>)
+  })
 })
