@@ -58,7 +58,7 @@ describe('Terminal-Agent uninstall cleanup tool', () => {
       await runPowerShell(['-File', packagerPath, '-Version', version])
       const { stdout } = await runPowerShell([
         '-Command',
-        `Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [System.IO.Compression.ZipFile]::OpenRead('${archivePath.replace(/'/g, "''")}'); try { $zip.Entries | ForEach-Object FullName | ConvertTo-Json -Compress } finally { $zip.Dispose() }`
+        `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [System.IO.Compression.ZipFile]::OpenRead('${archivePath.replace(/'/g, "''")}'); try { $zip.Entries | ForEach-Object FullName | ConvertTo-Json -Compress } finally { $zip.Dispose() }`
       ])
 
       expect((JSON.parse(stdout) as string[]).sort()).toEqual([

@@ -29,7 +29,8 @@ const tab = ref<SettingsTabId>('routing')
 </template>
 
 <style scoped>
-.settings { --surface: #fff; --surface-soft: #f5f7f9; --text-strong: #1d242c; --text: #39424c; --muted: #68737f; --line: #d9dfe6; --accent: #2f6fc4; width: 100%; height: 100%; padding: 24px; overflow: auto; background: var(--surface); color: var(--text); }
+.settings { --surface: #fff; --surface-soft: #f5f7f9; --text-strong: #1d242c; --text: #39424c; --muted: #68737f; --line: #d9dfe6; --accent: #2f6fc4; --accent-soft: #dfeafa; --red: #b0444b; --green: #18794e; width: 100%; height: 100%; padding: 24px; overflow: auto; background: var(--surface); color: var(--text); }
+:global(:root[data-theme="graphite"]) .settings { --surface: #22272e; --surface-soft: #292f36; --text-strong: #f2f4f6; --text: #d4d9df; --muted: #a8b0ba; --line: #414951; --accent: #6da7e8; --accent-soft: #27496d; --red: #e27b82; --green: #64c492; }
 .settings > * { width: min(100%, 1080px); margin-right: auto; margin-left: auto; }
 .settings header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .settings h1,.settings h2,.settings p { margin: 0; }.settings h1 { color: var(--text-strong); }.eyebrow { margin-bottom: 4px !important; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }

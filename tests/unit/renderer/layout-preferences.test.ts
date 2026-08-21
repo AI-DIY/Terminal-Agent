@@ -7,6 +7,8 @@ import {
   createDelayedLayoutSaver,
   createShellCanvasState,
   keyboardSidebarWidth,
+  SHELL_ROW_HEIGHT_PRESETS,
+  shellGridStyle,
   shellPanePresentations,
 } from '../../../src/renderer/src/stores/layout-preferences'
 
@@ -161,6 +163,22 @@ describe('renderer layout preferences', () => {
     expect(keyboardSidebarWidth('right', 519, 'ArrowLeft')).toBe(520)
     expect(keyboardSidebarWidth('right', 340, 'ArrowRight')).toBe(340)
     expect(keyboardSidebarWidth('left', 222, 'Enter')).toBeNull()
+  })
+
+  it('maps compact, standard, and spacious layouts to percentage-based row heights', () => {
+    expect(SHELL_ROW_HEIGHT_PRESETS).toEqual([
+      { label: '紧凑', value: 34 },
+      { label: '标准', value: 48 },
+      { label: '宽松', value: 64 },
+    ])
+    expect(shellGridStyle(3, 48, false)).toEqual({
+      gridTemplateColumns: 'repeat(3, minmax(210px, 1fr))',
+      gridAutoRows: '48%',
+    })
+    expect(shellGridStyle(3, 48, true)).toEqual({
+      gridTemplateColumns: 'minmax(0, 1fr)',
+      gridAutoRows: 'minmax(0, 1fr)',
+    })
   })
 })
 

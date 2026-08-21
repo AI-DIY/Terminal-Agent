@@ -747,7 +747,8 @@ describe('durable chat workbench components', () => {
     expect(createConnection.indexOf('workbenchOperations.invalidate()')).toBeGreaterThanOrEqual(0)
     expect(createConnection.indexOf('workbenchOperations.invalidate()')).toBeLessThan(createConnection.indexOf('showConnection.value = true'))
     expect(view).toContain('function openSavedSessionsDialog(): void')
-    expect(view).toContain('@open-saved="openSavedSessionsDialog"')
+    expect(view).toContain('<SavedSessionsDialog')
+    expect(view).not.toContain('@open-saved="openSavedSessionsDialog"')
   })
 
   it('keeps newer navigation and a reopened dialog when a saved session finishes late', async () => {

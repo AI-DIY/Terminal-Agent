@@ -10,6 +10,7 @@ import {
   workbenchThemeSchema,
   type WorkbenchLayoutPatch,
   type WorkbenchPreferences,
+  type ShellRowHeightPercent,
   type WorkbenchTheme,
 } from '../../../shared/contracts'
 
@@ -20,6 +21,21 @@ export type WorkbenchPreferencesApi = {
 }
 
 export type LayoutPreferencesStore = ReturnType<typeof createLayoutPreferencesStore>
+
+export const SHELL_ROW_HEIGHT_PRESETS: ReadonlyArray<{ label: string; value: ShellRowHeightPercent }> = [
+  { label: '紧凑', value: 34 },
+  { label: '标准', value: 48 },
+  { label: '宽松', value: 64 },
+]
+
+export function shellGridStyle(columns: number, rowHeightPercent: ShellRowHeightPercent, focused: boolean): Record<string, string> {
+  return focused
+    ? { gridTemplateColumns: 'minmax(0, 1fr)', gridAutoRows: 'minmax(0, 1fr)' }
+    : {
+        gridTemplateColumns: `repeat(${Math.max(1, columns)}, minmax(210px, 1fr))`,
+        gridAutoRows: `${rowHeightPercent}%`,
+      }
+}
 
 export function createDelayedLayoutSaver(
   save: (patch: WorkbenchLayoutPatch) => void | Promise<void>,
@@ -153,6 +169,6 @@ function currentPreferences(state: WorkbenchPreferences & { ready: boolean; erro
     rightCollapsed: state.rightCollapsed,
     visibleCount: state.visibleCount,
     columns: state.columns,
-    rowHeight: state.rowHeight,
+    rowHeightPercent: state.rowHeightPercent,
   }
 }

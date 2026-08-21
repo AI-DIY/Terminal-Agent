@@ -57,6 +57,7 @@ import { ShellHistoryRepository } from './shell-history/shell-history-repository
 import { ShellHistoryService } from './shell-history/shell-history-service'
 import { registerShellHistoryHandlers } from './shell-history/register-shell-history-handlers'
 import { registerShellHistoryLifecycle } from './shell-history/register-shell-history-lifecycle'
+import { registerGracefulApplicationShutdown } from './application-shutdown'
 
 let mainWindow: BrowserWindow | undefined
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
@@ -75,7 +76,7 @@ const shellHistory = new ShellHistoryService(
     },
   },
 )
-registerShellHistoryLifecycle(sessions, chats, shellHistory)
+const shellHistoryLifecycle = registerShellHistoryLifecycle(sessions, chats, shellHistory)
 const workbenchPreferences = new WorkbenchPreferencesService(join(app.getPath('userData'), 'workbench-preferences.json'))
 const sessionModes = new SessionModeController(new SessionModeService(), sessions)
 sessionModes.listen()
@@ -253,6 +254,7 @@ export function createMainWindow(): BrowserWindow {
 const isPrimaryInstance = configureAccessClientSingleInstance(app, accessClientLaunches)
 
 if (isPrimaryInstance) {
+  registerGracefulApplicationShutdown(app, () => sessions.closeAll(), () => shellHistoryLifecycle.drain())
   app.whenReady().then(async () => {
     void recordPackagedWindowsInstallPath({
       platform: process.platform,

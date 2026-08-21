@@ -13,7 +13,7 @@ onBeforeUnmount(() => previous?.focus())
 
 <template>
   <div ref="dialog" class="consent" role="dialog" aria-modal="true" aria-labelledby="host-memory-consent-title" @keydown.capture="trap">
-    <section :aria-busy="props.submitting"><h2 id="host-memory-consent-title">允许本地主机记忆？</h2><p>已发现主机 <strong>{{ props.hostIdentity }}</strong>。确认后，应用只会收集已启用范围内的只读结构化事实；不会保存密码、私钥、令牌、原始命令行或终端输出。</p><div><button type="button" :disabled="props.submitting" @click="emit('acknowledge')">{{ props.submitting ? '正在确认...' : '确认并开始观察' }}</button><button type="button" :disabled="props.submitting" @click="emit('close')">暂不允许</button></div></section>
+    <section :aria-busy="props.submitting"><h2 id="host-memory-consent-title">允许本地主机记忆？</h2><p>已发现主机 <strong>{{ props.hostIdentity }}</strong>。确认后，应用只会收集已启用范围内的只读结构化事实；不会保存密码、私钥、令牌、原始命令行或终端输出。</p><div><button type="button" :disabled="props.submitting" @click="emit('acknowledge')">{{ props.submitting ? '正在确认...' : '我已知道' }}</button><button type="button" :disabled="props.submitting" @click="emit('close')">暂不允许</button></div></section>
   </div>
 </template>
 

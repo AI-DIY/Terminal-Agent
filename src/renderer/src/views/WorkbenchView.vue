@@ -17,9 +17,9 @@ import { closeSession } from '../stores/close-session'
 import { createFrameBatcher } from '../stores/data-batcher'
 import { createSessionsStore, type SessionView } from '../stores/sessions'
 import { reconcileVisiblePanes, selectVisiblePane } from '../stores/visible-panes'
-import { getLayoutPreferencesStore } from '../stores/layout-preferences'
+import { getLayoutPreferencesStore, shellGridStyle } from '../stores/layout-preferences'
 import { createAutonomousUpgradeStore } from '../stores/autonomous-upgrade'
-import { createShellHistoryStore, latestHistoryByHost, readOnlyHistoryTerminal } from '../stores/shell-history'
+import { createShellHistoryStore, filterHistoryByHosts, latestHistoryByHost, readOnlyHistoryTerminal, reconcileHistoryHostSelection, toggleHistoryHostSelection } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
 import { createChatWorkspacesStore, createWorkbenchOperationGate, ensureWorkbenchShellView, focusOwnedWorkbenchSession, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect } from '../stores/chat-workspaces'
 
@@ -61,11 +61,15 @@ const currentChatSessionIds = computed(() => new Set(
 ))
 const currentChatSessions = computed(() => sessions.value.filter(session => currentChatSessionIds.value.has(session.id)))
 const activeSession = computed(() => isLiveChat.value && activeSessionId.value ? currentChatSessions.value.find(session => session.id === activeSessionId.value) ?? null : null)
-const historyShells = computed(() => (chatStore.state.selected?.shells ?? []).filter(shell => shell.status === 'closed'))
-const historyPlayback = computed(() => latestHistoryByHost(shellHistory.state.records).map(record => ({
+const historyHosts = computed(() => latestHistoryByHost(shellHistory.state.records))
+const selectedHistoryHosts = ref<string[]>([])
+const historyPlaybackRecords = computed(() => filterHistoryByHosts(historyHosts.value, selectedHistoryHosts.value, layoutPreferences.state.visibleCount))
+const historyPlayback = computed(() => historyPlaybackRecords.value.map(record => ({
   record,
   terminal: readOnlyHistoryTerminal(shellHistory.state.details[record.id] ?? null),
 })))
+const historyGridColumns = computed(() => Math.max(1, Math.min(layoutPreferences.state.columns, historyPlayback.value.length || 1)))
+const historyGridStyle = computed(() => shellGridStyle(historyGridColumns.value, layoutPreferences.state.rowHeightPercent, false))
 const showHistoryDialog = ref(false)
 const hostMemoryDisclosureQueue = createHostMemoryDisclosureQueue()
 const pendingHostMemoryDisclosure = hostMemoryDisclosureQueue.current
@@ -86,6 +90,20 @@ const workbenchOperations = createWorkbenchOperationGate()
 let connectionFocusOrigin: HTMLElement | null = null
 const connectionModal = ref<HTMLElement | null>(null)
 const shellCanvas = ref<{ openHistoryMenu(historyId: string): void } | null>(null)
+
+watch(() => chatStore.state.selectedId, () => { selectedHistoryHosts.value = [] })
+watch(historyHosts, (records, previousRecords) => {
+  const available = records.map(record => record.hostname)
+  selectedHistoryHosts.value = reconcileHistoryHostSelection(
+    selectedHistoryHosts.value,
+    available,
+    (previousRecords ?? []).map(record => record.hostname),
+  )
+})
+
+function toggleHistoricalHost(hostname: string): void {
+  selectedHistoryHosts.value = toggleHistoryHostSelection(selectedHistoryHosts.value, hostname)
+}
 
 async function acknowledgeHostMemory(): Promise<void> {
   const disclosure = pendingHostMemoryDisclosure.value
@@ -746,22 +764,27 @@ onBeforeUnmount(() => {
         :shell-count="chatStore.state.selected?.shellCount ?? 0"
         :is-live="isLiveChat"
         :live-chat-available="Boolean(chatStore.state.liveChatId)"
-        :history-shells="historyShells"
-        :history-records="shellHistory.state.records"
+        :history-hosts="historyHosts"
+        :selected-history-hosts="selectedHistoryHosts"
         @select="select"
         @close="close"
         @connect="createConnection"
-        @open-saved="openSavedSessionsDialog"
-        @upgrade="requestAutonomousUpgrade"
         @restore-live="chatStore.state.liveChatId ? selectChat(chatStore.state.liveChatId) : undefined"
         @duplicate="duplicateShell"
         @history="openShellHistory"
         @history-menu="openHistoricalShellMenu"
         @reconnect="reconnectShell"
+        @toggle-history-host="toggleHistoricalHost"
       >
         <template #history>
           <section class="history-playback" aria-label="聊天 Shell 历史回放">
-            <div v-if="historyPlayback.length" class="history-shell-grid">
+            <div
+              v-if="historyPlayback.length"
+              class="history-shell-grid"
+              :data-columns="historyGridColumns"
+              :data-row-height-percent="layoutPreferences.state.rowHeightPercent"
+              :style="historyGridStyle"
+            >
               <article v-for="playback in historyPlayback" :key="playback.record.id" class="history-shell-card">
                 <header><strong>{{ playback.record.title }}</strong><button type="button" :aria-label="`查看 Shell 历史 ${playback.record.hostname}`" @click="openShellHistory(playback.record.hostname)">历史</button></header>
                 <span>{{ playback.record.hostname }}</span><b>已关闭 · 只读历史</b>
@@ -793,7 +816,12 @@ onBeforeUnmount(() => {
     </template>
 
     <template #agent>
-      <GlobalChatPanel :chat="chatStore.state.selected" :read-only="!isLiveChat" />
+      <GlobalChatPanel
+        :chat="chatStore.state.selected"
+        :read-only="!isLiveChat"
+        :can-upgrade="activeSession?.mode === 'copilot'"
+        @upgrade="requestAutonomousUpgrade"
+      />
     </template>
 
     <template #overlays>
@@ -856,12 +884,14 @@ onBeforeUnmount(() => {
 .header-button { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; }
 .empty-state { display: grid; min-width: 0; min-height: 0; overflow: auto; background: var(--surface); }
 .agent-empty { display: grid; gap: 7px; padding: 16px; }
-.history-playback { height: 100%; overflow: auto; padding: 12px; background: var(--surface-soft); }
-.history-shell-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
-.history-shell-card { display: grid; grid-template-rows: auto auto auto minmax(80px, 1fr); gap: 5px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.history-shell-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }.history-shell-card header button { min-height: 25px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--text); font-size: 10px; }
+.history-playback { height: 100%; overflow: auto; padding: 8px; background: var(--surface-soft); }
+.history-shell-grid { display: grid; align-content: start; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 8px; overflow: auto; }
+.history-shell-card { display: grid; grid-template-rows: 30px auto auto minmax(0, 1fr); gap: 5px; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); background: var(--terminal); }
+.history-shell-card > header { padding: 0 5px 0 9px; border-bottom: 1px solid #343a42; background: #20262d; color: #d8dade; }
+.history-shell-card > span,.history-shell-card > b { padding: 0 9px; }
+.history-shell-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }.history-shell-card header button { min-height: 24px; padding: 0 8px; border: 1px solid #4b535d; border-radius: 4px; background: #2b323a; color: #d8dade; font-size: 10px; }
 .history-shell-card strong,.history-shell-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.history-shell-card pre { min-width: 0; max-height: 180px; margin: 0; padding: 8px; overflow: auto; border: 1px solid #343a42; border-radius: 4px; background: var(--terminal); color: #d8dade; font: 10px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-shell-card pre { min-width: 0; min-height: 0; margin: 0; padding: 8px 9px; overflow: auto; border-top: 1px solid #343a42; background: var(--terminal); color: #d8dade; font: 10px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .history-shell-card span,.history-shell-card b,.history-playback p { color: var(--muted); font-size: 10px; }
 .read-only { background: var(--surface-soft); }
 .agent-empty strong { color: var(--text-strong); font-size: 12px; }

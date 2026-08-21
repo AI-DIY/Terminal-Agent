@@ -1,6 +1,6 @@
 {
   "name": "terminal-agent-v2",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "",
   "main": "./out/main/main.js",
   "scripts": {
@@ -11,7 +11,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "pretest:e2e": "npm run build",
     "test:e2e": "playwright test",
-    "build:launcher": "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force build/launcher | Out-Null; & x86_64-w64-mingw32-g++.exe -std=c++17 -O2 -s -municode scripts/windows/terminal-agent-launcher.cpp -o build/launcher/putty.exe -lshell32 -ladvapi32\"",
+    "build:launcher": "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force build/launcher | Out-Null; & x86_64-w64-mingw32-g++.exe -std=c++17 -O2 -s -static -municode scripts/windows/terminal-agent-launcher.cpp -o build/launcher/putty.exe -lshell32 -ladvapi32\"",
     "make:uninstall-cleanup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/package-uninstall-cleanup.ps1",
     "make:win:unpacked": "npm run build && npm run build:launcher && electron-builder --win dir --x64",
     "make:win": "npm run make:win:unpacked && electron-builder --win nsis --x64 && npm run make:uninstall-cleanup"
@@ -43,6 +43,7 @@
       }
     ],
     "win": {
+      "icon": "build-resources/ta-icon.ico",
       "target": [
         "nsis"
       ],
@@ -67,6 +68,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.62.1",
+    "@types/node": "^24.13.3",
     "@types/ssh2": "^1.15.5",
     "@vitejs/plugin-vue": "^6.0.8",
     "electron": "^43.3.0",

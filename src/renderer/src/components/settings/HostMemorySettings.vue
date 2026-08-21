@@ -243,14 +243,21 @@ function formatBytes(value: number | undefined): string {
     </header>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
 
+    <section class="memory-status" aria-label="主机记忆状态">
+      <div><span class="status-dot" :class="{ enabled: settings.enabled }" aria-hidden="true" /><span>采集状态</span><strong>{{ settings.enabled ? '已启用' : '已停用' }}</strong></div>
+      <div><span>已记忆主机</span><strong>{{ records.length }} 台</strong></div>
+      <div><span>采集方式</span><strong>预制只读命令</strong></div>
+      <p>连接确认后依次执行固定检查，按主机名分别保存和查看。</p>
+    </section>
+
     <fieldset class="collection" :disabled="loading">
       <legend>采集控制</legend>
       <label class="master"><input v-model="settings.enabled" type="checkbox" @change="scheduleSaveSettings"> <span><strong>启用本地主机记忆</strong><small>关闭后不再采集或保存新观察，已有记录会保留。</small></span></label>
       <div class="scopes">
-        <label><input v-model="settings.scopes.identity" type="checkbox" @change="scheduleSaveSettings"> 主机名、连接 IP、操作系统和基础版本</label>
-        <label><input v-model="settings.scopes.hardware" type="checkbox" @change="scheduleSaveSettings"> CPU、内存、磁盘、网络等基础信息</label>
-        <label><input v-model="settings.scopes.processes" type="checkbox" @change="scheduleSaveSettings"> 运行进程名称、PID 和进程工作目录</label>
-        <label><input v-model="settings.scopes.runtime" type="checkbox" @change="scheduleSaveSettings"> 当前用户、工作目录和常用服务状态</label>
+        <label class="scope-card"><input v-model="settings.scopes.identity" type="checkbox" @change="scheduleSaveSettings"><span><strong>身份与系统</strong><small>主机名、连接 IP、操作系统和基础版本</small></span></label>
+        <label class="scope-card"><input v-model="settings.scopes.hardware" type="checkbox" @change="scheduleSaveSettings"><span><strong>硬件与网络</strong><small>CPU、内存、磁盘、网络等基础信息</small></span></label>
+        <label class="scope-card"><input v-model="settings.scopes.processes" type="checkbox" @change="scheduleSaveSettings"><span><strong>进程</strong><small>运行进程名称、PID 和进程工作目录</small></span></label>
+        <label class="scope-card"><input v-model="settings.scopes.runtime" type="checkbox" @change="scheduleSaveSettings"><span><strong>运行环境</strong><small>当前用户、工作目录和常用服务状态</small></span></label>
       </div>
     </fieldset>
     <p class="privacy">不会保存密码、私钥、API Key、令牌、环境变量值、命令行或完整终端内容。所有记忆仅保存在本机，可逐台清除。</p>
@@ -308,12 +315,15 @@ function formatBytes(value: number | undefined): string {
 .panel-head p,.section-head p,.privacy,.detail-head span,.host-identity small { color: var(--muted); font-size: 11px; line-height: 1.5; }
 button { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; }
 button:not(:disabled) { cursor: pointer; } button:disabled { opacity: .55; }
+.memory-status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.memory-status > div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 7px; align-items: center; min-width: 0; padding: 10px 12px; border-right: 1px solid var(--line); }.memory-status > div:last-of-type { border-right: 0; }.memory-status span { color: var(--muted); font-size: 10px; }.memory-status strong { grid-column: 1 / -1; color: var(--text-strong); font-size: 12px; }.memory-status .status-dot { grid-column: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }.memory-status .status-dot + span { grid-column: 2; }.memory-status .status-dot + span + strong { grid-column: 1 / -1; }.memory-status .status-dot.enabled { background: var(--green); }.memory-status p { grid-column: 1 / -1; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--surface-soft); color: var(--muted); font-size: 10px; }
 .collection { display: grid; gap: 11px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
 .collection legend,.editor legend { padding: 0 5px; color: var(--text-strong); font-size: 11px; font-weight: 700; }
 .master { display: flex; align-items: center; gap: 9px; }.master span { display: grid; gap: 2px; }.master small { color: var(--muted); font-size: 10px; }
 .scopes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
-.scopes label { display: flex; align-items: flex-start; gap: 7px; min-width: 0; color: var(--text); font-size: 11px; line-height: 1.4; }
+.scopes label { display: flex; align-items: flex-start; gap: 8px; min-width: 0; color: var(--text); font-size: 11px; line-height: 1.4; }
 .scopes input { margin-top: 2px; }
+.scope-card { min-height: 54px; padding: 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }.scope-card > span { display: grid; gap: 3px; min-width: 0; }.scope-card strong { color: var(--text-strong); font-size: 11px; }.scope-card small { color: var(--muted); font-size: 10px; line-height: 1.4; }
 .privacy { padding-left: 10px; border-left: 3px solid var(--accent); }
 .remembered-hosts { display: grid; gap: 10px; min-width: 0; }
 .section-head > span { color: var(--muted); font-size: 11px; }
@@ -346,5 +356,5 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); }
 .error { color: var(--red); font-size: 11px; }
 .confirm { position: fixed; z-index: 40; inset: 0; display: grid; place-content: center; gap: 12px; padding: 24px; background: rgb(15 23 35 / 48%); }
 .confirm > p,.confirm > div { box-sizing: border-box; width: min(420px, calc(100vw - 48px)); }.confirm > p { padding: 18px 18px 0; border: 1px solid var(--line); border-bottom: 0; border-radius: 6px 6px 0 0; background: var(--surface); }.confirm > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: -12px; padding: 14px 18px 18px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 6px 6px; background: var(--surface); }
-@media (max-width: 760px) { .scopes,.form-grid,.fact-grid { grid-template-columns: 1fr; }.host-row { grid-template-columns: minmax(0, 1fr) auto auto; }.host-row > span,.host-row time { grid-column: 1 / -1; }.repeat-row,.process-row,.network-row { grid-template-columns: 1fr; }.repeat-row > button { justify-self: end; } }
+@media (max-width: 760px) { .memory-status,.scopes,.form-grid,.fact-grid { grid-template-columns: 1fr; }.memory-status > div { border-right: 0; border-bottom: 1px solid var(--line); }.host-row { grid-template-columns: minmax(0, 1fr) auto auto; }.host-row > span,.host-row time { grid-column: 1 / -1; }.repeat-row,.process-row,.network-row { grid-template-columns: 1fr; }.repeat-row > button { justify-self: end; } }
 </style>

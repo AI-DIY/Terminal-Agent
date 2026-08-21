@@ -20,9 +20,9 @@ function createdLabel(chat: ChatSummary): string {
 </script>
 
 <template>
-  <aside class="session-sidebar" aria-label="聊天导航">
+  <aside class="session-sidebar" aria-label="任务历史">
     <header>
-      <strong>聊天</strong>
+      <strong>任务历史</strong>
       <button type="button" aria-label="新建聊天" title="新建聊天" @click="emit('create')">＋</button>
     </header>
     <p v-if="error" class="status error" role="alert">{{ error }}</p>

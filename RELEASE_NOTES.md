@@ -1,3 +1,27 @@
+# Terminal-Agent v1.0.5
+
+Release date: 2026-08-21
+
+## Workbench and Shell history refinement
+
+- Rebrands the application and workbench mark as `TA`, and renames the side regions to Task History and AI Workspace with explicit directional restore controls.
+- Unifies Appearance and Shell workspace layout preferences. Row height is now a shared Compact (34%), Standard (48%), or Relaxed (64%) percentage, with automatic migration from v1.0.4 pixel settings.
+- Improves Shell title and connection-area hierarchy in Pearl and Graphite themes, adds compact historical Shell connections, multi-host filtering, shared historical layouts, and a host context-menu reconnect action.
+- Keeps closed Shell history isolated by normalized hostname and waits for final history persistence before application shutdown.
+
+## Host memory and AI workspace
+
+- Refines Local Host Memory status, scope controls, and dual-theme rendering while retaining per-host review, edit, and clear actions.
+- The **I understand** consent action runs only the fixed read-only Linux observation commands, then stores structured facts by hostname.
+- Moves the autonomous upgrade action into the AI Workspace and removes saved-session and upgrade actions from the Shell toolbar.
+- Retains tested Ollama, OpenAI-compatible, and llama.cpp connection profiles plus durable streaming chat, retry, cancellation, and model connection tests.
+
+## Windows release assets
+
+- Includes `Terminal-Agent-Setup-1.0.5.exe`, a newly compiled standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.5.zip`.
+
+---
+
 # Terminal-Agent v1.0.4
 
 Release date: 2026-08-21

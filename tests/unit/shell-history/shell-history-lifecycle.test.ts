@@ -143,6 +143,28 @@ describe('Shell history lifecycle', () => {
     }))
     expect(history.reportError).toHaveBeenCalledOnce()
   })
+
+  it('drains pending close persistence before application shutdown continues', async () => {
+    const events = createEventSources()
+    const closing = deferred<void>()
+    const history = {
+      attach: vi.fn(), append: vi.fn(), audit: vi.fn(), associate: vi.fn(), close: vi.fn(() => closing.promise), reportError: vi.fn(),
+    }
+    const lifecycle = registerShellHistoryLifecycle(events.sessions, events.chats, history)
+
+    events.historyOpened?.({ id: 'session-shutdown', hostname: 'web-shutdown', mode: 'copilot', connectionType: 'direct-ssh' })
+    events.closed?.({ sessionId: 'session-shutdown' })
+    const drained = lifecycle.drain()
+    let finished = false
+    void drained.then(() => { finished = true })
+    await Promise.resolve()
+
+    expect(history.close).toHaveBeenCalledOnce()
+    expect(finished).toBe(false)
+    closing.resolve()
+    await drained
+    expect(finished).toBe(true)
+  })
 })
 
 function createEventSources() {

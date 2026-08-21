@@ -200,6 +200,55 @@ test('restores a chat with only closed Shells as history playback after reload',
   }
 })
 
+test('filters historical hosts as a multi-select workspace with shared layout and reconnect actions', async ({ launchApp }) => {
+  const sshServer = await startSshServer()
+  let app: ElectronApplication | undefined
+
+  try {
+    app = (await launchApp()).app
+    const page = await app.firstWindow()
+
+    await createNamedChat(page, '多主机历史')
+    await connect(page, sshServer.port, '127.0.0.1')
+    await connect(page, sshServer.port, '127.0.0.2')
+    await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.1', exact: true }).click()
+    await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.2', exact: true }).click()
+
+    const firstHost = page.getByRole('button', { name: '筛选历史 Shell 127.0.0.1', exact: true })
+    const secondHost = page.getByRole('button', { name: '筛选历史 Shell 127.0.0.2', exact: true })
+    const historicalCards = page.locator('.history-shell-card')
+    await expect(firstHost).toHaveAttribute('aria-pressed', 'true')
+    await expect(secondHost).toHaveAttribute('aria-pressed', 'true')
+    await expect(historicalCards).toHaveCount(2)
+
+    await firstHost.click()
+    await expect(firstHost).toHaveAttribute('aria-pressed', 'false')
+    await expect(historicalCards).toHaveCount(1)
+    await expect(page.getByLabel('只读终端历史 127.0.0.2', { exact: true })).toBeVisible()
+
+    await secondHost.click()
+    await expect(secondHost).toHaveAttribute('aria-pressed', 'true')
+    await expect(historicalCards).toHaveCount(1)
+    await firstHost.click()
+    await expect(historicalCards).toHaveCount(2)
+
+    await page.getByRole('button', { name: '历史 Shell 布局', exact: true }).click()
+    const historyLayout = page.getByLabel('历史 Shell 布局设置')
+    await historyLayout.getByLabel('每行数量').selectOption('1')
+    await historyLayout.getByLabel('单行高度（占工作区）').selectOption('34')
+    const grid = page.locator('.history-shell-grid')
+    await expect(grid).toHaveAttribute('data-columns', '1')
+    await expect(grid).toHaveAttribute('data-row-height-percent', '34')
+
+    await firstHost.click({ button: 'right' })
+    const menu = page.getByRole('menu', { name: '历史 Shell 操作 127.0.0.1', exact: true })
+    await expect(menu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
+  } finally {
+    await app?.close()
+    await closeServer(sshServer.server)
+  }
+})
+
 test('duplicates a live terminal, previews read-only history, and reconnects it into the selected history chat', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
@@ -234,8 +283,7 @@ test('duplicates a live terminal, previews read-only history, and reconnects it 
     const historyTab = page.locator('.history-shell-tab').first()
     await historyTab.click({ button: 'right' })
     const historyMenu = page.getByRole('menu', { name: '历史 Shell 操作 127.0.0.1', exact: true })
-    await expect(historyMenu.getByRole('menuitem', { name: '复制 SSH 通道', exact: true })).toBeDisabled()
-    await expect(historyMenu.getByRole('menuitem', { name: '重新连接', exact: true })).toBeEnabled()
+    await expect(historyMenu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
     await historyMenu.getByRole('menuitem', { name: '查看 Shell 历史', exact: true }).click()
     await expect(page.getByRole('dialog', { name: 'Shell 历史', exact: true })).toBeVisible()
     await page.getByRole('dialog', { name: 'Shell 历史', exact: true }).getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
@@ -265,8 +313,7 @@ test('duplicates a live terminal, previews read-only history, and reconnects it 
     await expect(retainedHistoryTab).toBeVisible()
     await retainedHistoryTab.click({ button: 'right' })
     const hybridHistoryMenu = page.getByRole('menu', { name: '历史 Shell 操作 127.0.0.1', exact: true })
-    await expect(hybridHistoryMenu.getByRole('menuitem', { name: '复制 SSH 通道', exact: true })).toBeDisabled()
-    await expect(hybridHistoryMenu.getByRole('menuitem', { name: '重新连接', exact: true })).toBeEnabled()
+    await expect(hybridHistoryMenu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
     await hybridHistoryMenu.getByRole('menuitem', { name: '查看 Shell 历史', exact: true }).click()
     await expect(page.getByRole('dialog', { name: 'Shell 历史', exact: true })).toBeVisible()
     await expect(page.locator('[data-testid^="terminal-pane-"]:visible')).toHaveCount(1)
@@ -452,12 +499,12 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
     await page.getByLabel('当前展示数量').selectOption('2')
     await page.getByLabel('每行数量').selectOption('1')
-    await page.getByLabel('单行高度').selectOption('260')
+    await page.getByLabel('单行高度（占工作区）').selectOption('34')
 
     const grid = page.getByLabel('可见终端面板')
     await expect(allPanes.filter({ visible: true })).toHaveCount(2)
     await expect(grid).toHaveAttribute('data-columns', '1')
-    await expect(grid).toHaveAttribute('data-row-height', '260')
+    await expect(grid).toHaveAttribute('data-row-height-percent', '34')
     for (const pane of originalPanes) expect(await pane.evaluate(node => node.isConnected)).toBe(true)
 
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
@@ -470,7 +517,7 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({
       visibleCount: 2,
       columns: 1,
-      rowHeight: 260,
+      rowHeightPercent: 34,
     })
     await page.evaluate(() => window.terminalAgent.settings.appearance.saveTheme('graphite'))
     await page.reload()
@@ -479,7 +526,39 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
     await expect(page.getByLabel('当前展示数量')).toHaveValue('2')
     await expect(page.getByLabel('每行数量')).toHaveValue('1')
-    await expect(page.getByLabel('单行高度')).toHaveValue('260')
+    await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('34')
+    await page.setViewportSize({ width: 900, height: 700 })
+    const narrowGeometry = await page.evaluate(() => {
+      const bounds = (selector: string): DOMRect => {
+        const element = document.querySelector(selector)
+        if (!(element instanceof HTMLElement)) throw new Error(`Missing visual element: ${selector}`)
+        return element.getBoundingClientRect()
+      }
+      const shellToolbar = bounds('.shell-toolbar-content')
+      const shellTitle = bounds('.shell-title strong')
+      const toolbarActions = bounds('.toolbar-actions')
+      const chatPanel = bounds('.global-chat-panel')
+      const upgradeButton = bounds('.upgrade-button')
+      const chatInput = bounds('.global-chat-panel textarea')
+      const sendButton = bounds('.global-chat-panel footer button')
+      const withinPanel = (item: DOMRect) => item.left >= chatPanel.left && item.right <= chatPanel.right
+      return {
+        toolbarHeight: shellToolbar.height,
+        shellTitleFits: shellTitle.left >= shellToolbar.left && shellTitle.right <= toolbarActions.left,
+        toolbarActionsFit: toolbarActions.right <= shellToolbar.right,
+        chatPanelFitsViewport: chatPanel.left >= 0 && chatPanel.right <= window.innerWidth,
+        upgradeFits: withinPanel(upgradeButton),
+        inputFits: withinPanel(chatInput),
+        sendFits: withinPanel(sendButton),
+      }
+    })
+    expect(narrowGeometry.toolbarHeight).toBeLessThanOrEqual(55)
+    expect(narrowGeometry.shellTitleFits).toBe(true)
+    expect(narrowGeometry.toolbarActionsFit).toBe(true)
+    expect(narrowGeometry.chatPanelFitsViewport).toBe(true)
+    expect(narrowGeometry.upgradeFits).toBe(true)
+    expect(narrowGeometry.inputFits).toBe(true)
+    expect(narrowGeometry.sendFits).toBe(true)
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
@@ -492,8 +571,8 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
   try {
     app = (await launchApp()).app
     const page = await app.firstWindow()
-    const leftSeparator = page.getByRole('separator', { name: '调整会话侧栏宽度' })
-    const rightSeparator = page.getByRole('separator', { name: '调整 AI 侧栏宽度' })
+    const leftSeparator = page.getByRole('separator', { name: '调整任务历史宽度' })
+    const rightSeparator = page.getByRole('separator', { name: '调整 AI 工作区宽度' })
 
     await expect(leftSeparator).toHaveAttribute('aria-valuenow', '222')
     const leftBox = await leftSeparator.boundingBox()
@@ -514,10 +593,10 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
     for (let index = 0; index < 16; index += 1) await page.keyboard.press('ArrowLeft')
     await expect(rightSeparator).toHaveAttribute('aria-valuenow', '520')
 
-    await page.getByRole('button', { name: '收起会话侧栏', exact: true }).click()
-    await page.getByRole('button', { name: '收起 AI 侧栏', exact: true }).click()
-    await expect(page.getByRole('button', { name: '展开会话侧栏', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '展开 AI 侧栏', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '收起任务历史', exact: true }).click()
+    await page.getByRole('button', { name: '收起 AI 工作区', exact: true }).click()
+    await expect(page.getByRole('button', { name: '展开任务历史', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开 AI 工作区', exact: true })).toBeVisible()
     await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({
       leftWidth: 210,
       rightWidth: 520,
@@ -526,8 +605,8 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
     })
 
     await page.reload()
-    await expect(page.getByRole('button', { name: '展开会话侧栏', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '展开 AI 侧栏', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开任务历史', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开 AI 工作区', exact: true })).toBeVisible()
     await expect(leftSeparator).toHaveAttribute('aria-valuenow', '210')
     await expect(rightSeparator).toHaveAttribute('aria-valuenow', '520')
   } finally {
@@ -819,8 +898,8 @@ test('streams fake global AI chat, retries a failed request, and restores messag
         name: 'E2E Fake Ollama', kind: 'llm', provider: 'ollama', model: 'fake-e2e', endpoint: endpointValue, contextLimit: 1024,
       })
       if (!profile.active) await window.terminalAgent.settings.models.activate(profile.id)
-      await window.terminalAgent.chats.create({ requestId: crypto.randomUUID(), title: 'AI 聊天 E2E' })
     }, endpoint)
+    await createNamedChat(page, 'AI 聊天 E2E')
 
     const input = page.getByLabel('聊天输入')
     await expect(input).toBeEnabled()
@@ -852,13 +931,13 @@ test('cancels a streaming global AI chat and restores its durable cancelled stat
     app = (await launchApp()).app
     const page = await app.firstWindow()
     const endpoint = `http://127.0.0.1:${fakeModel.port}/api/chat`
-    const chatId = await page.evaluate(async endpointValue => {
+    await page.evaluate(async endpointValue => {
       const profile = await window.terminalAgent.settings.models.save({
         name: 'E2E Cancellable Ollama', kind: 'llm', provider: 'ollama', model: 'cancellable-e2e', endpoint: endpointValue, contextLimit: 1024,
       })
       if (!profile.active) await window.terminalAgent.settings.models.activate(profile.id)
-      return (await window.terminalAgent.chats.create({ requestId: crypto.randomUUID(), title: 'AI 取消 E2E' })).chat.id
     }, endpoint)
+    const chatId = await createNamedChat(page, 'AI 取消 E2E')
 
     const input = page.getByLabel('聊天输入')
     await input.fill('取消这一条消息')
@@ -892,13 +971,13 @@ test('supersedes a streaming global AI chat from the same input and retains only
     app = (await launchApp()).app
     const page = await app.firstWindow()
     const endpoint = `http://127.0.0.1:${fakeModel.port}/api/chat`
-    const chatId = await page.evaluate(async endpointValue => {
+    await page.evaluate(async endpointValue => {
       const profile = await window.terminalAgent.settings.models.save({
         name: 'E2E Superseding Ollama', kind: 'llm', provider: 'ollama', model: 'superseding-e2e', endpoint: endpointValue, contextLimit: 1024,
       })
       if (!profile.active) await window.terminalAgent.settings.models.activate(profile.id)
-      return (await window.terminalAgent.chats.create({ requestId: crypto.randomUUID(), title: 'AI 覆盖 E2E' })).chat.id
     }, endpoint)
+    const chatId = await createNamedChat(page, 'AI 覆盖 E2E')
 
     const input = page.getByLabel('聊天输入')
     await input.fill('第一条会被覆盖的消息')
@@ -940,8 +1019,8 @@ test('authoritatively cancels global AI before deleting its chat', async ({ laun
         name: 'E2E Delete Ollama', kind: 'llm', provider: 'ollama', model: 'delete-e2e', endpoint: endpointValue, contextLimit: 1024,
       })
       if (!profile.active) await window.terminalAgent.settings.models.activate(profile.id)
-      await window.terminalAgent.chats.create({ requestId: crypto.randomUUID(), title: '待删除 AI 聊天' })
     }, endpoint)
+    await createNamedChat(page, '待删除 AI 聊天')
 
     await page.getByLabel('聊天输入').fill('删除前取消')
     await page.getByRole('button', { name: '发送', exact: true }).click()
@@ -974,7 +1053,7 @@ test('acknowledging host memory resumes observation for the open SSH session', a
     await expect(disclosure).toBeVisible()
     await expect(disclosure).toContainText('127.0.0.1')
     await expect(disclosure).not.toContainText('api-prod')
-    await page.getByRole('button', { name: '确认并开始观察', exact: true }).click()
+    await page.getByRole('button', { name: '我已知道', exact: true }).click()
     await expect(page.getByRole('heading', { name: '允许本地主机记忆？', exact: true })).toHaveCount(0)
 
     await page.getByRole('button', { name: '设置', exact: true }).click()
@@ -1030,7 +1109,7 @@ test('clearing acknowledged host memory persists removal and requires fresh SSH 
     await connect(page, sshServer.port)
     const disclosure = page.getByRole('dialog', { name: '允许本地主机记忆？', exact: true })
     await expect(disclosure).toBeVisible()
-    await page.getByRole('button', { name: '确认并开始观察', exact: true }).click()
+    await page.getByRole('button', { name: '我已知道', exact: true }).click()
 
     await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('button', { name: '本地主机记忆', exact: true }).click()
@@ -1256,15 +1335,15 @@ async function connect(page: Awaited<ReturnType<ElectronApplication['firstWindow
   await page.getByRole('textbox', { name: '用户名', exact: true }).fill('ops')
   await page.getByRole('textbox', { name: '密码', exact: true }).fill('secret')
   await page.getByRole('button', { name: '连接', exact: true }).click()
-  await expect(panes).toHaveCount(previousPaneCount + 1)
+    await expect(panes).toHaveCount(previousPaneCount + 1)
 }
 
 async function createNamedChat(
   page: Awaited<ReturnType<ElectronApplication['firstWindow']>>,
   title: string,
-): Promise<void> {
-  await page.evaluate(async chatTitle => {
-    await window.terminalAgent.chats.create({ requestId: crypto.randomUUID(), title: chatTitle })
+): Promise<string> {
+  const chatId = await page.evaluate(async chatTitle => {
+    return (await window.terminalAgent.chats.create({ requestId: crypto.randomUUID(), title: chatTitle })).chat.id
   }, title)
   const chat = page.getByRole('button', { name: `选择聊天 ${title}`, exact: true })
   await expect(chat).toBeVisible()
@@ -1275,6 +1354,7 @@ async function createNamedChat(
   await expect(connectButton.or(restoreButton)).toBeVisible()
   if (await restoreButton.isVisible()) await restoreButton.click()
   await expect(connectButton).toBeVisible()
+  return chatId
 }
 
 async function sendCommand(

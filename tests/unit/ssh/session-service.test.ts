@@ -416,6 +416,36 @@ describe('SessionService', () => {
     expect(() => service.close(session.id)).toThrow('Unknown terminal session')
   })
 
+  it('continues closing every session and announces closures when transport teardown throws', async () => {
+    const firstShell = createShell()
+    const secondShell = createShell()
+    const firstConnection = {
+      close: vi.fn(() => { throw new Error('connection close failed') }),
+      openShell: vi.fn().mockResolvedValue(firstShell),
+    }
+    const secondConnection = { close: vi.fn(), openShell: vi.fn().mockResolvedValue(secondShell) }
+    const client = {
+      connect: vi.fn()
+        .mockResolvedValueOnce(firstConnection)
+        .mockResolvedValueOnce(secondConnection),
+    }
+    const service = new SessionService(client, { load: vi.fn() })
+    const closed: unknown[] = []
+    service.onClosed(event => closed.push(event))
+    const first = await service.connect({ host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' } })
+    const second = await service.connect({ host: 'server-b', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' } })
+    firstShell.close.mockImplementation(() => { throw new Error('shell close failed') })
+
+    expect(() => service.closeAll()).toThrow('connection close failed')
+
+    expect(firstShell.close).toHaveBeenCalledOnce()
+    expect(firstConnection.close).toHaveBeenCalledOnce()
+    expect(secondShell.close).toHaveBeenCalledOnce()
+    expect(secondConnection.close).toHaveBeenCalledOnce()
+    expect(closed).toEqual([{ sessionId: first.id }, { sessionId: second.id }])
+    expect(service.snapshot()).toEqual([])
+  })
+
   it('closes a connected transport when opening its shell fails without registering a session', async () => {
     const connection = { close: vi.fn(), openShell: vi.fn().mockRejectedValue(new Error('shell unavailable')) }
     const client = { connect: vi.fn().mockResolvedValue(connection) }

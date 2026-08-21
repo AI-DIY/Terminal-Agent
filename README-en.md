@@ -29,7 +29,7 @@ This is not a way for AI to bypass established operations controls. It is a cont
 
 ### 1. Install Terminal-Agent
 
-Download and run `Terminal-Agent-Setup-1.0.4.exe` from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases). Start Terminal-Agent once after installation.
+Download and run `Terminal-Agent-Setup-1.0.5.exe` from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases). Start Terminal-Agent once after installation.
 
 Inside the workbench, choose **New SSH connection** and select one of these entry points:
 
@@ -100,7 +100,7 @@ An unapproved command matching a fence is not sent to the SSH Shell. Review the 
 
 ### 6. Use Autonomous Mode Only for Explicitly Authorized Low-Risk Sessions
 
-When automation is genuinely required, select **Upgrade to autonomous mode** from the current Shell toolbar and confirm again in the dialog. The authorization applies only to that session.
+When automation is genuinely required, select **Upgrade autonomous mode** in the **AI workspace** and confirm again in the dialog. The authorization applies only to that session.
 
 Autonomous mode skips per-candidate human review. It is not appropriate for unvalidated production changes and must not replace change tickets, bastion authorization, two-person review, or rollback planning. Keep production work in the default Copilot mode.
 
@@ -114,13 +114,13 @@ Autonomous mode skips per-candidate human review. It is not appropriate for unva
 
 ## Release Assets
 
-The `v1.0.4` Release contains:
+The `v1.0.5` Release contains:
 
 | File | Purpose |
 | --- | --- |
-| `Terminal-Agent-Setup-1.0.4.exe` | Windows x64 installer. |
+| `Terminal-Agent-Setup-1.0.5.exe` | Windows x64 installer. |
 | `putty.exe` | Single-file bridge for Assess/Access Client or bastion mapping. |
-| `Terminal-Agent-Uninstall-Cleanup-1.0.4.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
+| `Terminal-Agent-Uninstall-Cleanup-1.0.5.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
 | `latest.yml` and `.blockmap` | Update metadata for deployments that use auto-update. |
 
 To use the cleanup tool, extract the ZIP and run `清理 Terminal-Agent 卸载残留.cmd` as an administrator. It lists matching entries, requires an explicit `Y`, and exports `.reg` backups before deletion.

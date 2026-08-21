@@ -6,11 +6,11 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
 
-    expect(canvas).toContain('historyRecords')
-    expect(canvas).toContain("@contextmenu.prevent=\"emit('historyMenu', shell.historyId)\"")
-    expect(canvas).toContain('historyRecord(shell.historyId)?.reconnectable')
+    expect(canvas).toContain('historyHosts')
+    expect(canvas).toContain("@contextmenu.prevent=\"emit('historyMenu', host.id)\"")
+    expect(canvas).toContain('host.reconnectable')
     expect(canvas).toContain('重新连接')
-    expect(view).toContain(':history-records="shellHistory.state.records"')
+    expect(view).toContain(':history-hosts="historyHosts"')
     expect(view).toContain('@reconnect="reconnectShell"')
   })
 
@@ -19,9 +19,9 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
     const openHistory = view.slice(view.indexOf('async function openShellHistory'), view.indexOf('function closeShellHistory'))
 
-    expect(view).toContain("const historyShells = computed(() => (chatStore.state.selected?.shells ?? []).filter(shell => shell.status === 'closed'))")
-    expect(canvas).toContain('v-if="historyShells.length"')
-    expect(canvas).not.toContain('v-if="!isLive && historyShells.length"')
+    expect(view).toContain('const historyHosts = computed(() => latestHistoryByHost(shellHistory.state.records))')
+    expect(canvas).toContain('v-if="historyHosts.length"')
+    expect(canvas).not.toContain('v-if="!isLive && historyHosts.length"')
     expect(canvas).toContain("historyMenu: [historyId: string]")
     expect(canvas).toContain('defineExpose({ openHistoryMenu })')
     expect(view).toContain('ref="shellCanvas"')
@@ -29,5 +29,30 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(view).toContain('async function openHistoricalShellMenu(historyId: string): Promise<void>')
     expect(view).toContain('shellCanvas.value?.openHistoryMenu(historyId)')
     expect(openHistory.indexOf('await shellHistory.open({ chatId')).toBeLessThan(openHistory.indexOf('showHistoryDialog.value = true'))
+  })
+
+  it('renders historical hosts as a selectable compact workspace linked to the shared layout', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+    const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
+
+    expect(canvas).toContain('历史 Shell 连接')
+    expect(canvas).toContain(':aria-pressed="selectedHistoryHosts.includes(host.hostname)"')
+    expect(canvas).toContain("emit('toggleHistoryHost', host.hostname)")
+    expect(canvas).toContain('历史 Shell 布局')
+    expect(view).toContain('filterHistoryByHosts')
+    expect(view).toContain(':selected-history-hosts="selectedHistoryHosts"')
+    expect(view).toContain(':style="historyGridStyle"')
+  })
+
+  it('keeps upgrade control in the AI workspace and removes save and upgrade controls from Shell workspace', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+    const chat = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+    const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
+
+    expect(canvas).not.toContain('已保存会话')
+    expect(canvas).not.toContain('升级为全自动驾驶')
+    expect(chat).toContain('AI 工作区')
+    expect(chat).toContain('升级自动驾驶')
+    expect(view).toContain('@upgrade="requestAutonomousUpgrade"')
   })
 })

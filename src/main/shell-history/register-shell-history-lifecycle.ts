@@ -20,15 +20,20 @@ type ShellHistoryLifecycleOptions = {
   now?: () => Date
 }
 
+export type ShellHistoryLifecycleRegistration = (() => void) & {
+  drain(): Promise<void>
+}
+
 export function registerShellHistoryLifecycle(
   sessions: SessionLifecycleSource,
   chats: ChatLifecycleSource,
   history: ShellHistoryLifecycleSink,
   options: ShellHistoryLifecycleOptions = {},
-): () => void {
+): ShellHistoryLifecycleRegistration {
   const now = options.now ?? (() => new Date())
   const associations = new Map<string, { chatId: string; historyId: string }>()
   const openedSessions = new Map<string, HistoryConnectedSession>()
+  const pendingCloses = new Set<Promise<void>>()
   const unsubscribeHistoryOpened = sessions.onHistoryOpened(session => {
     runSafely(() => {
       openedSessions.set(session.id, session)
@@ -56,7 +61,7 @@ export function registerShellHistoryLifecycle(
     const session = openedSessions.get(event.sessionId)
     associations.delete(event.sessionId)
     openedSessions.delete(event.sessionId)
-    runSafely(async () => {
+    const closeTask = Promise.resolve().then(async () => {
       if (!association && session && chats.ensureClosedHistoryAssociation) {
         try {
           const fallback = await chats.ensureClosedHistoryAssociation(session)
@@ -66,7 +71,9 @@ export function registerShellHistoryLifecycle(
         }
       }
       await history.close({ sessionId: event.sessionId, endedAt })
-    })
+    }).catch(() => undefined)
+    pendingCloses.add(closeTask)
+    void closeTask.finally(() => pendingCloses.delete(closeTask))
   })
   const unsubscribeChanged = chats.onChanged(event => {
     if (event.kind === 'removed') return
@@ -78,7 +85,7 @@ export function registerShellHistoryLifecycle(
     }
   })
   let disposed = false
-  return () => {
+  const dispose = (() => {
     if (disposed) return
     disposed = true
     unsubscribeHistoryOpened()
@@ -86,7 +93,11 @@ export function registerShellHistoryLifecycle(
     unsubscribeWrite()
     unsubscribeClosed()
     unsubscribeChanged()
+  }) as ShellHistoryLifecycleRegistration
+  dispose.drain = async () => {
+    while (pendingCloses.size > 0) await Promise.all([...pendingCloses])
   }
+  return dispose
 }
 
 function runSafely(operation: () => unknown): void {

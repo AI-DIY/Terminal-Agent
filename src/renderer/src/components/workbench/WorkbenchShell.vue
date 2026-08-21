@@ -82,27 +82,27 @@ onBeforeUnmount(widthSaver.flush)
 <template>
   <main class="workbench-shell" :class="`theme-${layout.state.theme}`" :style="shellStyle">
     <header class="app-header" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
-      <strong>Terminal-Agent</strong>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">TA</span><strong>Terminal-Agent</strong></div>
       <div class="current-chat">当前聊天&nbsp; / &nbsp;<b>{{ currentChatTitle }}</b><span>{{ currentChatShellCount }} 个 Shell</span></div>
       <div class="app-header-actions"><slot name="app-actions" /></div>
     </header>
     <section class="workspace" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
       <div class="side-region left-region">
         <div v-show="!layout.state.leftCollapsed" class="side-content"><slot name="sidebar" /></div>
-        <button v-show="layout.state.leftCollapsed" type="button" class="restore-button" aria-label="展开会话侧栏" title="展开会话侧栏" @click="toggleSidebar('left')">›<span>展开聊天</span></button>
+        <button v-show="layout.state.leftCollapsed" type="button" class="restore-button" aria-label="展开任务历史" title="展开任务历史" @click="toggleSidebar('left')"><span class="restore-icon" aria-hidden="true">→</span><span>任务历史</span></button>
       </div>
-      <div class="separator" role="separator" aria-label="调整会话侧栏宽度" aria-orientation="vertical" aria-valuemin="210" aria-valuemax="360" :aria-valuenow="layout.state.leftWidth" tabindex="0" @pointerdown="startResize('left', $event)" @keydown="resizeWithKeyboard('left', $event)" />
+      <div class="separator" role="separator" aria-label="调整任务历史宽度" aria-orientation="vertical" aria-valuemin="210" aria-valuemax="360" :aria-valuenow="layout.state.leftWidth" tabindex="0" @pointerdown="startResize('left', $event)" @keydown="resizeWithKeyboard('left', $event)" />
       <section class="shell-region">
         <slot name="shell" />
       </section>
-      <div class="separator" role="separator" aria-label="调整 AI 侧栏宽度" aria-orientation="vertical" aria-valuemin="340" aria-valuemax="520" :aria-valuenow="layout.state.rightWidth" tabindex="0" @pointerdown="startResize('right', $event)" @keydown="resizeWithKeyboard('right', $event)" />
+      <div class="separator" role="separator" aria-label="调整 AI 工作区宽度" aria-orientation="vertical" aria-valuemin="340" aria-valuemax="520" :aria-valuenow="layout.state.rightWidth" tabindex="0" @pointerdown="startResize('right', $event)" @keydown="resizeWithKeyboard('right', $event)" />
       <div class="side-region right-region">
         <div v-show="!layout.state.rightCollapsed" class="side-content"><slot name="agent" /></div>
-        <button v-show="layout.state.rightCollapsed" type="button" class="restore-button" aria-label="展开 AI 侧栏" title="展开 AI 侧栏" @click="toggleSidebar('right')">‹<span>展开 AI</span></button>
+        <button v-show="layout.state.rightCollapsed" type="button" class="restore-button" aria-label="展开 AI 工作区" title="展开 AI 工作区" @click="toggleSidebar('right')"><span class="restore-icon" aria-hidden="true">←</span><span>AI 工作区</span></button>
       </div>
     </section>
-    <button v-if="!layout.state.leftCollapsed" type="button" class="collapse-button collapse-left" aria-label="收起会话侧栏" title="收起会话侧栏" @click="toggleSidebar('left')">‹</button>
-    <button v-if="!layout.state.rightCollapsed" type="button" class="collapse-button collapse-right" aria-label="收起 AI 侧栏" title="收起 AI 侧栏" @click="toggleSidebar('right')">›</button>
+    <button v-if="!layout.state.leftCollapsed" type="button" class="collapse-button collapse-left" aria-label="收起任务历史" title="收起任务历史" @click="toggleSidebar('left')">‹</button>
+    <button v-if="!layout.state.rightCollapsed" type="button" class="collapse-button collapse-right" aria-label="收起 AI 工作区" title="收起 AI 工作区" @click="toggleSidebar('right')">›</button>
     <slot name="overlays" />
   </main>
 </template>
@@ -121,7 +121,7 @@ onBeforeUnmount(widthSaver.flush)
   color-scheme: dark;
 }
 .app-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--chrome); }
-.app-header > strong { color: var(--text-strong); font-size: 13px; }
+.brand { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; }.brand-mark { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid color-mix(in srgb, var(--accent) 72%, var(--line)); border-radius: 5px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 800; }
 .current-chat { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .current-chat b { color: var(--text-strong); font-weight: 650; }
 .current-chat span { margin-left: 8px; color: var(--faint); }
@@ -134,9 +134,14 @@ onBeforeUnmount(widthSaver.flush)
 .separator { z-index: 2; cursor: col-resize; background: var(--line-soft); touch-action: none; }
 .separator:hover, .separator:focus { outline: 0; background: var(--accent); }
 .shell-region { min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
-.restore-button { display: flex; align-items: center; justify-content: flex-start; gap: 6px; width: 100%; height: 100%; padding: 12px 8px; border: 0; background: var(--panel); color: var(--text-strong); font-size: 18px; writing-mode: vertical-rl; }
-.restore-button span { font-size: 10px; font-weight: 680; }
+.restore-button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; height: 100%; padding: 10px 8px; border: 0; border-inline: 1px solid var(--line); background: var(--panel); color: var(--text-strong); writing-mode: vertical-rl; }
+.restore-button span:not(.restore-icon) { font-size: 10px; font-weight: 680; }.restore-icon { color: var(--accent); font-size: 18px; font-weight: 750; writing-mode: horizontal-tb; }
 .collapse-button { position: absolute; z-index: 3; top: 48px; width: 22px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }
 .collapse-left { left: calc(var(--left-width) - 13px); }
 .collapse-right { right: calc(var(--right-width) - 13px); }
+@media (max-width: 1060px) {
+  .workspace { grid-template-columns: min(var(--left-width), 22vw) 3px minmax(320px, 1fr) 3px min(var(--right-width), 35vw); }
+  .collapse-left { left: calc(min(var(--left-width), 22vw) - 13px); }
+  .collapse-right { right: calc(min(var(--right-width), 35vw) - 13px); }
+}
 </style>

@@ -29,7 +29,7 @@ Terminal-Agent 是面向日常运维与企业堡垒机场景的 Windows SSH 工�
 
 ### 1. 安装 Terminal-Agent
 
-从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 下载并运行 `Terminal-Agent-Setup-1.0.4.exe`。安装完成后，先启动一次 Terminal-Agent。
+从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 下载并运行 `Terminal-Agent-Setup-1.0.5.exe`。安装完成后，先启动一次 Terminal-Agent。
 
 工作台内选择“新建 SSH 连接”，可使用以下入口：
 
@@ -100,7 +100,7 @@ Assess/Access Client / 堡垒机
 
 ### 6. 全自动驾驶仅用于明确授权的低风险会话
 
-如确有自动化需求，可在当前 Shell 的工具栏中选择“升级为全自动驾驶”，并在确认对话框中再次授权。该授权只对当前会话有效。
+如确有自动化需求，可在“AI 工作区”中选择“升级自动驾驶”，并在确认对话框中再次授权。该授权只对当前会话有效。
 
 全自动驾驶会跳过逐条候选命令的人审流程，因此不适用于未经确认的生产变更，也不应替代企业变更单、堡垒机授权、双人复核或回滚策略。对生产环境建议保持默认的辅助驾驶模式。
 
@@ -114,13 +114,13 @@ Assess/Access Client / 堡垒机
 
 ## Release 文件说明
 
-`v1.0.4` Release 包含以下文件：
+`v1.0.5` Release 包含以下文件：
 
 | 文件 | 用途 |
 | --- | --- |
-| `Terminal-Agent-Setup-1.0.4.exe` | Windows x64 安装包。 |
+| `Terminal-Agent-Setup-1.0.5.exe` | Windows x64 安装包。 |
 | `putty.exe` | 提供给 Assess/Access Client 或堡垒机映射的单文件桥接程序。 |
-| `Terminal-Agent-Uninstall-Cleanup-1.0.4.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
+| `Terminal-Agent-Uninstall-Cleanup-1.0.5.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
 | `latest.yml` 与 `.blockmap` | 更新元数据；部署自动更新时使用。 |
 
 清理工具使用方法：解压 ZIP 后，以管理员权限运行 `清理 Terminal-Agent 卸载残留.cmd`。工具会先列出匹配项，并要求明确输入 `Y`；删除前会导出相应的 `.reg` 备份。

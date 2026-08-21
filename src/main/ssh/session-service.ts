@@ -266,8 +266,11 @@ export class SessionService {
     if (!session) {
       throw new Error('Unknown terminal session')
     }
-    session.shell.close()
-    this.finish(sessionId)
+    try {
+      session.shell.close()
+    } finally {
+      this.finish(sessionId)
+    }
   }
 
   write(sessionId: string, data: string): void {
@@ -362,10 +365,18 @@ export class SessionService {
   }
 
   closeAll(): void {
+    let firstFailure: unknown
+    let failed = false
     for (const sessionId of [...this.sessions.keys()]) {
-      this.close(sessionId)
+      try {
+        this.close(sessionId)
+      } catch (error) {
+        if (!failed) firstFailure = error
+        failed = true
+      }
     }
     this.reconnectDescriptors.clear()
+    if (failed) throw firstFailure
   }
 
   revokeDirectProfile(profileId: string): void {
@@ -387,10 +398,13 @@ export class SessionService {
     this.sessions.delete(sessionId)
     this.observedHostnames.delete(sessionId)
     this.reconnectDescriptors.markClosed(session.reconnectReference)
-    session.connection.close()
     const event = { sessionId }
-    for (const listener of this.closedListeners) {
-      listener(event)
+    try {
+      session.connection.close()
+    } finally {
+      for (const listener of this.closedListeners) {
+        listener(event)
+      }
     }
   }
 
