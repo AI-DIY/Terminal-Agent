@@ -4,13 +4,15 @@ import { ModelConfigurationError, UnsafeAgentOutputError } from './agent-model-r
 import { ModelConnectionError } from '../model/chat-completions-client'
 import type { AgentEventPublisher, AgentGoalContext } from './agent-contracts'
 import type { AgentExecutionResult } from './execution-gateway'
+import type { HostMemorySettingsService } from '../settings/host-memory-settings-service'
 import { containsSensitiveMaterial, SensitiveTextStreamRedactor } from './sensitive-data'
 
 type Scheduler = {
   start(context: AgentGoalContext, publish: AgentEventPublisher): Promise<void>
 }
 type SessionSource = {
-  snapshot(): Array<{ id: string; hostname: string; observedHostname?: string; mode: SessionMode }>
+  snapshot(): Array<{ id: string; hostname: string; mode: SessionMode }>
+  observedHostname(sessionId: string): string | undefined
   onClosed?(listener: (event: { sessionId: string }) => void): () => void
 }
 type HostFactsSource = {
@@ -25,6 +27,7 @@ type ExecutionGatewaySource = {
 export type AgentHandlerOptions = {
   timeoutMs?: number
   createAbortController?: () => AbortController
+  hostMemory?: Pick<HostMemorySettingsService, 'canCollect'> & Partial<Pick<HostMemorySettingsService, 'canObserveHost'>>
 }
 type ActiveRun = {
   runId: string
@@ -82,18 +85,31 @@ export function registerAgentHandlers(
     }, timeoutMs)
     let output: SensitiveTextStreamRedactor | undefined
     try {
-      if (!session.observedHostname) {
+      if (options.hostMemory && !await options.hostMemory.canCollect()) {
+        if (isCurrentRun()) sendError(sender, session.id, parsed.runId, '主机记忆未启用，无法读取缓存事实。请在设置中重新启用。')
+        return
+      }
+      const observedHostname = sessions.observedHostname(session.id)
+      if (!observedHostname) {
         if (isCurrentRun()) sendError(sender, session.id, parsed.runId, '当前会话尚未收集到主机事实。请稍后重试。')
+        return
+      }
+      if (options.hostMemory && !await canReadHost(options.hostMemory, session.hostname, observedHostname)) {
+        if (isCurrentRun()) sendError(sender, session.id, parsed.runId, '主机记忆未启用，无法读取缓存事实。请在设置中重新启用。')
         return
       }
 
       let snapshot: AgentGoalContext['facts'] | null
       try {
-        snapshot = await facts.snapshot(session.observedHostname)
+        snapshot = await facts.snapshot(observedHostname)
       } catch {
         snapshot = null
       }
       if (!isCurrentRun()) return
+      if (options.hostMemory && !await canReadHost(options.hostMemory, session.hostname, observedHostname)) {
+        if (isCurrentRun()) sendError(sender, session.id, parsed.runId, '主机记忆授权已撤销，无法读取缓存事实。请重新授权后重试。')
+        return
+      }
       if (!snapshot) {
         sendError(sender, session.id, parsed.runId, '当前会话尚未收集到主机事实。请稍后重试。')
         return
@@ -104,9 +120,10 @@ export function registerAgentHandlers(
       const pendingPublishes: Promise<void>[] = []
       await scheduler.start({
         goal: parsed.goal,
-        session: { id: session.id, hostname: session.observedHostname },
+        session: { id: session.id, hostname: observedHostname },
         facts: snapshot,
         signal: run.controller.signal,
+        hasImages: parsed.hasImages ?? false,
       }, streamEvent => {
         const publishing = publishStreamEvent(
           sender,
@@ -138,6 +155,11 @@ export function registerAgentHandlers(
     unregisterClosed?.()
     for (const sessionId of activeRuns.keys()) cancelRun(sessionId)
   }
+}
+
+async function canReadHost(hostMemory: AgentHandlerOptions['hostMemory'], connectionLabel: string, hostname: string): Promise<boolean> {
+  if (!hostMemory || !await hostMemory.canCollect()) return false
+  return !hostMemory.canObserveHost || await hostMemory.canObserveHost(connectionLabel, hostname)
 }
 
 async function publishStreamEvent(

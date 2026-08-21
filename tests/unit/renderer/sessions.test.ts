@@ -36,10 +36,10 @@ describe('sessions store', () => {
     expect(store.byId('a')).toMatchObject({ hostname: 'alpha', title: '生产终端', buffer: 'ready\r\n' })
   })
 
-  it('labels a session with the observed hostname before its title or connection host', () => {
+  it('labels a session with its safe public title before the connection host', () => {
     expect(sessionLabel({
-      id: 'a', hostname: '10.0.0.12', observedHostname: 'api-prod', title: '生产终端', mode: 'copilot', buffer: '',
-    })).toBe('api-prod')
+      id: 'a', hostname: '10.0.0.12', title: '生产终端', mode: 'copilot', buffer: '',
+    })).toBe('生产终端')
     expect(sessionLabel({
       id: 'b', hostname: '10.0.0.13', title: '堡垒机终端', mode: 'copilot', buffer: '',
     })).toBe('堡垒机终端')

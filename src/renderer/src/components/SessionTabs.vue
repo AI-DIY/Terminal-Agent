@@ -23,11 +23,11 @@ const emit = defineEmits<{ select: [sessionId: string]; close: [sessionId: strin
 </template>
 
 <style scoped>
-.session-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 8px; background: #111827; }
-.session-tab { display: flex; border: 1px solid #334155; background: #1e293b; border-radius: 6px; white-space: nowrap; }
-.session-tab.active { border-color: #38bdf8; background: #0f3a55; }
-button { border: 0; background: transparent; color: #e2e8f0; }
+.session-tabs { display: flex; gap: 7px; overflow-x: auto; padding: 7px 10px; background: var(--surface-soft, #f5f7f9); }
+.session-tab { display: flex; border: 1px solid var(--line, #d9dfe6); background: var(--surface, #fff); border-radius: 5px; white-space: nowrap; }
+.session-tab.active { border-color: var(--accent, #2f6fc4); background: var(--accent-soft, #dfeafa); }
+button { border: 0; background: transparent; color: var(--text, #39424c); }
 .select { display: flex; gap: 8px; align-items: center; padding: 7px 9px; }
-small { color: #94a3b8; }
-.close { padding: 5px 9px; font-size: 18px; line-height: 12px; color: #94a3b8; }
+small { color: var(--muted, #68737f); }
+.close { padding: 5px 9px; font-size: 18px; line-height: 12px; color: var(--muted, #68737f); }
 </style>

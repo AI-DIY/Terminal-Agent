@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentGoalContext, AgentStreamEvent } from '../../../src/main/agent/agent-contracts'
+import type { AgentGoalContext, AgentStreamEvent, SchedulerModelRequest } from '../../../src/main/agent/agent-contracts'
 import { AgentScheduler } from '../../../src/main/agent/scheduler'
 
 describe('AgentScheduler', () => {
@@ -13,12 +13,9 @@ describe('AgentScheduler', () => {
       facts: {
         hostname: 'api-prod',
         observedAt: '2026-08-09T00:00:00.000Z',
-        software: { nginx: '1.25' },
-        processes: [],
-        installLocations: {},
+        operatingSystem: { name: 'Linux', version: '6.1.0' },
+        processes: [{ name: 'nginx', pid: 42 }],
         services: { 'nginx.service': 'active running' },
-        logLocations: [],
-        configurationHashes: {},
       },
     }, vi.fn())
 
@@ -39,8 +36,7 @@ describe('AgentScheduler', () => {
       goal: '检查服务',
       session: { id: 'session-a', hostname: 'api-prod' },
       facts: {
-        hostname: 'web-prod', observedAt: '2026-08-09T00:00:00.000Z', software: {}, processes: [],
-        installLocations: {}, services: {}, logLocations: [], configurationHashes: {},
+        hostname: 'web-prod', observedAt: '2026-08-09T00:00:00.000Z',
       },
     }, vi.fn())).rejects.toThrow('active session hostname')
   })
@@ -57,8 +53,7 @@ describe('AgentScheduler', () => {
       goal: '检查 nginx',
       session: { id: 'session-a', hostname: 'api-prod' },
       facts: {
-        hostname: 'api-prod', observedAt: '2026-08-09T00:00:00.000Z', software: {}, processes: [],
-        installLocations: {}, services: {}, logLocations: [], configurationHashes: {},
+        hostname: 'api-prod', observedAt: '2026-08-09T00:00:00.000Z',
       },
     }
 
@@ -80,12 +75,45 @@ describe('AgentScheduler', () => {
       goal: '检查 nginx',
       session: { id: 'session-a', hostname: 'api-prod' },
       facts: {
-        hostname: 'api-prod', observedAt: '2026-08-09T00:00:00.000Z', software: {}, processes: [],
-        installLocations: {}, services: {}, logLocations: [], configurationHashes: {},
+        hostname: 'api-prod', observedAt: '2026-08-09T00:00:00.000Z',
       },
       signal: controller.signal,
     }, vi.fn())
 
     expect(model.stream).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }), expect.any(Function))
+  })
+
+  it('isolates migrated fact collections from model adapter mutations', async () => {
+    const context: AgentGoalContext = {
+      goal: '检查迁移事实',
+      session: { id: 'session-a', hostname: 'api-prod' },
+      facts: {
+        hostname: 'api-prod',
+        observedAt: '2026-08-09T00:00:00.000Z',
+        legacyFacts: {
+          software: { nginx: '1.25' },
+          processes: [{ name: 'nginx', status: 'Ssl' }],
+          installLocations: { nginx: '/usr/sbin/nginx' },
+          services: { 'nginx.service': 'active running' },
+          logLocations: ['/var/log/nginx/error.log'],
+          configurationHashes: { '/etc/nginx/nginx.conf': 'a'.repeat(64) },
+        },
+      },
+    }
+    const model = {
+      stream: vi.fn(async (request: SchedulerModelRequest) => {
+        request.facts.legacyFacts!.software!.nginx = 'mutated'
+        request.facts.legacyFacts!.processes![0]!.status = 'R'
+        request.facts.legacyFacts!.logLocations![0] = '/var/log/changed.log'
+      }),
+    }
+
+    await new AgentScheduler(model).start(context, vi.fn())
+
+    expect(context.facts.legacyFacts).toMatchObject({
+      software: { nginx: '1.25' },
+      processes: [{ name: 'nginx', status: 'Ssl' }],
+      logLocations: ['/var/log/nginx/error.log'],
+    })
   })
 })

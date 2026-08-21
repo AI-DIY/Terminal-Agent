@@ -8,6 +8,7 @@ import { containsSensitiveMaterial, redactSensitiveText, SensitiveTextStreamReda
 
 type ModelSettingsSource = Pick<ModelSettingsService, 'load'>
 type ChatCompletionsSource = Pick<ChatCompletionsClient, 'stream'>
+type ProfileRouteSource = { resolveRoute(request: { hasImages: boolean }): Promise<{ endpoint: string; model: string; kind: 'llm' | 'vlm'; provider: 'openai' | 'ollama' | 'llama-cpp'; contextLimit?: number; maxImages?: number; apiKey: string | null }> }
 type ProtectedModelSettings = ModelSettings & { apiKey: string }
 
 const agentResultSchema = z.object({
@@ -27,10 +28,11 @@ export class AgentModelRuntime implements SchedulerModelPort {
     private readonly models: ModelSettingsSource,
     private readonly client: ChatCompletionsSource,
     private readonly createCandidateId: () => string = randomUUID,
+    private readonly routes?: ProfileRouteSource,
   ) {}
 
   async stream(request: SchedulerModelRequest, publish: AgentEventPublisher): Promise<void> {
-    const settings = await this.requireSettings()
+    const settings = await this.requireSettings(request.hasImages ?? false)
     let response = ''
     const output = new SensitiveTextStreamRedactor()
     const onDelta = (content: string): void => {
@@ -59,7 +61,19 @@ export class AgentModelRuntime implements SchedulerModelPort {
     })
   }
 
-  private async requireSettings(): Promise<ProtectedModelSettings> {
+  private async requireSettings(hasImages: boolean): Promise<ProtectedModelSettings> {
+    if (this.routes) {
+      const profile = await this.routes.resolveRoute({ hasImages })
+      const apiKey = profile.apiKey ?? ''
+      if (profile.provider !== 'ollama' && !apiKey) throw new ModelConfigurationError('The protected model configuration is unavailable')
+      return {
+        endpoint: profile.endpoint,
+        model: profile.model,
+        contextLimit: profile.contextLimit ?? profile.maxImages ?? 1_024,
+        apiKey,
+        provider: profile.provider,
+      }
+    }
     const settings = await this.models.load()
     const apiKey = settings?.apiKey
     if (!settings || !apiKey) throw new ModelConfigurationError('The protected model configuration is unavailable')
@@ -103,12 +117,16 @@ function sanitizeFacts(facts: SchedulerModelRequest['facts']): SchedulerModelReq
   return {
     hostname: redactSensitiveText(facts.hostname),
     observedAt: facts.observedAt,
-    software: cleanRecord(facts.software),
-    processes: facts.processes.map(process => ({ name: redactSensitiveText(process.name), status: redactSensitiveText(process.status) })),
-    installLocations: cleanRecord(facts.installLocations),
-    services: cleanRecord(facts.services),
-    logLocations: facts.logLocations.map(redactSensitiveText),
-    configurationHashes: cleanRecord(facts.configurationHashes),
+    ...(facts.connectionIp ? { connectionIp: redactSensitiveText(facts.connectionIp) } : {}),
+    ...(facts.operatingSystem ? { operatingSystem: { name: redactSensitiveText(facts.operatingSystem.name), ...(facts.operatingSystem.version ? { version: redactSensitiveText(facts.operatingSystem.version) } : {}) } } : {}),
+    ...(facts.cpu ? { cpu: { ...(facts.cpu.model ? { model: redactSensitiveText(facts.cpu.model) } : {}), ...(facts.cpu.architecture ? { architecture: redactSensitiveText(facts.cpu.architecture) } : {}), ...(facts.cpu.logicalCores ? { logicalCores: facts.cpu.logicalCores } : {}) } } : {}),
+    ...(facts.memory ? { memory: { ...facts.memory } } : {}),
+    ...(facts.disks ? { disks: facts.disks.map(disk => ({ name: redactSensitiveText(disk.name), totalBytes: disk.totalBytes })) } : {}),
+    ...(facts.networkInterfaces ? { networkInterfaces: facts.networkInterfaces.map(item => ({ name: redactSensitiveText(item.name), addresses: item.addresses.map(redactSensitiveText) })) } : {}),
+    ...(facts.processes ? { processes: facts.processes.map(process => ({ name: redactSensitiveText(process.name), pid: process.pid, ...(process.workingDirectory ? { workingDirectory: redactSensitiveText(process.workingDirectory) } : {}) })) } : {}),
+    ...(facts.currentUser ? { currentUser: redactSensitiveText(facts.currentUser) } : {}),
+    ...(facts.workingDirectory ? { workingDirectory: redactSensitiveText(facts.workingDirectory) } : {}),
+    ...(facts.services ? { services: cleanRecord(facts.services) } : {}),
   }
 }
 

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { terminalAgentNamespace } from '../../../src/preload/api'
-import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema } from '../../../src/shared/contracts'
+import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema, chatAppendMessageRequestSchema, chatAssociateShellRequestSchema, chatBindSessionRequestSchema, chatChangedEventSchema, chatCloseAssociationRequestSchema, chatCreateRequestSchema, chatListSnapshotSchema, chatRemoveRequestSchema, chatSetModeRequestSchema, chatShellAssociationSchema, chatTimestampSchema, chatUpdateTitleRequestSchema } from '../../../src/shared/contracts'
 
 const { exposeInMainWorld } = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn()
@@ -209,5 +209,131 @@ describe('terminalAgent preload API', () => {
     expect(invoke).toHaveBeenCalledWith('access-client:errors')
     expect(listener).toHaveBeenCalledWith('无法建立 AccessClient 会话。请检查启动参数、连接状态和本次凭据。')
     expect(removeListener).toHaveBeenCalledWith('access-client:error', registeredListener)
+  })
+
+  it('exposes only named bastion catalog and launch methods', async () => {
+    invoke
+      .mockResolvedValueOnce({ available: false, systems: [], message: '未配置堡垒机目录来源。' })
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ kind: 'opened', sessionId: 's-2' })
+    await import('../../../src/preload/index')
+    const [, api] = exposeInMainWorld.mock.calls[0] as [string, {
+      accessClient: {
+        catalog: () => Promise<unknown>
+        hosts: (systemId: string) => Promise<unknown>
+        launch: (request: unknown) => Promise<unknown>
+      }
+    }]
+
+    await expect(api.accessClient.catalog()).resolves.toEqual({ available: false, systems: [], message: '未配置堡垒机目录来源。' })
+    await expect(api.accessClient.hosts('orders')).resolves.toEqual([])
+    await expect(api.accessClient.launch({ kind: 'host', target: 'web-01.example.internal' })).resolves.toEqual({ kind: 'opened', sessionId: 's-2' })
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'access-client:bastion:catalog')
+    expect(invoke).toHaveBeenNthCalledWith(2, 'access-client:bastion:hosts', 'orders')
+    expect(invoke).toHaveBeenNthCalledWith(3, 'access-client:bastion:launch', { kind: 'host', target: 'web-01.example.internal' })
+  })
+})
+
+describe('durable chat navigation contracts', () => {
+  const chat = {
+    id: 'chat-1', title: 'chat', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
+    shellCount: 0, mode: 'copilot' as const, live: false, messages: [], shells: [],
+  }
+  const chatSummary = {
+    id: chat.id, title: chat.title, createdAt: chat.createdAt, updatedAt: chat.updatedAt,
+    shellCount: chat.shellCount, mode: chat.mode, live: chat.live,
+  }
+
+  it('requires monotonic revisions on list snapshots and changed events', () => {
+    expect(chatListSnapshotSchema.parse({ revision: 3, chats: [chatSummary], liveChatId: null })).toEqual({ revision: 3, chats: [chatSummary], liveChatId: null })
+    expect(chatChangedEventSchema.parse({ revision: 4, kind: 'updated', chat, liveChatId: chat.id })).toEqual({ revision: 4, kind: 'updated', chat, liveChatId: chat.id })
+    expect(chatChangedEventSchema.parse({ revision: 5, kind: 'removed', chatId: chat.id, liveChatId: null })).toEqual({ revision: 5, kind: 'removed', chatId: chat.id, liveChatId: null })
+    expect(() => chatChangedEventSchema.parse({ revision: 4, kind: 'updated', chat })).toThrow()
+    expect(() => chatChangedEventSchema.parse({ kind: 'updated', chat })).toThrow()
+    expect(() => chatListSnapshotSchema.parse({ revision: -1, chats: [], liveChatId: null })).toThrow()
+  })
+
+  it('lets renderer identify only an existing session and never supply shell metadata', () => {
+    expect(chatBindSessionRequestSchema.parse({ requestId: 'bind-1', chatId: 'chat-1', sessionId: 's1' })).toEqual({
+      requestId: 'bind-1', chatId: 'chat-1', sessionId: 's1',
+    })
+    expect(() => chatBindSessionRequestSchema.parse({
+      requestId: 'bind-1', chatId: 'chat-1', sessionId: 's1', hostname: 'forged',
+    })).toThrow()
+  })
+
+  it('accepts an atomic fallback target while rejecting duplicate sessions and self-transfer', async () => {
+    const { chatTransferSessionsRequestSchema } = await import('../../../src/shared/contracts')
+    expect(chatTransferSessionsRequestSchema.parse({
+      requestId: 'transfer-1', sourceChatId: 'chat-1', targetChatId: 'chat-2', sessionIds: ['s1', 's2'],
+    })).toEqual({
+      requestId: 'transfer-1', sourceChatId: 'chat-1', targetChatId: 'chat-2', sessionIds: ['s1', 's2'],
+    })
+    expect(() => chatTransferSessionsRequestSchema.parse({
+      requestId: 'transfer-1', sourceChatId: 'chat-1', targetChatId: 'chat-2', sessionIds: ['s1', 's1'],
+    })).toThrow()
+    expect(() => chatTransferSessionsRequestSchema.parse({
+      requestId: 'transfer-1', sourceChatId: 'chat-1', targetChatId: 'chat-1', sessionIds: ['s1'],
+    })).toThrow()
+    expect(chatTransferSessionsRequestSchema.parse({
+      requestId: 'transfer-fallback', sourceChatId: 'chat-1', sessionIds: ['s1', 's2'],
+    })).toEqual({
+      requestId: 'transfer-fallback', sourceChatId: 'chat-1', sessionIds: ['s1', 's2'],
+    })
+  })
+
+  it('strictly versions workspace responses and active-session ownership queries', async () => {
+    const contracts = await import('../../../src/shared/contracts') as unknown as Record<string, {
+      parse(value: unknown): unknown
+    }>
+    expect(contracts.chatWorkspaceSnapshotSchema.parse({ revision: 4, chat, liveChatId: chat.id })).toEqual({ revision: 4, chat, liveChatId: chat.id })
+    expect(contracts.chatSessionResolutionSchema.parse({ revision: 4, sessionId: 's1', chat, liveChatId: chat.id })).toEqual({ revision: 4, sessionId: 's1', chat, liveChatId: chat.id })
+    expect(contracts.chatSessionResolutionSchema.parse({ revision: 4, sessionId: 'unowned', chat: null, liveChatId: null })).toEqual({ revision: 4, sessionId: 'unowned', chat: null, liveChatId: null })
+    expect(() => contracts.chatWorkspaceSnapshotSchema.parse({ revision: 4, chat })).toThrow()
+    expect(() => contracts.chatResolveSessionRequestSchema.parse({ sessionId: 's1', chatId: 'forged' })).toThrow()
+  })
+})
+
+describe('chatTimestampSchema', () => {
+  it('accepts only real canonical four-digit UTC millisecond timestamps', () => {
+    expect(chatTimestampSchema.parse('2026-08-16T08:00:00.000Z')).toBe('2026-08-16T08:00:00.000Z')
+    expect(chatTimestampSchema.parse('9999-12-31T23:59:59.999Z')).toBe('9999-12-31T23:59:59.999Z')
+    for (const timestamp of [
+      '2026-08-16T16:00:00.000+08:00',
+      '2026-08-16T08:00:00Z',
+      '2026-08-16T08:00:00.00Z',
+      '2026-02-30T08:00:00.000Z',
+      '+010000-01-01T00:00:00.000Z',
+    ]) {
+      expect(() => chatTimestampSchema.parse(timestamp)).toThrow()
+    }
+  })
+})
+
+describe('chat contracts', () => {
+  it('rejects unknown input fields and credentials in renderer chat DTOs', () => {
+    expect(() => chatCreateRequestSchema.parse({ requestId: 'req-1', credential: 'secret' })).toThrow()
+    expect(() => chatSetModeRequestSchema.parse({ requestId: 'req-1', chatId: 'chat-1', mode: 'copilot', reconnect: 'ssh' })).toThrow()
+    expect(() => chatShellAssociationSchema.parse({
+      id: 'assoc-1', chatId: 'chat-1', sessionId: 's1', historyId: 'history-1',
+      hostname: 'host', title: 'shell', status: 'open', associatedAt: '2026-08-16T08:00:00.000Z',
+      password: 'secret',
+    })).toThrow()
+  })
+
+  it('keeps every chat write request object strict', () => {
+    const requests = [
+      [chatCreateRequestSchema, { requestId: 'create-1' }],
+      [chatAppendMessageRequestSchema, { requestId: 'message-1', chatId: 'chat-1', role: 'user', content: 'hello', state: 'complete' }],
+      [chatUpdateTitleRequestSchema, { requestId: 'title-1', chatId: 'chat-1', title: 'title' }],
+      [chatSetModeRequestSchema, { requestId: 'mode-1', chatId: 'chat-1', mode: 'copilot' }],
+      [chatAssociateShellRequestSchema, { requestId: 'shell-1', chatId: 'chat-1', historyId: 'history-1', hostname: 'host', title: 'shell' }],
+      [chatCloseAssociationRequestSchema, { requestId: 'close-1', chatId: 'chat-1', associationId: 'association-1' }],
+      [chatRemoveRequestSchema, { requestId: 'remove-1', chatId: 'chat-1' }],
+    ] as const
+    for (const [schema, request] of requests) {
+      expect(() => schema.parse({ ...request, privateKey: 'secret', apiKey: 'secret', reconnect: { password: 'secret' } })).toThrow()
+    }
   })
 })

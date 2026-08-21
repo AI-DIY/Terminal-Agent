@@ -21,7 +21,7 @@ function resize(): void {
 }
 
 onMounted(() => {
-  terminal = new Terminal({ convertEol: true, cursorBlink: true, theme: { background: '#020617' } })
+  terminal = new Terminal({ convertEol: true, cursorBlink: true, theme: { background: '#151a20', foreground: '#d8dade' } })
   fit = new FitAddon()
   terminal.loadAddon(fit)
   terminal.open(terminalElement.value!)
@@ -58,7 +58,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.terminal-pane { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid #1e293b; background: #020617; }
-.terminal-pane.active { border-color: #38bdf8; }
+.terminal-pane { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line, #3d4046); background: var(--terminal, #151a20); }
+.terminal-pane.active { border-color: var(--accent, #2f6fc4); }
 .terminal-element { height: 100%; min-height: 0; padding: 8px; }
 </style>

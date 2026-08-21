@@ -1,19 +1,137 @@
 # Terminal-Agent
 
-Terminal-Agent is a Vue 3 and Electron desktop SSH workbench with direct password/private-key sessions, AccessClient-compatible launches, structured hostname-keyed observations, OpenAI Chat Completions configuration, and a Copilot-first command flow.
+[English](README-en.md)
 
-## Windows Release
+Terminal-Agent 是面向日常运维与企业堡垒机场景的 Windows SSH 工作台。它保留运维人员熟悉的 SSH Shell 操作方式，同时把 AI 放在可审阅的任务流中：AI 先理解任务、给出分析和候选命令，人员审核后再将准确命令发送到目标 Shell。
 
-Build the Windows application directory with:
+## 它解决什么问题
 
-```powershell
-npm run make:win:unpacked
+传统终端擅长连接，但很难把堡垒机入口、多个 Shell、任务上下文、AI 建议和人工变更审核放在同一个操作面中。Terminal-Agent 将这些环节串成一个可控流程：
+
+1. 企业 Assess/Access Client 或堡垒机调用单文件 `putty.exe` 桥接程序。
+2. 桥接程序唤起已安装的 Terminal-Agent，并把临时 SSH/Raw 堡垒机连接交给同一个工作台。
+3. 运维人员在关联 Shell 上以工作任务方式要求 AI 分析、排障或制定下一步。
+4. 默认的“辅助驾驶”只展示候选命令；人员核对目标、影响和命令后手动确认执行。
+5. 默认安全围栏会拦截未获确认的高风险或交互式命令；规则可在设置中查看、测试和维护。
+
+这不是让 AI 绕过既有运维制度，而是让 AI 成为受控的 Shell 协作助手。
+
+## 核心优势
+
+- **兼容既有堡垒机入口**：只需把发布包中的 `putty.exe` 映射给 Assess/Access Client，无需把 Electron 运行目录复制到堡垒机映射目录。
+- **一个工作台管理连接和任务**：支持 CMDB 堡垒机唤起、指定堡垒机主机唤起、用户名密码 SSH 与私钥 SSH；多个 Shell 可在一个工作区并行查看。
+- **默认人机协作，而非盲目自动执行**：辅助驾驶下，AI 给出分析、证据步骤和命令候选，命令必须由人员确认后才会发送。
+- **把危险动作显式拦在执行前**：首次运行已启用进程终止、交互式编辑器、删除文件、服务状态变更、关机/重启、磁盘分区或格式化等正则围栏规则。
+- **敏感数据最小暴露**：AI 输入输出、桥接诊断和经确认命令的显示均有敏感内容脱敏；模型密钥通过 Windows 受保护存储保存，不回填到页面。
+- **适合持续运维**：聊天工作区、Shell 历史、连接布局和经授权的本地主机记忆可在本机恢复，便于交接与复盘。
+
+## 快速开始
+
+### 1. 安装 Terminal-Agent
+
+从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 下载并运行 `Terminal-Agent-Setup-1.0.4.exe`。安装完成后，先启动一次 Terminal-Agent。
+
+工作台内选择“新建 SSH 连接”，可使用以下入口：
+
+- **堡垒机 CMDB 唤起**：从已配置的系统和主机目录中选择目标。
+- **堡垒机主机唤起**：直接指定堡垒机目标。
+- **主机用户名 + 密码连接**：连接普通 SSH 主机，也可保存连接元数据。
+- **主机私钥连接**：选择私钥文件连接普通 SSH 主机。
+
+### 2. 接入 Assess/Access Client 或堡垒机 PuTTY 调用
+
+Release 中的 `putty.exe` 是独立桥接程序，不是完整 PuTTY 客户端。将**仅此一个文件**复制或映射到 Assess/Access Client 配置的 PuTTY 可执行文件位置。
+
+```text
+Assess/Access Client / 堡垒机
+              |
+              v
+     发布包中的 putty.exe
+              |
+              v
+ 已安装的 Terminal-Agent-runtime.exe
+              |
+              v
+   同一 Terminal-Agent SSH 工作台
 ```
 
-After installing Terminal-Agent, copy or map only `release/win-unpacked/putty.exe` into the Assess/Access Client mapping location. Do not copy `Terminal-Agent-runtime.exe`, `resources`, or any other Electron files. The portable `putty.exe` bridge locates the installed Terminal-Agent and forwards AccessClient-compatible arguments (including temporary bastion credentials) to the installed runtime.
+桥接程序会转发 AccessClient 兼容参数，包括临时 `-load` 配置、`-pw` 临时密码和 `-raw` 模式，将会话在当前工作台中打开。不要把 `Terminal-Agent-runtime.exe`、`resources` 或其他 Electron 文件复制到映射目录。
 
-Every bastion jump appends a redacted diagnostic record to `putty-bridge.log` beside the mapped `putty.exe`. The log identifies the bridge, its runtime lookup, the safe argument shape, process start result, temporary-profile validation, and connection result. Passwords, tokens, private-key material, passphrases, and temporary-profile paths are not written to this log.
+每次桥接启动都会在 `putty.exe` 同级目录写入 `putty-bridge.log`。日志包含排障所需的运行时查找、参数形态和连接结果，但不会写入密码、令牌、私钥内容、口令或临时配置文件路径。
 
-The bridge first uses a valid registered install location and then safely checks a co-located runtime and standard Windows install locations. It does not modify the registry or delete files. If both the installation directory and its registry entry have been removed, no bridge can start the deleted runtime: run the Windows installer again, then reopen the connection from Assess/Access Client.
+### 3. 配置 AI 模型
 
-`npm run make:win` generates `Terminal-Agent-Setup-<version>.exe` and `Terminal-Agent-Uninstall-Cleanup-<version>.zip`. A GitHub release includes the Windows installer, the standalone `putty.exe` bridge for Assess/Access Client mapping, and the cleanup ZIP for removing stale Terminal-Agent entries from the Windows installed-apps list.
+1. 在工作台右上角打开“设置”。
+2. 在“大语言模型配置”新建可用的 Ollama、OpenAI 兼容或 llama.cpp 模型配置。
+3. 导入 API Key，选择“测试连接”，然后激活该模型。
+4. 如需图像任务，可在“视觉语言模型配置”和“模型选择”中配置路由。
+
+模型密钥仅通过主进程写入 Windows 受保护存储；页面只显示是否已配置，不会回显密钥。
+
+### 4. 使用任务式 AI 辅助驾驶 Shell
+
+在当前工作任务和关联 Shell 中描述目标，例如：
+
+```text
+检查 nginx 服务状态，判断是否存在异常，并给出风险最低的下一步操作。
+```
+
+推荐按下面的节奏执行：
+
+1. 让 AI 先说明分析结论和建议的证据采集步骤。
+2. 查看候选命令，核对它的主机、会话、参数和预期影响。
+3. 在“辅助驾驶”模式下选择“确认并执行”。确认标识只绑定当前会话和这条准确命令，五分钟后失效，且只能使用一次。
+4. 在 Shell 中观察结果，再继续下一步任务或要求 AI 根据结果调整建议。
+
+辅助驾驶是默认模式。它不会因为 AI 生成了命令就自动执行。
+
+### 5. 配置和使用安全围栏
+
+在“设置 → 安全围栏”中可查看、启停、测试并保存规则。首次运行时，以下规则默认启用：
+
+- `kill`、`killall`、`pkill`
+- `vi`、`vim`、`nvim`
+- `rm`
+- `systemctl stop`、`restart`、`reload`、`disable`、`mask`
+- `shutdown`、`reboot`、`poweroff`、`halt`
+- `mkfs`、`fdisk`、`parted`
+
+围栏命中的未授权命令不会发送到 SSH Shell。人员应先完成命令审阅，再对该候选命令进行一次性确认；系统只放行已确认的准确命令，不会把确认扩展到其他主机、会话或命令。
+
+### 6. 全自动驾驶仅用于明确授权的低风险会话
+
+如确有自动化需求，可在当前 Shell 的工具栏中选择“升级为全自动驾驶”，并在确认对话框中再次授权。该授权只对当前会话有效。
+
+全自动驾驶会跳过逐条候选命令的人审流程，因此不适用于未经确认的生产变更，也不应替代企业变更单、堡垒机授权、双人复核或回滚策略。对生产环境建议保持默认的辅助驾驶模式。
+
+## 企业使用边界与安全说明
+
+- Terminal-Agent 使用既有堡垒机或 SSH 账户建立连接，不替代 IAM、堡垒机授权、操作审计或变更管理系统。
+- 安全围栏是本地执行前控制，不是完整的命令授权系统；请按组织要求维护规则、权限和审批流程。
+- 临时堡垒机连接不会保存到“已保存会话”；临时配置和临时密码也不会写入会话簿。
+- 本地主机记忆采用显式授权和可配置采集范围，可在设置中查看、编辑或清除；不要将其作为机密信息保管系统。
+- 在任何自动化操作之前，仍应确认目标环境、业务窗口、备份/回滚方案和组织审批状态。
+
+## Release 文件说明
+
+`v1.0.4` Release 包含以下文件：
+
+| 文件 | 用途 |
+| --- | --- |
+| `Terminal-Agent-Setup-1.0.4.exe` | Windows x64 安装包。 |
+| `putty.exe` | 提供给 Assess/Access Client 或堡垒机映射的单文件桥接程序。 |
+| `Terminal-Agent-Uninstall-Cleanup-1.0.4.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
+| `latest.yml` 与 `.blockmap` | 更新元数据；部署自动更新时使用。 |
+
+清理工具使用方法：解压 ZIP 后，以管理员权限运行 `清理 Terminal-Agent 卸载残留.cmd`。工具会先列出匹配项，并要求明确输入 `Y`；删除前会导出相应的 `.reg` 备份。
+
+## 本地开发与打包
+
+```powershell
+npm install
+npm test
+npm run build
+npm run make:win
+```
+
+`npm run make:win` 会生成安装包、未打包的 Windows 目录、单文件 `putty.exe` 桥接程序和卸载残留清理 ZIP。完整发布说明见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。

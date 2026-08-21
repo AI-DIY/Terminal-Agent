@@ -70,7 +70,9 @@ export function registerSessionHandlers(
     })
     ipcMain.handle('sessions:profiles:delete', async (event, id: unknown) => {
       assertTrustedSender(event, sender)
-      await directProfiles.remove(terminalSessionIdSchema.parse(id))
+      const profileId = terminalSessionIdSchema.parse(id)
+      await directProfiles.remove(profileId)
+      sessions.revokeDirectProfile?.(profileId)
     })
   }
 
@@ -111,7 +113,7 @@ function toDirectRequest(request: RendererSessionRequest, keyMaterials: KeyMater
 }
 
 async function toSavedDirectRequest(profile: DirectSessionProfile): Promise<DirectSessionRequest> {
-  const common = { host: profile.host, port: profile.port, username: profile.username }
+  const common = { host: profile.host, port: profile.port, username: profile.username, profileId: profile.id }
   if (profile.auth.kind === 'password') return { ...common, auth: profile.auth }
   return {
     ...common,

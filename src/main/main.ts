@@ -15,43 +15,121 @@ import { configureAccessClientSingleInstance } from './access-client/single-inst
 import { createAccessClientSessionOpener } from './access-client/session-opener'
 import { AccessClientLaunchController } from './access-client/launch-controller'
 import { registerAccessClientLaunchHandlers } from './access-client/register-launch-error-handlers'
+import { BastionLaunchService } from './access-client/bastion-launch-service'
+import { UnavailableBastionTargetResolver } from './access-client/bastion-target-resolver'
+import { registerBastionLaunchHandlers } from './access-client/register-bastion-launch-handlers'
 import { SessionModeController } from './agent/session-mode-controller'
 import { SessionModeService } from './agent/session-mode-service'
 import { registerSessionModeHandlers } from './agent/register-session-mode-handlers'
 import { CandidateConfirmationService } from './agent/candidate-confirmation-service'
 import { ConfirmationService } from './agent/confirmation-service'
 import { registerConfirmationHandlers } from './agent/register-confirmation-handlers'
-import { ExecutionGateway } from './agent/execution-gateway'
+import { ApprovedExecutionAudit, ExecutionGateway } from './agent/execution-gateway'
 import { registerExecutionHandlers } from './agent/register-execution-handlers'
 import { registerAgentHandlers } from './agent/register-agent-handlers'
 import { AgentScheduler } from './agent/scheduler'
 import { AgentModelRuntime } from './agent/agent-model-runtime'
-import { ChatCompletionsClient } from './model/chat-completions-client'
+import { ModelProviderRouter } from './model/model-provider-router'
 import { FileRegexRuleRepository } from './settings/regex-rule-repository'
 import { RegexRuleSettingsService } from './settings/regex-rule-settings-service'
 import { JsonSettingsRepository } from './settings/settings-repository'
 import { ElectronSecretStore } from './settings/secret-store'
 import { ModelSettingsService } from './settings/model-settings-service'
+import { ModelProfileRepository } from './settings/model-profile-repository'
+import { ModelProfileService } from './settings/model-profile-service'
+import { ModelApiKeyEntryService } from './settings/model-api-key-entry-service'
 import { registerSettingsHandlers } from './settings/register-settings-handlers'
+import { HostMemorySettingsService } from './settings/host-memory-settings-service'
+import { registerHostMemoryHandlers } from './settings/register-host-memory-handlers'
 import { FileHostFactsRepository } from './facts/host-facts-repository'
 import { HostFactsService } from './facts/host-facts-service'
-import { registerSessionObservation } from './observation/register-session-observation'
+import { registerSessionObservation, type SessionObservationRegistration } from './observation/register-session-observation'
 import { recordPackagedWindowsInstallPath, writeWindowsInstallPath } from './windows/install-location'
+import { ChatRepository } from './chat/chat-repository'
+import { ChatService } from './chat/chat-service'
+import { registerChatHandlers } from './chat/register-chat-handlers'
+import { ChatRuntime } from './chat/chat-runtime'
+import { buildChatContext } from './chat/chat-context-builder'
+import { recoverChatStreamsBeforeCreatingMainWindow } from './chat/chat-startup'
+import { WorkbenchPreferencesService } from './settings/workbench-preferences-service'
+import { registerWorkbenchSettingsHandlers } from './settings/register-workbench-settings-handlers'
+import { ShellHistoryRepository } from './shell-history/shell-history-repository'
+import { ShellHistoryService } from './shell-history/shell-history-service'
+import { registerShellHistoryHandlers } from './shell-history/register-shell-history-handlers'
+import { registerShellHistoryLifecycle } from './shell-history/register-shell-history-lifecycle'
 
 let mainWindow: BrowserWindow | undefined
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
 const keyMaterials = new KeyMaterialStore()
 const secretStore = new ElectronSecretStore()
 const directSessions = new FileDirectSessionRepository(join(app.getPath('userData'), 'direct-sessions.json'), secretStore)
+const chats = new ChatService(new ChatRepository(join(app.getPath('userData'), 'chat-workspaces.json')))
+const hostFacts = new HostFactsService(new FileHostFactsRepository(join(app.getPath('userData'), 'host-facts.json')))
+const shellHistory = new ShellHistoryService(
+  new ShellHistoryRepository(join(app.getPath('userData'), 'shell-history.json')),
+  {
+    connectionOpener: {
+      canReconnect: reference => sessions.canReconnect(reference),
+      duplicate: (sessionId, chatId) => sessions.duplicate(sessionId, chatId),
+      reconnect: (reference, chatId) => sessions.reconnect(reference, chatId),
+    },
+  },
+)
+registerShellHistoryLifecycle(sessions, chats, shellHistory)
+const workbenchPreferences = new WorkbenchPreferencesService(join(app.getPath('userData'), 'workbench-preferences.json'))
 const sessionModes = new SessionModeController(new SessionModeService(), sessions)
 sessionModes.listen()
 const confirmations = new ConfirmationService()
 const candidateConfirmations = new CandidateConfirmationService(confirmations)
 sessions.onClosed(event => candidateConfirmations.closeSession(event.sessionId))
 const regexRules = new RegexRuleSettingsService(new FileRegexRuleRepository(join(app.getPath('userData'), 'regex-fence-rules.json')))
-const modelSettings = new ModelSettingsService(new JsonSettingsRepository(), secretStore)
-const chatCompletions = new ChatCompletionsClient()
-const agentScheduler = new AgentScheduler(new AgentModelRuntime(modelSettings, chatCompletions))
+const legacyModelSettings = new JsonSettingsRepository()
+const modelProfiles = new ModelProfileService(
+  new ModelProfileRepository(join(app.getPath('userData'), 'model-profiles.json')),
+  secretStore,
+  { legacySettings: legacyModelSettings },
+)
+const modelSettings = new ModelSettingsService(modelProfiles)
+const modelApiKeys = new ModelApiKeyEntryService(modelProfiles)
+const chatCompletions = new ModelProviderRouter()
+const agentScheduler = new AgentScheduler(new AgentModelRuntime(modelSettings, chatCompletions, undefined, modelProfiles))
+const approvedExecutionAudit = new ApprovedExecutionAudit()
+const chatRuntime = new ChatRuntime({
+  appendMessage: async request => {
+    const snapshot = await chats.appendMessage(request)
+    return { messageId: snapshot.chat.messages.at(-1)?.id }
+  },
+  updateMessage: async request => { await chats.updateMessage(request) },
+  getRetryMessageId: (chatId, content) => chats.findRetryMessage(chatId, content),
+  getContext: async chatId => {
+    const snapshot = await chats.get(chatId)
+    const facts = await Promise.all(snapshot.chat.shells.map(async shell => {
+      if (shell.status !== 'open') return null
+      const session = shell.sessionId ? sessions.snapshot().find(item => item.id === shell.sessionId) : undefined
+      const observedHostname = shell.sessionId ? sessions.observedHostname(shell.sessionId) : undefined
+      if (!session || !observedHostname) return null
+      const allowed = await Promise.resolve()
+        .then(() => hostMemorySettings.canObserveHost(session.hostname, observedHostname))
+        .catch(() => false)
+      if (!allowed) return null
+      const record = await hostFacts.snapshot(observedHostname).catch(() => null)
+      if (!record) return null
+      const filtered = await hostMemorySettings.filterFacts(record)
+      return { hostname: filtered.hostname, scope: 'host', values: filtered as unknown as Record<string, unknown> }
+    }))
+    return buildChatContext({
+      messages: snapshot.chat.messages,
+      shells: snapshot.chat.shells,
+      facts: facts.filter((record): record is NonNullable<typeof record> => Boolean(record)),
+      audit: approvedExecutionAudit.recent(snapshot.chat.shells.flatMap(shell => shell.sessionId ? [shell.sessionId] : [])),
+    })
+  },
+  resolveModel: async () => {
+    const profile = await modelProfiles.resolveRoute({ hasImages: false })
+    return { ...profile, contextLimit: profile.contextLimit ?? 1_024 }
+  },
+  stream: (settings, messages, onDelta, format, signal) => chatCompletions.stream(settings, messages, onDelta, format, signal),
+})
 const executionGateway = new ExecutionGateway(
   sessionModes,
   confirmations,
@@ -60,26 +138,38 @@ const executionGateway = new ExecutionGateway(
     sessions.write(sessionId, `${command}\n`)
     return { kind: 'sent' as const }
   },
+  approvedExecutionAudit,
 )
-const hostFacts = new HostFactsService(new FileHostFactsRepository(join(app.getPath('userData'), 'host-facts.json')))
-registerSessionObservation(sessions, hostFacts)
+const hostMemorySettings = new HostMemorySettingsService(join(app.getPath('userData'), 'host-memory-settings.json'))
 let unregisterSessionEvents: (() => void) | undefined
 let unregisterAccessClientLaunchEvents: (() => void) | undefined
+let unregisterBastionLaunchEvents: (() => void) | undefined
 let unregisterSessionModeHandlers: (() => void) | undefined
 let unregisterConfirmationHandlers: (() => void) | undefined
 let unregisterExecutionHandlers: (() => void) | undefined
 let unregisterAgentHandlers: (() => void) | undefined
 let unregisterSettingsHandlers: (() => void) | undefined
+let unregisterChatHandlers: (() => void) | undefined
+let unregisterShellHistoryHandlers: (() => void) | undefined
+let unregisterWorkbenchSettingsHandlers: (() => void) | undefined
+let unregisterHostMemoryHandlers: (() => void) | undefined
+let unregisterSessionObservation: SessionObservationRegistration | undefined
 const accessClient = new AccessClientService(
   new AccessSessionResolver(new FileSavedSessionRepository(join(app.getPath('userData'), 'access-client-sessions.json')), readTempSession),
   createAccessClientSessionOpener(sessions),
 )
 const accessClientLaunches = new AccessClientLaunchController(accessClient)
+const bastionLaunches = new BastionLaunchService(
+  new UnavailableBastionTargetResolver(),
+  createAccessClientSessionOpener(sessions),
+)
+sessions.onClosed(event => bastionLaunches.closeSession(event.sessionId))
 
 export function createMainWindow(): BrowserWindow {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -87,19 +177,15 @@ export function createMainWindow(): BrowserWindow {
       sandbox: true
     }
   })
-
-  const rendererUrl = process.env.ELECTRON_RENDERER_URL
-  if (rendererUrl) {
-    void mainWindow.loadURL(rendererUrl)
-  } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  const rendererWindow = mainWindow
 
   mainWindow.on('closed', () => {
     unregisterSessionEvents?.()
     unregisterSessionEvents = undefined
     unregisterAccessClientLaunchEvents?.()
     unregisterAccessClientLaunchEvents = undefined
+    unregisterBastionLaunchEvents?.()
+    unregisterBastionLaunchEvents = undefined
     unregisterSessionModeHandlers?.()
     unregisterSessionModeHandlers = undefined
     unregisterConfirmationHandlers?.()
@@ -110,16 +196,56 @@ export function createMainWindow(): BrowserWindow {
     unregisterAgentHandlers = undefined
     unregisterSettingsHandlers?.()
     unregisterSettingsHandlers = undefined
+    unregisterChatHandlers?.()
+    unregisterChatHandlers = undefined
+    unregisterShellHistoryHandlers?.()
+    unregisterShellHistoryHandlers = undefined
+    unregisterWorkbenchSettingsHandlers?.()
+    unregisterWorkbenchSettingsHandlers = undefined
+    unregisterHostMemoryHandlers?.()
+    unregisterHostMemoryHandlers = undefined
+    unregisterSessionObservation?.()
+    unregisterSessionObservation = undefined
     mainWindow = undefined
   })
 
   unregisterSessionEvents = registerSessionHandlers(sessions, keyMaterials, mainWindow.webContents, directSessions)
   unregisterAccessClientLaunchEvents = registerAccessClientLaunchHandlers(accessClientLaunches, mainWindow.webContents)
+  unregisterBastionLaunchEvents = registerBastionLaunchHandlers(bastionLaunches, mainWindow.webContents)
   unregisterSessionModeHandlers = registerSessionModeHandlers(sessionModes, mainWindow.webContents)
   unregisterConfirmationHandlers = registerConfirmationHandlers(candidateConfirmations, mainWindow.webContents)
   unregisterExecutionHandlers = registerExecutionHandlers(executionGateway, mainWindow.webContents)
-  unregisterAgentHandlers = registerAgentHandlers(agentScheduler, sessions, hostFacts, candidateConfirmations, mainWindow.webContents, executionGateway)
-  unregisterSettingsHandlers = registerSettingsHandlers(modelSettings, regexRules, mainWindow.webContents, chatCompletions)
+  unregisterAgentHandlers = registerAgentHandlers(agentScheduler, sessions, hostFacts, candidateConfirmations, mainWindow.webContents, executionGateway, { hostMemory: hostMemorySettings })
+  unregisterSettingsHandlers = registerSettingsHandlers(modelSettings, regexRules, mainWindow.webContents, chatCompletions, modelProfiles, modelApiKeys)
+  unregisterSessionObservation = registerSessionObservation(sessions, hostFacts, hostMemorySettings, mainWindow.webContents)
+  unregisterHostMemoryHandlers = registerHostMemoryHandlers(
+    hostMemorySettings,
+    hostFacts,
+    mainWindow.webContents,
+    {
+      acknowledge: token => unregisterSessionObservation?.acknowledge(token) ?? Promise.reject(new Error('Host memory observation is unavailable')),
+      dismiss: token => unregisterSessionObservation?.dismiss(token) ?? Promise.resolve(),
+      revokeHost: hostIdentity => unregisterSessionObservation?.revokeHost(hostIdentity) ?? Promise.reject(new Error('Host memory observation is unavailable')),
+      restoreHostAuthorization: undo => unregisterSessionObservation?.restoreHostAuthorization(undo) ?? Promise.reject(new Error('Host memory observation is unavailable')),
+      pending: () => unregisterSessionObservation?.pending() ?? [],
+    },
+  )
+  unregisterChatHandlers = registerChatHandlers(chats, mainWindow.webContents, sessions, chatRuntime)
+  unregisterShellHistoryHandlers = registerShellHistoryHandlers(shellHistory, mainWindow.webContents)
+  unregisterWorkbenchSettingsHandlers = registerWorkbenchSettingsHandlers(
+    workbenchPreferences,
+    mainWindow.webContents,
+    () => {
+      if (mainWindow === rendererWindow) rendererWindow.show()
+    },
+  )
+
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL
+  if (rendererUrl) {
+    void mainWindow.loadURL(rendererUrl)
+  } else {
+    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
 
   return mainWindow
 }
@@ -127,7 +253,7 @@ export function createMainWindow(): BrowserWindow {
 const isPrimaryInstance = configureAccessClientSingleInstance(app, accessClientLaunches)
 
 if (isPrimaryInstance) {
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     void recordPackagedWindowsInstallPath({
       platform: process.platform,
       isPackaged: app.isPackaged,
@@ -135,7 +261,10 @@ if (isPrimaryInstance) {
       writeInstallPath: writeWindowsInstallPath,
     })
     void regexRules.load().catch(() => undefined)
-    createMainWindow()
+    await recoverChatStreamsBeforeCreatingMainWindow(
+      () => chats.recoverInterruptedStreams(),
+      createMainWindow,
+    )
     void accessClientLaunches.tryOpenFromArgv(process.argv)
 
     app.on('activate', () => {

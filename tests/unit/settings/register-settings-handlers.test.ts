@@ -42,6 +42,65 @@ describe('registerSettingsHandlers', () => {
     })
     expect(tester.verify).toHaveBeenCalledWith({ endpoint: 'https://compatible.example/v1/chat/completions', model: 'compatible-model', contextLimit: 8_000, apiKey: 'sk-protected' })
   })
+
+  it('rejects plaintext API keys on the legacy renderer model save and test channels', async () => {
+    const legacyInput = {
+      endpoint: 'https://compatible.example/v1/chat/completions', model: 'compatible-model', contextLimit: 8_000, apiKey: 'legacy-direct-key',
+    }
+    const models = {
+      loadForRenderer: vi.fn(),
+      saveFromRenderer: vi.fn().mockResolvedValue(undefined),
+      prepareForConnectionTest: vi.fn().mockResolvedValue({ ...legacyInput }),
+    }
+    const tester = { verify: vi.fn().mockResolvedValue({ model: 'compatible-model' }) }
+    const sender = {}
+    registerSettingsHandlers(models, { list: vi.fn(() => []), save: vi.fn() }, sender as never, tester)
+
+    await expect(handler('settings:model:save')({ sender }, legacyInput)).rejects.toThrow()
+    await expect(handler('settings:model:test')({ sender }, legacyInput)).rejects.toThrow()
+
+    expect(models.saveFromRenderer).not.toHaveBeenCalled()
+    expect(models.prepareForConnectionTest).not.toHaveBeenCalled()
+    expect(tester.verify).not.toHaveBeenCalled()
+  })
+
+  it('rejects API keys in the profile settings IPC request', async () => {
+    const profiles = {
+      list: vi.fn(), get: vi.fn(), save: vi.fn(), activate: vi.fn(), delete: vi.fn(),
+      prepareForConnectionTest: vi.fn(), getRouting: vi.fn(), setRouting: vi.fn(),
+    }
+    const sender = {}
+    registerSettingsHandlers(
+      { loadForRenderer: vi.fn(), saveFromRenderer: vi.fn(), prepareForConnectionTest: vi.fn() },
+      { list: vi.fn(() => []), save: vi.fn() }, sender as never, { verify: vi.fn() }, profiles as never,
+    )
+
+    const profileInputWithKey = {
+      name: 'Primary', kind: 'llm', provider: 'openai', model: 'gpt-5', endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 8_000, apiKey: 'secret',
+    }
+    await expect(handler('settings:models:save')({ sender }, profileInputWithKey)).rejects.toThrow()
+    await expect(handler('settings:models:test')({ sender }, profileInputWithKey)).rejects.toThrow()
+    expect(profiles.save).not.toHaveBeenCalled()
+    expect(profiles.prepareForConnectionTest).not.toHaveBeenCalled()
+  })
+
+  it('requires explicit no-route authorization on the profile delete IPC', async () => {
+    const profiles = {
+      list: vi.fn(), get: vi.fn(), save: vi.fn(), activate: vi.fn(), delete: vi.fn().mockResolvedValue(undefined),
+      prepareForConnectionTest: vi.fn(), getRouting: vi.fn(), setRouting: vi.fn(),
+    }
+    const sender = {}
+    registerSettingsHandlers(
+      { loadForRenderer: vi.fn(), saveFromRenderer: vi.fn(), prepareForConnectionTest: vi.fn() },
+      { list: vi.fn(() => []), save: vi.fn() }, sender as never, undefined, profiles as never,
+    )
+
+    await expect(handler('settings:models:delete')({ sender }, { id: 'active', replacementId: null })).rejects.toThrow()
+    expect(profiles.delete).not.toHaveBeenCalled()
+
+    await expect(handler('settings:models:delete')({ sender }, { id: 'active', replacementId: null, allowNoActive: true })).resolves.toBeUndefined()
+    expect(profiles.delete).toHaveBeenCalledWith('active', { replacementId: null, allowNoActive: true })
+  })
 })
 
 function handler(channel: string): (event: { sender: unknown }, request?: unknown) => Promise<unknown> {

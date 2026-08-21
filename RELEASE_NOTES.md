@@ -1,10 +1,24 @@
-# Terminal-Agent v1.0.3
+# Terminal-Agent v1.0.4
 
-Release date: 2026-08-11
+Release date: 2026-08-21
+
+## Unified SSH workbench and enterprise bastion entry
+
+- Adds the unified workbench for direct password SSH, direct private-key SSH, bastion CMDB launch, and named bastion-host launch.
+- Adds durable work-task chat, associated Shell workspaces, local Shell history playback, configurable workbench layout, and consented local host memory.
+- Keeps Assess/Access Client-compatible `putty.exe` as a single-file bridge: temporary bastion SSH/Raw profiles open in the installed Terminal-Agent workbench without being saved as normal session profiles.
+
+## AI task assistance and execution safeguards
+
+- Adds task-oriented global AI chat and AI model profile/routing settings for Ollama, OpenAI-compatible, and llama.cpp endpoints.
+- Uses Copilot mode by default: AI proposes a command and a human must confirm the exact candidate before it is sent to the current Shell.
+- Includes configurable default safety fences for process termination, interactive editors, file removal, service changes, host power operations, and disk partitioning or formatting.
+- Keeps autonomous execution behind an explicit, current-session-only confirmation. It is intended only for verified low-risk maintenance or test work.
+- Redacts sensitive material from AI flows, bridge diagnostics, and approved-command context; model keys are stored through OS-protected storage.
 
 ## Windows uninstall-entry cleanup
 
-- Added `Terminal-Agent-Uninstall-Cleanup-1.0.3.zip` for cleaning Terminal-Agent entries left in the Windows installed-apps list.
+- Includes `Terminal-Agent-Uninstall-Cleanup-1.0.4.zip` for cleaning Terminal-Agent entries left in the Windows installed-apps list.
 - After extracting the ZIP, users can double-click `清理 Terminal-Agent 卸载残留.cmd`; it requests administrator permission, lists every matching entry, and requires an explicit `Y` before changing the registry.
 - Each matching uninstall entry is exported to a `.reg` backup before deletion. The tool does not uninstall Terminal-Agent, remove application files or user data, or remove `HKCU\Software\Terminal-Agent\InstallPath`.
 

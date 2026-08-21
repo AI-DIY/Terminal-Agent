@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ChatCompletionsClient } from '../../../src/main/model/chat-completions-client'
+import { ChatCompletionsClient, ModelConnectionError } from '../../../src/main/model/chat-completions-client'
 
 describe('ChatCompletionsClient', () => {
   it('verifies a standard non-streaming Chat Completions connection without JSON Schema extensions', async () => {
@@ -38,6 +38,26 @@ describe('ChatCompletionsClient', () => {
     await expect(client.stream(settings, [{ role: 'user', content: 'ping' }], vi.fn())).rejects.not.toThrow(apiKey)
   })
 
+  it('does not return a provider error body that could contain other configured credentials', async () => {
+    const apiKey = 'active-tenant-credential'
+    const otherKey = 'other-tenant-credential'
+    const errorBody = JSON.stringify({ supplied: apiKey, api_key: otherKey })
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(errorBody, { status: 401 }))
+      .mockResolvedValueOnce(new Response(errorBody, { status: 401 }))
+    const client = new ChatCompletionsClient(fetcher)
+    const settings = { endpoint: 'https://compatible.example/v1/chat/completions', model: 'compatible-model', apiKey, contextLimit: 12_000 }
+
+    const verifyError = await client.verify(settings).catch(error => error as Error)
+    const streamError = await client.stream(settings, [{ role: 'user', content: 'ping' }], vi.fn()).catch(error => error as Error)
+
+    for (const error of [verifyError, streamError]) {
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).not.toContain(apiKey)
+      expect((error as Error).message).not.toContain(otherKey)
+    }
+  })
+
   it('turns a network failure into a diagnosable model-connection error without leaking the API key', async () => {
     const apiKey = 'sk-should-not-appear'
     const client = new ChatCompletionsClient(vi.fn().mockRejectedValue(new Error(`TLS failed for ${apiKey}`)))
@@ -73,7 +93,30 @@ describe('ChatCompletionsClient', () => {
     expect(onDelta).toHaveBeenCalledWith('你好')
   })
 
-  it('includes the HTTP status and a bounded response preview for a rejected request', async () => {
+  it('converts malformed SSE data into a safe connection error without returning remote text', async () => {
+    const apiKey = 'active-sse-credential'
+    const otherKey = 'other-sse-credential'
+    const remoteText = `{"active":"${apiKey}","other":"${otherKey}",}`
+    const fetcher = vi.fn().mockResolvedValue(new Response(`data: ${remoteText}\n\n`, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }))
+    const client = new ChatCompletionsClient(fetcher)
+
+    const error = await client.stream(
+      { endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5', apiKey, contextLimit: 12_000 },
+      [{ role: 'user', content: 'ping' }],
+      vi.fn(),
+    ).catch(reason => reason as Error)
+
+    expect(error).toBeInstanceOf(ModelConnectionError)
+    expect((error as Error).message).toBe('模型连接失败：模型服务返回了无效的 SSE 数据。')
+    expect((error as Error).message).not.toContain(apiKey)
+    expect((error as Error).message).not.toContain(otherKey)
+    expect((error as Error).message).not.toContain(remoteText)
+  })
+
+  it('includes the HTTP status without returning a remote response body for a rejected request', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('invalid API key', { status: 401 }))
     const client = new ChatCompletionsClient(fetcher)
 
@@ -81,7 +124,7 @@ describe('ChatCompletionsClient', () => {
       { endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5', apiKey: 'sk-test', contextLimit: 12_000 },
       [{ role: 'user', content: '分析这个错误' }],
       vi.fn(),
-    )).rejects.toThrow('模型连接失败（HTTP 401）：invalid API key')
+    )).rejects.toThrow('模型连接失败（HTTP 401）。请检查模型配置和访问权限。')
   })
 
   it('forwards the active run AbortSignal to fetch', async () => {

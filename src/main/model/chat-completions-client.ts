@@ -24,12 +24,11 @@ export class ChatCompletionsClient {
   async verify(settings: ModelSettingsInput): Promise<{ model: string }> {
     let response: Response
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`
       response = await this.fetcher(settings.endpoint, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${settings.apiKey}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           model: settings.model,
           messages: [{ role: 'user', content: 'ping' }],
@@ -41,7 +40,7 @@ export class ChatCompletionsClient {
     }
 
     if (!response.ok) {
-      throw new ModelConnectionError(`模型连接失败（HTTP ${response.status}）：${safePreview(await response.text(), settings.apiKey)}`)
+      throw httpFailure(response.status)
     }
     return { model: settings.model }
   }
@@ -55,12 +54,11 @@ export class ChatCompletionsClient {
   ): Promise<void> {
     let response: Response
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`
       response = await this.fetcher(settings.endpoint, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${settings.apiKey}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           model: settings.model,
           messages,
@@ -75,7 +73,7 @@ export class ChatCompletionsClient {
     }
 
     if (!response.ok) {
-      throw new ModelConnectionError(`模型连接失败（HTTP ${response.status}）：${safePreview(await response.text(), settings.apiKey)}`)
+      throw httpFailure(response.status)
     }
 
     if (!response.body) {
@@ -128,7 +126,12 @@ export class ChatCompletionsClient {
         return { remaining: '', done: true }
       }
 
-      const payload = JSON.parse(data) as { choices?: Array<{ delta?: { content?: unknown } }> }
+      let payload: { choices?: Array<{ delta?: { content?: unknown } }> }
+      try {
+        payload = JSON.parse(data) as { choices?: Array<{ delta?: { content?: unknown } }> }
+      } catch {
+        throw new ModelConnectionError('模型连接失败：模型服务返回了无效的 SSE 数据。')
+      }
       const content = payload.choices?.[0]?.delta?.content
       if (typeof content === 'string' && content.length > 0) {
         onDelta(content)
@@ -137,13 +140,6 @@ export class ChatCompletionsClient {
   }
 }
 
-function safePreview(value: string, apiKey: string): string {
-  const withConfiguredKeyRedacted = apiKey ? value.split(apiKey).join('[REDACTED]') : value
-  const safe = withConfiguredKeyRedacted
-    .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
-    .replace(/\bsk-[A-Za-z0-9_-]+\b/g, '[REDACTED]')
-    .replace(/\b(api[ _-]?key|token|password)\s*[:=]\s*\S+/gi, '$1=[REDACTED]')
-    .trim()
-    .slice(0, 512)
-  return safe || '接口未返回可显示的错误详情。'
+function httpFailure(status: number): ModelConnectionError {
+  return new ModelConnectionError(`模型连接失败（HTTP ${status}）。请检查模型配置和访问权限。`)
 }

@@ -161,9 +161,10 @@ describe('registerSessionHandlers', () => {
       auth: { kind: 'password', password: 'secret-password' },
     })
     expect(sessions.connect).toHaveBeenCalledWith({
-      host: 'api.example.com', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret-password' },
+      host: 'api.example.com', port: 22, username: 'ops', profileId: 'prod-api', auth: { kind: 'password', password: 'secret-password' },
     })
     expect(profiles.remove).toHaveBeenCalledWith('prod-api')
+    expect(sessions.revokeDirectProfile).toHaveBeenCalledWith('prod-api')
     expect(JSON.stringify(sender.send.mock.calls)).not.toContain('secret-password')
 
     dispose()
@@ -233,7 +234,7 @@ describe('registerSessionHandlers', () => {
     }
 
     expect(sessions.connect).toHaveBeenCalledWith({
-      host: 'api.example.com', port: 22, username: 'ops',
+      host: 'api.example.com', port: 22, username: 'ops', profileId: 'prod-api',
       auth: { kind: 'privateKey', key: { fileName: 'prod.key', content: Buffer.from('PRIVATE KEY CONTENT'), passphrase: 'key-phrase' } },
     })
     expect(JSON.stringify(sender.send.mock.calls)).not.toContain('PRIVATE KEY CONTENT')
@@ -254,6 +255,7 @@ function createSessions() {
     resize: vi.fn(),
     close: vi.fn(),
     closeAll: vi.fn(),
+    revokeDirectProfile: vi.fn(),
     snapshot: vi.fn(),
     onData: vi.fn().mockReturnValue(vi.fn()),
     onClosed: vi.fn().mockReturnValue(vi.fn()),

@@ -8,6 +8,7 @@ export class RawClientAdapter implements SshClientPort {
     const socket = await connectSocket(options.host, options.port, this.createSocket)
     const shell = new RawShell(socket)
     return {
+      ...(socket.remoteAddress ? { remoteAddress: socket.remoteAddress } : {}),
       openShell: async () => shell,
       close: () => shell.close(),
     }

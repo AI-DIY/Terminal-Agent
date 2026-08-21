@@ -13,7 +13,10 @@ export function createAccessClientSessionOpener(sessions: SessionOpenerPort): Ac
       title: request.title,
       columns: request.columns,
       rows: request.rows,
+      ...(request.profileId ? { profileId: request.profileId } : {}),
     }),
     openRaw: request => sessions.connectRaw(request),
   }
 }
+
+export type AccessClientSessionOpenerPort = ReturnType<typeof createAccessClientSessionOpener>

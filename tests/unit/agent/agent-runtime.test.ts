@@ -8,17 +8,39 @@ const request = {
   facts: {
     hostname: 'api-prod',
     observedAt: '2026-08-09T00:00:00.000Z',
-    software: { nginx: '1.25.1' },
-    processes: [{ name: 'nginx', status: 'running' }],
-    installLocations: { nginx: '/etc/nginx' },
-    services: { 'nginx.service': 'active', PASSWORD: 'correct horse battery staple' },
-    logLocations: ['/var/log/nginx/access.log'],
-    configurationHashes: { '/etc/nginx/nginx.conf': 'sha256:abc123' },
+    connectionIp: '192.0.2.10',
+    operatingSystem: { name: 'Linux', version: '6.1.0' },
+    cpu: { model: 'Example CPU', architecture: 'x86_64', logicalCores: 8 },
+    memory: { totalBytes: 8_589_934_592 },
+    disks: [{ name: 'sda', totalBytes: 128_000_000_000 }],
+    networkInterfaces: [{ name: 'eth0', addresses: ['192.0.2.10'] }],
+    processes: [{ name: 'nginx', pid: 42, workingDirectory: '/usr/sbin' }],
+    currentUser: 'root',
+    workingDirectory: '/srv/apps/api',
+    services: { 'nginx.service': 'active running', PASSWORD: 'correct horse battery staple' },
   },
   terminalExcerpt: 'FULL TERMINAL TRANSCRIPT password=do-not-send',
 }
 
 describe('AgentModelRuntime', () => {
+  it('resolves the active routed profile through ModelProfileService before streaming', async () => {
+    const client = { stream: vi.fn(async (_settings, _messages, onDelta) => onDelta('{"analysis":"正常","evidenceStrategy":[],"candidate":null}')) }
+    const resolveRoute = vi.fn().mockResolvedValue({
+      id: 'vlm-1', kind: 'vlm', provider: 'ollama', name: 'vision', model: 'llava',
+      endpoint: 'http://127.0.0.1:11434/api/chat', maxImages: 4, apiKey: null,
+    })
+    const runtime = new AgentModelRuntime(
+      { load: vi.fn().mockResolvedValue(null) },
+      client,
+      () => 'candidate-1',
+      { resolveRoute },
+    )
+
+    await runtime.stream({ ...request, hasImages: true }, vi.fn())
+
+    expect(resolveRoute).toHaveBeenCalledWith({ hasImages: true })
+    expect(client.stream).toHaveBeenCalledWith(expect.objectContaining({ provider: 'ollama', model: 'llava' }), expect.anything(), expect.any(Function))
+  })
   it('does not include bearer, GitHub, AWS, or labelled credentials in model messages', async () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvcHMiLCJyb2xlIjoiYWRtaW4ifQ.signature'
     const githubToken = 'ghp_abcdefghijklmnopqrstuvwxyz1234567890'
@@ -36,7 +58,7 @@ describe('AgentModelRuntime', () => {
       goal: `Authorization: Bearer ${jwt}; GitHub ${githubToken}; AWS ${awsKey}; password=correct horse; API Key=local-key; ${privateKey}`,
       facts: {
         ...request.facts,
-        software: { github: githubToken, aws: awsKey },
+        cpu: { model: githubToken, architecture: awsKey, logicalCores: 8 },
         services: { Authorization: `Bearer ${jwt}`, password: 'correct horse', privateKey },
       },
     }, vi.fn())

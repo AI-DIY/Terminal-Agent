@@ -10,8 +10,7 @@ const { handle, removeHandler } = vi.hoisted(() => ({ handle: vi.fn(), removeHan
 vi.mock('electron', () => ({ ipcMain: { handle, removeHandler } }))
 
 const facts = {
-  hostname: 'api-prod', observedAt: '2026-08-09T00:00:00.000Z', software: {}, processes: [],
-  installLocations: {}, services: {}, logLocations: [], configurationHashes: {},
+  hostname: 'api-prod', observedAt: '2026-08-09T00:00:00.000Z',
 }
 
 describe('registerAgentHandlers', () => {
@@ -34,7 +33,7 @@ describe('registerAgentHandlers', () => {
     const sender = { send: vi.fn() }
     const dispose = registerAgentHandlers(
       scheduler,
-      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', observedHostname: 'api-prod', mode: 'copilot' }] },
+      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }], observedHostname: () => 'api-prod' },
       { snapshot: vi.fn().mockResolvedValue(facts) },
       candidates,
       sender as never,
@@ -55,11 +54,29 @@ describe('registerAgentHandlers', () => {
     expect(removeHandler).toHaveBeenCalledWith('agent:start')
   })
 
+  it('forwards an explicitly supplied image flag to the scheduler', async () => {
+    const scheduler = { start: vi.fn().mockResolvedValue(undefined) }
+    const sender = { send: vi.fn() }
+    const dispose = registerAgentHandlers(
+      scheduler,
+      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }], observedHostname: () => 'api-prod' },
+      { snapshot: vi.fn().mockResolvedValue(facts) },
+      { save: vi.fn() },
+      sender as never,
+    )
+    const start = handle.mock.calls.find(([channel]) => channel === 'agent:start')?.[1] as (event: { sender: unknown }, request: unknown) => Promise<void>
+
+    await start({ sender }, { sessionId: 'session-a', runId: '550e8400-e29b-41d4-a716-446655440008', goal: '检查图片', hasImages: true })
+
+    expect(scheduler.start).toHaveBeenCalledWith(expect.objectContaining({ hasImages: true }), expect.any(Function))
+    dispose()
+  })
+
   it('publishes the no-configuration error without exposing failure details', async () => {
     const sender = { send: vi.fn() }
     const dispose = registerAgentHandlers(
       { start: vi.fn().mockRejectedValue(new ModelConfigurationError('missing key sk-real-key')) },
-      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', observedHostname: 'api-prod', mode: 'copilot' }] },
+      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }], observedHostname: () => 'api-prod' },
       { snapshot: vi.fn().mockResolvedValue(facts) },
       { save: vi.fn() },
       sender as never,
@@ -89,7 +106,7 @@ describe('registerAgentHandlers', () => {
           candidate: { id: 'candidate-1', sessionId: 'session-a', command: `curl -H "Authorization: Bearer ${jwt}" https://api.example.test`, explanation: '检查' },
         })
       }) },
-      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', observedHostname: 'api-prod', mode: 'copilot' }] },
+      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }], observedHostname: () => 'api-prod' },
       { snapshot: vi.fn().mockResolvedValue(facts) },
       candidates,
       sender as never,
@@ -104,54 +121,12 @@ describe('registerAgentHandlers', () => {
     dispose()
   })
 
-  it('uses the observed remote hostname rather than the IP route host for agent facts', async () => {
-    const shell = createShell()
-    const sessions = new SessionService({
-      connect: vi.fn().mockResolvedValue({
-        close: vi.fn(),
-        openShell: vi.fn().mockResolvedValue(shell),
-        execute: vi.fn((command: string) => Promise.resolve(command === 'hostname' ? 'api-prod\n' : '')),
-      }),
-    }, { load: vi.fn() })
-    const observedFacts = { ...facts, hostname: 'api-prod' }
-    const factsSource = {
-      observe: vi.fn().mockResolvedValue({ record: observedFacts, changed: ['initial'] }),
-      snapshot: vi.fn().mockResolvedValue(observedFacts),
-    }
-    registerSessionObservation(sessions, factsSource)
-    const session = await sessions.connect({
-      host: '10.0.0.12', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
-    })
-    await vi.waitFor(() => expect(factsSource.observe).toHaveBeenCalledOnce())
-    await vi.waitFor(() => expect(sessions.snapshot()).toEqual([expect.objectContaining({ id: session.id, hostname: '10.0.0.12', observedHostname: 'api-prod' })]))
-
-    const sender = { send: vi.fn() }
-    const scheduler = { start: vi.fn().mockResolvedValue(undefined) }
-    const dispose = registerAgentHandlers(
-      scheduler,
-      sessions,
-      factsSource,
-      { save: vi.fn() },
-      sender as never,
-    )
-    const start = handle.mock.calls.find(([channel]) => channel === 'agent:start')?.[1] as (event: { sender: unknown }, request: unknown) => Promise<void>
-
-    await start({ sender }, { sessionId: session.id, runId: '550e8400-e29b-41d4-a716-446655440004', goal: '检查服务' })
-
-    expect(factsSource.snapshot).toHaveBeenCalledWith('api-prod')
-    expect(factsSource.snapshot).not.toHaveBeenCalledWith('10.0.0.12')
-    expect(scheduler.start).toHaveBeenCalledWith(expect.objectContaining({
-      session: { id: session.id, hostname: 'api-prod' },
-    }), expect.any(Function))
-    dispose()
-  })
-
   it('does not request facts by a route host before observation has completed', async () => {
     const sender = { send: vi.fn() }
     const factsSource = { snapshot: vi.fn().mockResolvedValue(facts) }
     const dispose = registerAgentHandlers(
       { start: vi.fn() },
-      { snapshot: () => [{ id: 'session-a', hostname: '10.0.0.12', mode: 'copilot' }] },
+      { snapshot: () => [{ id: 'session-a', hostname: '10.0.0.12', mode: 'copilot' }], observedHostname: () => undefined },
       factsSource,
       { save: vi.fn() },
       sender as never,
@@ -169,6 +144,107 @@ describe('registerAgentHandlers', () => {
     dispose()
   })
 
+  it('does not make an IP session available to the agent without a host memory gate', async () => {
+    const shell = createShell()
+    const sessions = new SessionService({
+      connect: vi.fn().mockResolvedValue({
+        close: vi.fn(),
+        openShell: vi.fn().mockResolvedValue(shell),
+        execute: vi.fn((command: string) => Promise.resolve(command === 'hostname' ? 'api-prod\n' : '')),
+      }),
+    }, { load: vi.fn() })
+    const factsSource = {
+      observe: vi.fn(),
+      snapshot: vi.fn().mockResolvedValue(facts),
+    }
+    registerSessionObservation(sessions, factsSource)
+    const session = await sessions.connect({
+      host: '10.0.0.12', port: 22, username: 'ops', auth: { kind: 'password', password: '' },
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(sessions.snapshot()).toEqual([expect.objectContaining({ id: session.id, hostname: '10.0.0.12' })])
+    expect(sessions.snapshot()[0]).not.toHaveProperty('observedHostname')
+    expect(factsSource.observe).not.toHaveBeenCalled()
+
+    const sender = { send: vi.fn() }
+    const scheduler = { start: vi.fn() }
+    const dispose = registerAgentHandlers(
+      scheduler,
+      sessions,
+      factsSource,
+      { save: vi.fn() },
+      sender as never,
+    )
+    const start = handle.mock.calls.find(([channel]) => channel === 'agent:start')?.[1] as (event: { sender: unknown }, request: unknown) => Promise<void>
+
+    await start({ sender }, { sessionId: session.id, runId: '550e8400-e29b-41d4-a716-446655440004', goal: '检查服务' })
+
+    expect(factsSource.snapshot).not.toHaveBeenCalled()
+    expect(scheduler.start).not.toHaveBeenCalled()
+    expect(sender.send).toHaveBeenCalledWith('agent:error', {
+      sessionId: session.id,
+      runId: '550e8400-e29b-41d4-a716-446655440004',
+      message: '当前会话尚未收集到主机事实。请稍后重试。',
+    })
+    dispose()
+  })
+
+  it('does not read cached facts for a new request while host memory collection is disabled', async () => {
+    const sender = { send: vi.fn() }
+    const factsSource = { snapshot: vi.fn().mockResolvedValue(facts) }
+    const scheduler = { start: vi.fn() }
+    const dispose = registerAgentHandlers(
+      scheduler,
+      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }], observedHostname: () => 'api-prod' },
+      factsSource,
+      { save: vi.fn() },
+      sender as never,
+      undefined,
+      { hostMemory: { canCollect: vi.fn().mockResolvedValue(false) } },
+    )
+    const start = handle.mock.calls.find(([channel]) => channel === 'agent:start')?.[1] as (event: { sender: unknown }, request: unknown) => Promise<void>
+
+    await start({ sender }, { sessionId: 'session-a', runId: '550e8400-e29b-41d4-a716-446655440015', goal: '检查服务' })
+
+    expect(factsSource.snapshot).not.toHaveBeenCalled()
+    expect(scheduler.start).not.toHaveBeenCalled()
+    expect(sender.send).toHaveBeenCalledWith('agent:error', expect.objectContaining({ sessionId: 'session-a', runId: '550e8400-e29b-41d4-a716-446655440015' }))
+    dispose()
+  })
+
+  it('does not read cached facts when the observed host authorization is revoked during lookup', async () => {
+    let releaseSnapshot!: (value: typeof facts) => void
+    let authorized = true
+    const sender = { send: vi.fn() }
+    const factsSource = { snapshot: vi.fn(() => new Promise<typeof facts>(resolve => { releaseSnapshot = resolve })) }
+    const scheduler = { start: vi.fn() }
+    const dispose = registerAgentHandlers(
+      scheduler,
+      { snapshot: () => [{ id: 'session-a', hostname: '192.0.2.10', mode: 'copilot' }], observedHostname: () => 'api-prod' },
+      factsSource,
+      { save: vi.fn() },
+      sender as never,
+      undefined,
+      { hostMemory: {
+        canCollect: vi.fn().mockResolvedValue(true),
+        canObserveHost: vi.fn(async () => authorized),
+      } },
+    )
+    const start = handle.mock.calls.find(([channel]) => channel === 'agent:start')?.[1] as (event: { sender: unknown }, request: unknown) => Promise<void>
+
+    const run = start({ sender }, { sessionId: 'session-a', runId: '550e8400-e29b-41d4-a716-446655440016', goal: '检查服务' })
+    await vi.waitFor(() => expect(factsSource.snapshot).toHaveBeenCalledOnce())
+    authorized = false
+    releaseSnapshot(facts)
+    await run
+
+    expect(scheduler.start).not.toHaveBeenCalled()
+    expect(sender.send).toHaveBeenCalledWith('agent:error', expect.objectContaining({
+      sessionId: 'session-a', runId: '550e8400-e29b-41d4-a716-446655440016',
+    }))
+    dispose()
+  })
+
   it('drops delayed A1 callbacks after A2 becomes the current run before saving a candidate', async () => {
     const callbacks: Array<(event: AgentStreamEvent) => void> = []
     const complete: Array<() => void> = []
@@ -182,7 +258,7 @@ describe('registerAgentHandlers', () => {
     const candidates = { save: vi.fn() }
     const dispose = registerAgentHandlers(
       scheduler,
-      { snapshot: () => [{ id: 'session-a', hostname: '10.0.0.12', observedHostname: 'api-prod', mode: 'copilot' }] },
+      { snapshot: () => [{ id: 'session-a', hostname: '10.0.0.12', mode: 'copilot' }], observedHostname: () => 'api-prod' },
       { snapshot: vi.fn().mockResolvedValue(facts) },
       candidates,
       sender as never,
@@ -234,7 +310,7 @@ describe('registerAgentHandlers', () => {
     }
     const dispose = registerAgentHandlers(
       scheduler,
-      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', observedHostname: 'api-prod', mode: 'autonomous' }] },
+      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'autonomous' }], observedHostname: () => 'api-prod' },
       { snapshot: vi.fn().mockResolvedValue(facts) },
       candidates,
       sender as never,
@@ -269,7 +345,8 @@ describe('registerAgentHandlers', () => {
     const dispose = registerAgentHandlers(
       scheduler,
       {
-        snapshot: () => [{ id: 'session-a', hostname: 'api-prod', observedHostname: 'api-prod', mode: 'copilot' }],
+        snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }],
+        observedHostname: () => 'api-prod',
         onClosed: vi.fn(listener => { closed = listener; return unsubscribeClosed }),
       },
       { snapshot: vi.fn().mockResolvedValue(facts) },
@@ -305,7 +382,7 @@ describe('registerAgentHandlers', () => {
     const sender = { send: vi.fn() }
     const dispose = registerAgentHandlers(
       scheduler,
-      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', observedHostname: 'api-prod', mode: 'copilot' }] },
+      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }], observedHostname: () => 'api-prod' },
       { snapshot: vi.fn().mockResolvedValue(facts) },
       { save: vi.fn() },
       sender as never,
@@ -336,7 +413,8 @@ describe('registerAgentHandlers', () => {
     const dispose = registerAgentHandlers(
       scheduler,
       {
-        snapshot: () => [{ id: 'session-a', hostname: 'api-prod', observedHostname: 'api-prod', mode: 'copilot' }],
+        snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }],
+        observedHostname: () => 'api-prod',
         onClosed: vi.fn(listener => { closed = listener; return vi.fn() }),
       },
       { snapshot: vi.fn().mockResolvedValue(facts) },
@@ -366,7 +444,7 @@ describe('registerAgentHandlers', () => {
     const sender = { send: vi.fn() }
     const dispose = registerAgentHandlers(
       scheduler,
-      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', observedHostname: 'api-prod', mode: 'copilot' }] },
+      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }], observedHostname: () => 'api-prod' },
       { snapshot: vi.fn().mockResolvedValue(facts) },
       { save: vi.fn() },
       sender as never,
@@ -394,7 +472,7 @@ describe('registerAgentHandlers', () => {
     const sender = { send: vi.fn() }
     const dispose = registerAgentHandlers(
       scheduler,
-      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', observedHostname: 'api-prod', mode: 'copilot' }] },
+      { snapshot: () => [{ id: 'session-a', hostname: 'api-prod', mode: 'copilot' }], observedHostname: () => 'api-prod' },
       { snapshot: vi.fn(() => new Promise<typeof facts>(resolve => { resolveFacts = resolve })) },
       { save: vi.fn() },
       sender as never,

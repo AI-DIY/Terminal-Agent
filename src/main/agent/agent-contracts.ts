@@ -13,6 +13,7 @@ export type AgentGoalContext = {
   session: AgentSessionContext
   facts: HostFacts
   signal?: AbortSignal
+  hasImages?: boolean
 }
 
 export type AgentEventPublisher = (event: AgentStreamEvent) => unknown
@@ -23,6 +24,7 @@ export type SchedulerModelRequest = {
   hostname: string
   facts: HostFacts
   signal?: AbortSignal
+  hasImages?: boolean
 }
 
 export type SchedulerModelPort = {

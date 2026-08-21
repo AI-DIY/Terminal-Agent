@@ -4,8 +4,8 @@ import { createBridgeDiagnostics, extractBridgeLaunchMetadata, type BridgeDiagno
 import { AccessClientLaunchFailure } from './launch-failure'
 
 export type AccessClientSessionOpener = {
-  openSsh(request: { host: string; port: number; username: string; password?: string; title: string; columns: number; rows: number }): Promise<unknown>
-  openRaw(request: { host: string; port: number; title: string; columns: number; rows: number }): Promise<unknown>
+  openSsh(request: { host: string; port: number; username: string; password?: string; title: string; columns: number; rows: number; profileId?: string }): Promise<unknown>
+  openRaw(request: { host: string; port: number; title: string; columns: number; rows: number; profileId?: string }): Promise<unknown>
 }
 
 export class AccessClientService {
@@ -43,6 +43,7 @@ export class AccessClientService {
             title: resolution.connection.title,
             columns: resolution.connection.columns,
             rows: resolution.connection.rows,
+            profileId: resolution.persistentProfile.name,
           })
         : await this.sessions.openSsh({
             host: resolution.connection.host,
@@ -52,6 +53,7 @@ export class AccessClientService {
             title: resolution.connection.title,
             columns: resolution.connection.columns,
             rows: resolution.connection.rows,
+            profileId: resolution.persistentProfile.name,
           })
       await this.diagnostics.record(metadata, 'session-opened', {
         protocol: resolution.connection.protocol,

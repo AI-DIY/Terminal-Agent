@@ -1,0 +1,10 @@
+{
+  "source": "simplified-core-workbench-v18-unified-ssh-connection.html",
+  "areas": {
+    "chatSessions": ["create", "select-live", "select-history", "restore-live"],
+    "shellCanvas": ["layout", "focus", "close", "maximize", "duplicate", "reconnect", "history"],
+    "globalChat": ["send", "stream", "retry", "compress", "copilot", "autonomous", "edit-plan", "approve", "reject"],
+    "settings": ["routing", "llm-profiles", "vlm-profiles", "fence", "memory", "appearance"],
+    "ssh": ["cmdb", "bastion-host", "password", "private-key"]
+  }
+}

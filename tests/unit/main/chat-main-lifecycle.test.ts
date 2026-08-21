@@ -1,0 +1,142 @@
+import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
+import { recoverChatStreamsBeforeCreatingMainWindow } from '../../../src/main/chat/chat-startup'
+
+const state = vi.hoisted(() => ({
+  windows: [] as Array<{
+    webContents: { send: ReturnType<typeof vi.fn> }
+    options: { show?: boolean }
+    shown: boolean
+    emitClosed(): void
+    emitReadyToShow(): void
+  }>,
+  chatRepositoryConstructor: vi.fn(),
+  chatServiceConstructor: vi.fn(),
+  registerChatHandlers: vi.fn(),
+  disposeChatHandlers: vi.fn(),
+  workbenchPreferencesConstructor: vi.fn(),
+  registerWorkbenchSettingsHandlers: vi.fn(),
+  disposeWorkbenchSettingsHandlers: vi.fn(),
+}))
+
+vi.mock('electron', () => {
+  class BrowserWindow {
+    static getAllWindows() { return state.windows }
+    readonly webContents = { send: vi.fn() }
+    private readonly listeners = new Map<string, Array<() => void>>()
+    loadURL = vi.fn().mockResolvedValue(undefined)
+    loadFile = vi.fn().mockResolvedValue(undefined)
+    shown = false
+    readonly options: { show?: boolean }
+
+    constructor(options: { show?: boolean }) {
+      this.options = options
+      this.shown = options.show !== false
+      state.windows.push(this)
+    }
+
+    show() { this.shown = true }
+    on(event: string, listener: () => void) {
+      const listeners = this.listeners.get(event) ?? []
+      listeners.push(listener)
+      this.listeners.set(event, listeners)
+    }
+    emitClosed() { for (const listener of this.listeners.get('closed') ?? []) listener() }
+    emitReadyToShow() { for (const listener of this.listeners.get('ready-to-show') ?? []) listener() }
+  }
+
+  return {
+    app: {
+      getPath: vi.fn(() => 'D:\\terminal-agent-user-data'),
+      requestSingleInstanceLock: vi.fn(() => false),
+      quit: vi.fn(),
+      on: vi.fn(),
+      whenReady: vi.fn(),
+      isPackaged: false,
+    },
+    BrowserWindow,
+    safeStorage: {
+      decryptString: vi.fn(), encryptString: vi.fn(), isEncryptionAvailable: vi.fn(() => true),
+    },
+    dialog: { showOpenDialog: vi.fn() },
+    ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  }
+})
+
+vi.mock('../../../src/main/chat/chat-repository', () => ({
+  ChatRepository: class ChatRepository {
+    constructor(readonly path: string) { state.chatRepositoryConstructor(path) }
+  },
+}))
+vi.mock('../../../src/main/chat/chat-service', () => ({
+  ChatService: class ChatService {
+    constructor(readonly repository: unknown) { state.chatServiceConstructor(repository) }
+    onChanged() { return () => undefined }
+  },
+}))
+vi.mock('../../../src/main/chat/register-chat-handlers', () => ({ registerChatHandlers: state.registerChatHandlers }))
+vi.mock('../../../src/main/settings/workbench-preferences-service', () => ({
+  WorkbenchPreferencesService: class WorkbenchPreferencesService {
+    constructor(readonly path: string) { state.workbenchPreferencesConstructor(path) }
+  },
+}))
+vi.mock('../../../src/main/settings/register-workbench-settings-handlers', () => ({ registerWorkbenchSettingsHandlers: state.registerWorkbenchSettingsHandlers }))
+vi.mock('../../../src/main/access-client/single-instance', () => ({ configureAccessClientSingleInstance: vi.fn(() => false) }))
+vi.mock('../../../src/main/observation/register-session-observation', () => ({ registerSessionObservation: vi.fn(() => vi.fn()) }))
+vi.mock('../../../src/main/ipc/register-handlers', () => ({ registerSessionHandlers: vi.fn(() => vi.fn()) }))
+vi.mock('../../../src/main/access-client/register-launch-error-handlers', () => ({ registerAccessClientLaunchHandlers: vi.fn(() => vi.fn()) }))
+vi.mock('../../../src/main/access-client/register-bastion-launch-handlers', () => ({ registerBastionLaunchHandlers: vi.fn(() => vi.fn()) }))
+vi.mock('../../../src/main/agent/register-session-mode-handlers', () => ({ registerSessionModeHandlers: vi.fn(() => vi.fn()) }))
+vi.mock('../../../src/main/agent/register-confirmation-handlers', () => ({ registerConfirmationHandlers: vi.fn(() => vi.fn()) }))
+vi.mock('../../../src/main/agent/register-execution-handlers', () => ({ registerExecutionHandlers: vi.fn(() => vi.fn()) }))
+vi.mock('../../../src/main/agent/register-agent-handlers', () => ({ registerAgentHandlers: vi.fn(() => vi.fn()) }))
+vi.mock('../../../src/main/settings/register-settings-handlers', () => ({ registerSettingsHandlers: vi.fn(() => vi.fn()) }))
+
+state.registerChatHandlers.mockReturnValue(state.disposeChatHandlers)
+state.registerWorkbenchSettingsHandlers.mockReturnValue(state.disposeWorkbenchSettingsHandlers)
+const { createMainWindow } = await import('../../../src/main/main')
+
+describe('main chat lifecycle', () => {
+  it('awaits interrupted chat stream recovery before creating the first main window', async () => {
+    const recovery = deferred<void>()
+    const recoverInterruptedStreams = vi.fn(() => recovery.promise)
+    const createMainWindow = vi.fn()
+
+    const starting = recoverChatStreamsBeforeCreatingMainWindow(recoverInterruptedStreams, createMainWindow)
+
+    expect(recoverInterruptedStreams).toHaveBeenCalledOnce()
+    expect(createMainWindow).not.toHaveBeenCalled()
+    recovery.resolve()
+    await starting
+    expect(createMainWindow).toHaveBeenCalledOnce()
+  })
+
+  it('registers chat handlers for the window and disposes them when the window closes', () => {
+    const window = createMainWindow() as unknown as (typeof state.windows)[number]
+
+    expect(state.chatRepositoryConstructor).toHaveBeenCalledWith(join('D:\\terminal-agent-user-data', 'chat-workspaces.json'))
+    expect(state.chatServiceConstructor).toHaveBeenCalledOnce()
+    expect(state.registerChatHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.anything(), expect.anything())
+    expect(state.workbenchPreferencesConstructor).toHaveBeenCalledWith(join('D:\\terminal-agent-user-data', 'workbench-preferences.json'))
+    expect(state.registerWorkbenchSettingsHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.any(Function))
+    expect(window.options).toMatchObject({ show: false })
+    expect(window.shown).toBe(false)
+
+    window.emitReadyToShow()
+    expect(window.shown).toBe(false)
+    const rendererReady = state.registerWorkbenchSettingsHandlers.mock.calls[0]?.[2] as (() => void) | undefined
+    expect(rendererReady).toBeTypeOf('function')
+    rendererReady?.()
+    expect(window.shown).toBe(true)
+
+    window.emitClosed()
+    expect(state.disposeChatHandlers).toHaveBeenCalledOnce()
+    expect(state.disposeWorkbenchSettingsHandlers).toHaveBeenCalledOnce()
+  })
+})
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(accept => { resolve = accept })
+  return { promise, resolve }
+}

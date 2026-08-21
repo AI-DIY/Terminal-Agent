@@ -2,6 +2,96 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
+/**
+ * Holds reconnect descriptors exclusively in the main process. References are
+ * safe to persist in Shell history, while descriptor values never leave memory.
+ */
+export class MainProcessReconnectDescriptorStore<TDescriptor> {
+  private readonly descriptors = new Map<string, {
+    descriptor: TDescriptor
+    createdAt: number
+    closedAt?: number
+  }>()
+  private readonly createReference: () => string
+  private readonly now: () => number
+  private readonly closedRetentionMs: number
+  private readonly maxDescriptors: number
+
+  constructor(options: (() => string) | {
+    createReference?: () => string
+    now?: () => number
+    closedRetentionMs?: number
+    maxDescriptors?: number
+  } = {}) {
+    if (typeof options === 'function') {
+      this.createReference = options
+      this.now = Date.now
+      this.closedRetentionMs = 15 * 60 * 1_000
+      this.maxDescriptors = 256
+      return
+    }
+    this.createReference = options.createReference ?? randomUUID
+    this.now = options.now ?? Date.now
+    this.closedRetentionMs = options.closedRetentionMs ?? 15 * 60 * 1_000
+    this.maxDescriptors = options.maxDescriptors ?? 256
+  }
+
+  register(descriptor: TDescriptor): string {
+    this.prune()
+    if (this.descriptors.size >= this.maxDescriptors) {
+      const oldest = [...this.descriptors.entries()]
+        .filter(([, entry]) => entry.closedAt !== undefined)
+        .sort(([, left], [, right]) => left.createdAt - right.createdAt)[0]
+      if (!oldest) throw new Error('Shell reconnect capacity is exhausted')
+      this.descriptors.delete(oldest[0])
+    }
+    const reference = `reconnect:${this.createReference()}`
+    this.descriptors.set(reference, { descriptor, createdAt: this.now() })
+    return reference
+  }
+
+  resolve(reference: string): TDescriptor | undefined {
+    const entry = this.descriptors.get(reference)
+    if (!entry) return undefined
+    if (entry.closedAt !== undefined && this.now() - entry.closedAt >= this.closedRetentionMs) {
+      this.descriptors.delete(reference)
+      return undefined
+    }
+    return entry.descriptor
+  }
+
+  has(reference: string): boolean {
+    return this.resolve(reference) !== undefined
+  }
+
+  remove(reference: string): void {
+    this.revoke(reference)
+  }
+
+  revoke(reference: string): void {
+    this.descriptors.delete(reference)
+  }
+
+  markClosed(reference: string): void {
+    const entry = this.descriptors.get(reference)
+    if (entry && entry.closedAt === undefined) entry.closedAt = this.now()
+  }
+
+  revokeWhere(predicate: (descriptor: TDescriptor) => boolean): void {
+    for (const [reference, entry] of this.descriptors) {
+      if (predicate(entry.descriptor)) this.descriptors.delete(reference)
+    }
+  }
+
+  clear(): void {
+    this.descriptors.clear()
+  }
+
+  private prune(): void {
+    for (const reference of this.descriptors.keys()) this.resolve(reference)
+  }
+}
+
 export type DirectSessionAuth =
   | { kind: 'password'; password: string }
   | { kind: 'privateKey'; privateKeyPath: string; passphrase?: string }

@@ -16,8 +16,9 @@ export type SshShell = {
 }
 
 export type SshConnection = {
+  remoteAddress?: string
   openShell(columns: number, rows: number): Promise<SshShell>
-  execute?(command: string): Promise<string>
+  execute?(command: string, maxOutputBytes?: number): Promise<string>
   close(): void
 }
 

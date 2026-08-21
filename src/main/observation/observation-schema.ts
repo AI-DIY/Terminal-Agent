@@ -1,17 +1,6 @@
-export type HostProcess = {
-  name: string
-  status: string
-}
+import type { HostMemoryRecord } from '../../shared/contracts'
 
-export type HostFacts = {
-  hostname: string
-  observedAt: string
-  software: Record<string, string>
-  processes: HostProcess[]
-  installLocations: Record<string, string>
-  services: Record<string, string>
-  logLocations: string[]
-  configurationHashes: Record<string, string>
-}
+export type HostFacts = HostMemoryRecord
+export type HostProcess = NonNullable<HostFacts['processes']>[number]
 
 export type ObservationPlatform = 'linux'

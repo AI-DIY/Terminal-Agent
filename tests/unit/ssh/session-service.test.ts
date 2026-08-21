@@ -1,13 +1,112 @@
 import { describe, expect, it, vi } from 'vitest'
+import { MainProcessReconnectDescriptorStore } from '../../../src/main/ssh/direct-session-repository'
 import { SessionService } from '../../../src/main/ssh/session-service'
+import { ExecutionGateway } from '../../../src/main/agent/execution-gateway'
 import { AccessClientLaunchFailure } from '../../../src/main/access-client/launch-failure'
 
 describe('SessionService', () => {
+  it('revokes, bounds, and isolates reconnect descriptors across lifecycle transitions', () => {
+    let now = 0
+    const createStore = () => new MainProcessReconnectDescriptorStore({
+      createReference: () => '0123456789abcdef',
+      now: () => now,
+      closedRetentionMs: 1_000,
+    })
+    const store = createStore()
+
+    const revoked = store.register({ secret: 'revoked-secret' })
+    store.revoke(revoked)
+    expect(store.resolve(revoked)).toBeUndefined()
+
+    const closed = store.register({ secret: 'closed-secret' })
+    store.markClosed(closed)
+    expect(store.resolve(closed)).toEqual({ secret: 'closed-secret' })
+    now = 1_000
+    expect(store.resolve(closed)).toBeUndefined()
+
+    const restarted = createStore()
+    expect(restarted.resolve(closed)).toBeUndefined()
+    expect(JSON.stringify({ revoked, closed })).not.toContain('secret')
+  })
+
+  it('binds descriptor validity to a direct profile and marks a closed shell for bounded history retention', async () => {
+    let now = 0
+    const descriptors = new MainProcessReconnectDescriptorStore({
+      createReference: () => 'fedcba9876543210',
+      now: () => now,
+      closedRetentionMs: 1_000,
+    })
+    const shell = createShell()
+    const service = new SessionService(
+      { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) },
+      { load: vi.fn() },
+      undefined,
+      { createId: () => 'session-profile', reconnectDescriptors: descriptors as never },
+    )
+    let reconnectReference = ''
+    service.onHistoryOpened(session => { reconnectReference = session.reconnectReference })
+    const session = await service.connect({
+      host: 'profile.example.com', port: 22, username: 'ops', profileId: 'profile-a',
+      auth: { kind: 'password', password: 'profile-secret' },
+    })
+
+    service.close(session.id)
+    expect(service.canReconnect(reconnectReference)).toBe(true)
+    service.revokeDirectProfile('profile-a')
+    expect(service.canReconnect(reconnectReference)).toBe(false)
+
+    let temporaryReference = ''
+    service.onHistoryOpened(next => { if (next.id !== session.id) temporaryReference = next.reconnectReference })
+    const second = await service.connect({
+      host: 'temporary.example.com', port: 22, username: 'ops',
+      auth: { kind: 'password', password: 'temporary-secret' },
+    })
+    service.close(second.id)
+    now = 1_000
+    expect(service.canReconnect(temporaryReference)).toBe(false)
+  })
+
+  it('revokes an AccessClient profile descriptor without exposing its request data', async () => {
+    const shell = createShell()
+    const service = new SessionService(
+      { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) },
+      { load: vi.fn() },
+      undefined,
+      { createId: () => 'access-profile-session' },
+    )
+    let reference = ''
+    service.onHistoryOpened(session => { reference = session.reconnectReference })
+    await service.connectAccessSsh({
+      host: 'access.example.com', port: 22, username: 'ops', password: 'access-secret',
+      title: 'Access profile', columns: 80, rows: 24, profileId: 'access-profile-a',
+    })
+
+    expect(JSON.stringify(reference)).not.toContain('access-secret')
+    service.revokeAccessProfile('access-profile-a')
+    expect(service.canReconnect(reference)).toBe(false)
+  })
+
+  it('does not reuse default session ids across main-process service generations', async () => {
+    const first = new SessionService(
+      { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(createShell()) }) },
+      { load: vi.fn() },
+    )
+    const second = new SessionService(
+      { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(createShell()) }) },
+      { load: vi.fn() },
+    )
+
+    const firstSession = await first.connect({ host: 'first', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' } })
+    const secondSession = await second.connect({ host: 'second', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' } })
+
+    expect(firstSession.id).not.toBe(secondSession.id)
+  })
+
   it('opens an AccessClient SSH session without converting an absent password into an empty password', async () => {
     const shell = createShell()
     const connection = { close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }
     const client = { connect: vi.fn().mockResolvedValue(connection) }
-    const service = new SessionService(client, { load: vi.fn() })
+    const service = new SessionService(client, { load: vi.fn() }, undefined, { createId: () => 's1' })
     const opened: unknown[] = []
     service.onOpened(session => opened.push(session))
 
@@ -20,6 +119,64 @@ describe('SessionService', () => {
     expect(session).toEqual({ id: 's1', hostname: 'server-a', title: '生产终端', mode: 'copilot' })
     expect(service.snapshot()).toEqual([session])
     expect(opened).toEqual([session])
+  })
+
+  it('reports a credential-free connection type to main-process history collectors for direct, AccessClient SSH, and raw sessions', async () => {
+    const directShell = createShell()
+    const accessShell = createShell()
+    const rawShell = createShell()
+    const client = {
+      connect: vi.fn()
+        .mockResolvedValueOnce({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(directShell) })
+        .mockResolvedValueOnce({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(accessShell) }),
+    }
+    const rawClient = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(rawShell) }) }
+    const ids = ['direct-session', 'access-session', 'raw-session']
+    const service = new SessionService(client, { load: vi.fn() }, rawClient, { createId: () => ids.shift()! })
+    const historyOpened: unknown[] = []
+    service.onHistoryOpened(session => historyOpened.push(session))
+
+    await service.connect({ host: 'direct.example', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' } })
+    await service.connectAccessSsh({ host: 'access.example', port: 2222, username: 'ops', title: 'Access shell', columns: 80, rows: 24 })
+    await service.connectRaw({ host: '127.0.0.1', port: 22022 })
+
+    expect(historyOpened).toEqual([
+      expect.objectContaining({ id: 'direct-session', hostname: 'direct.example', mode: 'copilot', connectionType: 'direct-ssh', reconnectReference: expect.stringMatching(/^reconnect:/) }),
+      expect.objectContaining({ id: 'access-session', hostname: 'access.example', title: 'Access shell', mode: 'copilot', connectionType: 'access-client-ssh', reconnectReference: expect.stringMatching(/^reconnect:/) }),
+      expect.objectContaining({ id: 'raw-session', hostname: '127.0.0.1', mode: 'copilot', connectionType: 'access-client-raw', reconnectReference: expect.stringMatching(/^reconnect:/) }),
+    ])
+    expect(JSON.stringify(historyOpened)).not.toContain('secret')
+  })
+
+  it('duplicates a live direct session as a second authoritative session without exposing its descriptor to history listeners', async () => {
+    const firstShell = createShell()
+    const secondShell = createShell()
+    const thirdShell = createShell()
+    const client = {
+      connect: vi.fn()
+        .mockResolvedValueOnce({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(firstShell) })
+        .mockResolvedValueOnce({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(secondShell) })
+        .mockResolvedValueOnce({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(thirdShell) }),
+    }
+    const ids = ['session-original', 'session-copy', 'session-targeted']
+    const service = new SessionService(client, { load: vi.fn() }, undefined, { createId: () => ids.shift()! })
+    const historyOpened: unknown[] = []
+    service.onHistoryOpened(session => historyOpened.push(session))
+
+    const original = await service.connect({
+      host: 'web-01', port: 22, username: 'ops', auth: { kind: 'password', password: 'credential-placeholder' },
+    })
+    const copy = await (service as unknown as { duplicate(sessionId: string): Promise<{ id: string; hostname: string; mode: string }> }).duplicate(original.id)
+
+    expect(copy).toEqual({ id: 'session-copy', hostname: 'web-01', mode: 'copilot' })
+    expect(copy.id).not.toBe(original.id)
+    expect(service.snapshot().map(session => session.id)).toEqual(['session-original', 'session-copy'])
+    expect(client.connect).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(historyOpened)).not.toContain('credential-placeholder')
+    expect(JSON.stringify(historyOpened)).not.toContain('password')
+
+    const targeted = await (service as unknown as { duplicate(sessionId: string, chatId: string): Promise<{ chatId?: string }> }).duplicate(original.id, 'chat-target')
+    expect(targeted).toMatchObject({ chatId: 'chat-target' })
   })
 
   it('applies AccessClient SSH password, title, and initial dimensions to one session request', async () => {
@@ -64,6 +221,7 @@ describe('SessionService', () => {
       { connect: vi.fn() },
       { load: vi.fn() },
       rawClient,
+      { createId: () => 's1' },
     )
 
     const session = await service.connectRaw({ host: '127.0.0.1', port: 22022 })
@@ -136,7 +294,7 @@ describe('SessionService', () => {
     expect(() => service.setMode('missing', 'autonomous')).toThrow('Unknown terminal session')
   })
 
-  it('includes an observed hostname in snapshots and update events', async () => {
+  it('keeps an observed hostname in a main-only lookup and out of public events', async () => {
     const shell = createShell()
     const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
     const service = new SessionService(client, { load: vi.fn() })
@@ -148,15 +306,16 @@ describe('SessionService', () => {
 
     service.setObservedHostname(session.id, ' api-prod\n')
 
-    const expected = { ...session, observedHostname: 'api-prod' }
-    expect(service.snapshot()).toEqual([expected])
-    expect(updated).toEqual([expected])
+    expect(service.observedHostname(session.id)).toBe('api-prod')
+    expect(service.snapshot()).toEqual([session])
+    expect(service.snapshot()[0]).not.toHaveProperty('observedHostname')
+    expect(updated).toEqual([])
   })
 
   it('sends password credentials only to the SSH adapter and starts in Copilot mode', async () => {
     const shell = createShell()
     const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
-    const service = new SessionService(client, { load: vi.fn() })
+    const service = new SessionService(client, { load: vi.fn() }, undefined, { createId: () => 's1' })
 
     const session = await service.connect({
       host: 'server-a',
@@ -174,6 +333,12 @@ describe('SessionService', () => {
     const shell = createShell()
     const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
     const service = new SessionService(client, { load: vi.fn() })
+    const auditedWrites: unknown[] = []
+    expect('onWrite' in service).toBe(true)
+    const onWrite = (service as SessionService & {
+      onWrite(listener: (event: { sessionId: string; data: string }) => void): () => void
+    }).onWrite.bind(service)
+    onWrite(event => auditedWrites.push(event))
 
     const session = await service.connect({
       host: 'server-a',
@@ -183,10 +348,25 @@ describe('SessionService', () => {
     })
 
     service.write(session.id, 'whoami\n')
+    const gateway = new ExecutionGateway(
+      { get: () => 'autonomous' },
+      { consume: () => false },
+      { match: () => null },
+      (sessionId, command) => {
+        service.write(sessionId, `${command}\n`)
+        return { kind: 'sent' }
+      },
+    )
+    await gateway.execute({ sessionId: session.id, command: 'hostname' })
     service.resize(session.id, 120, 40)
 
     expect(() => service.write('missing', 'whoami\n')).toThrow('Unknown terminal session')
     expect(shell.write).toHaveBeenCalledWith('whoami\n')
+    expect(shell.write).toHaveBeenCalledWith('hostname\n')
+    expect(auditedWrites).toEqual([
+      { sessionId: session.id, data: 'whoami\n' },
+      { sessionId: session.id, data: 'hostname\n' },
+    ])
     expect(shell.resize).toHaveBeenCalledWith(120, 40)
   })
 
@@ -289,6 +469,33 @@ describe('SessionService', () => {
     shell.emitClose()
 
     expect(received).toEqual([{ sessionId: session.id, data: '�' }])
+  })
+
+  it('keeps the transport connection IP in a main-only lookup and never guesses it from a target label', async () => {
+    const shell = createShell()
+    const connection = { remoteAddress: '192.0.2.10', close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell), execute: vi.fn().mockResolvedValue('') }
+    const service = new SessionService({ connect: vi.fn().mockResolvedValue(connection) }, { load: vi.fn() })
+    const session = await service.connect({ host: 'api.example.invalid', port: 22, username: 'ops', auth: { kind: 'password', password: '' } })
+
+    expect(service.connectionIp(session.id)).toBe('192.0.2.10')
+    expect(session).not.toHaveProperty('connectionIp')
+    expect(service.snapshot()[0]).not.toHaveProperty('connectionIp')
+
+    const unlabeledConnection = { close: vi.fn(), openShell: vi.fn().mockResolvedValue(createShell()), execute: vi.fn().mockResolvedValue('') }
+    const unlabeledService = new SessionService({ connect: vi.fn().mockResolvedValue(unlabeledConnection) }, { load: vi.fn() })
+    const ipTargetSession = await unlabeledService.connect({ host: '192.0.2.20', port: 22, username: 'ops', auth: { kind: 'password', password: '' } })
+    expect(unlabeledService.connectionIp(ipTargetSession.id)).toBeUndefined()
+  })
+
+  it('passes a deterministic output limit to every read-only transport command', async () => {
+    const shell = createShell()
+    const connection = { close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell), execute: vi.fn().mockResolvedValue('api-prod\n') }
+    const service = new SessionService({ connect: vi.fn().mockResolvedValue(connection) }, { load: vi.fn() })
+    const session = await service.connect({ host: 'api-prod', port: 22, username: 'ops', auth: { kind: 'password', password: '' } })
+
+    await service.executeReadOnly(session.id, 'hostname')
+
+    expect(connection.execute).toHaveBeenCalledWith('hostname', 256 * 1024)
   })
 })
 

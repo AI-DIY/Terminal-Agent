@@ -18,7 +18,7 @@ describe('AccessClientService', () => {
     await service.openFromArgv(['Terminal-Agent.exe', '@prod'])
 
     expect(openSsh).toHaveBeenCalledWith({
-      host: 'server-a', port: 22, username: 'ops', password: undefined, title: 'prod', columns: 80, rows: 24,
+      host: 'server-a', port: 22, username: 'ops', password: undefined, title: 'prod', columns: 80, rows: 24, profileId: 'prod',
     })
     expect(openRaw).not.toHaveBeenCalled()
   })
@@ -33,7 +33,7 @@ describe('AccessClientService', () => {
 
     await service.openFromArgv(['Terminal-Agent.exe', '-raw', '-P', '22022'])
 
-    expect(openRaw).toHaveBeenCalledWith({ host: '127.0.0.1', port: 22022, title: 'Raw 22022', columns: 80, rows: 24 })
+    expect(openRaw).toHaveBeenCalledWith({ host: '127.0.0.1', port: 22022, title: 'Raw 22022', columns: 80, rows: 24, profileId: 'raw:22022' })
     expect(openSsh).not.toHaveBeenCalled()
   })
 
