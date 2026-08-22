@@ -559,7 +559,7 @@ git commit -m "feat: disclose real host collection commands"
 - Inspect: `src/main/chat/chat-runtime.ts`
 - Inspect: `src/renderer/src/stores/global-chat.ts`
 
-- [ ] **Step 1: Extend the fake-provider test through connection testing**
+- [x] **Step 1: Extend the fake-provider test through connection testing**
 
 Before saving the fake Ollama profile, call the public connection-test API with the same input:
 
@@ -580,7 +580,7 @@ return tested
 
 Assert that the connection result identifies `fake-e2e`, then keep the existing streaming, temporary 503 failure, retry, persistence, cancellation, and supersession assertions.
 
-- [ ] **Step 2: Run the focused unit model suites**
+- [x] **Step 2: Run the focused unit model suites**
 
 Run:
 
@@ -590,7 +590,7 @@ npx vitest run tests/unit/model/model-provider-router.test.ts tests/unit/model/c
 
 Expected: PASS for provider routing, API-key isolation, stream parsing, cancellation, retry, and renderer run ownership.
 
-- [ ] **Step 3: Run the real Electron fake-provider flow**
+- [x] **Step 3: Run the real Electron fake-provider flow**
 
 Run:
 
@@ -601,7 +601,7 @@ npx playwright test tests/e2e/workbench.spec.ts --grep "streams fake global AI c
 
 Expected: PASS; the connection test and AI workspace both reach the local HTTP server, first streaming succeeds, the second request fails safely, and retry succeeds.
 
-- [ ] **Step 4: Fix only failures exposed by the new evidence**
+- [x] **Step 4: Fix only failures exposed by the new evidence**
 
 If the connection-test request differs from runtime, make both paths use `ModelProviderRouter.test()` and `ModelProviderRouter.stream()` with the same normalized provider endpoint. Preserve this public behavior:
 
@@ -613,7 +613,7 @@ return { ok: true as const, model: result.model }
 
 Rerun Steps 2 and 3 after any fix. If no failure occurs, do not modify production model code.
 
-- [ ] **Step 5: Commit the verification contract**
+- [x] **Step 5: Commit the verification contract**
 
 ```powershell
 git add tests/e2e/workbench.spec.ts src/main/model/model-provider-router.ts src/main/model/chat-completions-client.ts src/main/chat/chat-runtime.ts src/renderer/src/stores/global-chat.ts

@@ -923,31 +923,39 @@ test('streams fake global AI chat, retries a failed request, and restores messag
     app = (await launchApp()).app
     const page = await app.firstWindow()
     const endpoint = `http://127.0.0.1:${fakeModel.port}/api/chat`
-    await page.evaluate(async endpointValue => {
-      const profile = await window.terminalAgent.settings.models.save({
+    const tested = await page.evaluate(async endpointValue => {
+      const input = {
         name: 'E2E Fake Ollama', kind: 'llm', provider: 'ollama', model: 'fake-e2e', endpoint: endpointValue, contextLimit: 1024,
-      })
+      } as const
+      const result = await window.terminalAgent.settings.models.test(input)
+      const profile = await window.terminalAgent.settings.models.save(input)
       if (!profile.active) await window.terminalAgent.settings.models.activate(profile.id)
+      return result
     }, endpoint)
+    expect(tested).toEqual({ model: 'fake-e2e' })
+    expect(fakeModel.connectionTests).toBe(1)
     await createNamedChat(page, 'AI 聊天 E2E')
 
-    const input = page.getByLabel('聊天输入')
+    const aiWorkspace = page.getByRole('region', { name: 'AI工作区', exact: true })
+    await expect(aiWorkspace).toBeVisible()
+    const input = aiWorkspace.getByLabel('聊天输入')
     await expect(input).toBeEnabled()
     await input.fill('第一条消息')
-    await page.getByRole('button', { name: '发送', exact: true }).click()
-    await expect(page.locator('.message.assistant')).toContainText('你好，世界')
+    await aiWorkspace.getByRole('button', { name: '发送', exact: true }).click()
+    await expect(aiWorkspace.locator('.message.assistant')).toContainText('你好，世界')
 
     await page.reload()
-    await expect(page.locator('.message.user')).toContainText('第一条消息')
-    await expect(page.locator('.message.assistant')).toContainText('你好，世界')
+    await expect(aiWorkspace.locator('.message.user')).toContainText('第一条消息')
+    await expect(aiWorkspace.locator('.message.assistant')).toContainText('你好，世界')
 
     await input.fill('第二条消息')
-    await page.getByRole('button', { name: '发送', exact: true }).click()
-    await expect(page.getByRole('alert')).toContainText('聊天运行失败，请检查模型连接后重试。')
-    await page.getByRole('button', { name: '重试', exact: true }).click()
-    await expect(page.locator('.message.assistant').last()).toContainText('重试成功')
-    await expect(page.getByRole('alert')).toHaveCount(0)
-    expect(fakeModel.requests).toBeGreaterThanOrEqual(3)
+    await aiWorkspace.getByRole('button', { name: '发送', exact: true }).click()
+    await expect(aiWorkspace.getByRole('alert')).toContainText('聊天运行失败，请检查模型连接后重试。')
+    await aiWorkspace.getByRole('button', { name: '重试', exact: true }).click()
+    await expect(aiWorkspace.locator('.message.assistant').last()).toContainText('重试成功')
+    await expect(aiWorkspace.getByRole('alert')).toHaveCount(0)
+    expect(fakeModel.chatRequests).toBeGreaterThanOrEqual(3)
+    expect(fakeModel.requests).toBeGreaterThanOrEqual(4)
   } finally {
     await app?.close()
     await closeHttpServer(fakeModel.server)
@@ -1504,8 +1512,10 @@ function closeServer(server: { close(callback: (error?: Error) => void): void })
   return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
 }
 
-async function startFakeOllamaServer(): Promise<{ server: HttpServer; port: number; requests: number }> {
+async function startFakeOllamaServer(): Promise<{ server: HttpServer; port: number; requests: number; connectionTests: number; chatRequests: number }> {
   let requests = 0
+  let connectionTests = 0
+  let chatRequests = 0
   const server = createHttpServer((request, response) => {
     if (request.method !== 'POST' || request.url !== '/api/chat') {
       response.statusCode = 404
@@ -1513,20 +1523,33 @@ async function startFakeOllamaServer(): Promise<{ server: HttpServer; port: numb
       return
     }
     requests += 1
-    if (requests === 2) {
-      response.statusCode = 503
-      response.end('temporary fake model outage')
-      return
-    }
-    response.statusCode = 200
-    response.setHeader('Content-Type', 'application/x-ndjson')
-    const text = requests >= 3 ? '重试成功' : '你好，世界'
-    const parts = [...text]
-    response.write(JSON.stringify({ message: { content: parts.shift() ?? '' } }) + '\n')
-    setTimeout(() => {
-      response.write(JSON.stringify({ message: { content: parts.join('') } }) + '\n')
-      response.end(JSON.stringify({ done: true }) + '\n')
-    }, 20)
+    const chunks: Buffer[] = []
+    request.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+    request.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { stream?: unknown }
+      if (body.stream === false) {
+        connectionTests += 1
+        response.statusCode = 200
+        response.setHeader('Content-Type', 'application/json')
+        response.end(JSON.stringify({ model: 'fake-e2e', done: true }))
+        return
+      }
+      chatRequests += 1
+      if (chatRequests === 2) {
+        response.statusCode = 503
+        response.end('temporary fake model outage')
+        return
+      }
+      response.statusCode = 200
+      response.setHeader('Content-Type', 'application/x-ndjson')
+      const text = chatRequests >= 3 ? '重试成功' : '你好，世界'
+      const parts = [...text]
+      response.write(JSON.stringify({ message: { content: parts.shift() ?? '' } }) + '\n')
+      setTimeout(() => {
+        response.write(JSON.stringify({ message: { content: parts.join('') } }) + '\n')
+        response.end(JSON.stringify({ done: true }) + '\n')
+      }, 20)
+    })
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -1535,6 +1558,8 @@ async function startFakeOllamaServer(): Promise<{ server: HttpServer; port: numb
     server,
     port,
     get requests() { return requests },
+    get connectionTests() { return connectionTests },
+    get chatRequests() { return chatRequests },
   }
 }
 
