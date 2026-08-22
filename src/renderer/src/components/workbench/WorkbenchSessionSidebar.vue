@@ -61,14 +61,14 @@ nav::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .error { color: var(--red); }
 .chat-group + .chat-group { margin-top: 11px; }
 .chat-group h2 { margin: 0 0 5px; padding: 11px 9px 0; color: var(--muted); font-size: 10px; font-weight: 650; }
-.history-item { position: relative; display: flex; border-radius: 5px; }
+.history-item { display: grid; grid-template-columns: minmax(0, 1fr) 28px; border-radius: 5px; }
 .history-item:hover { background: var(--hover); }
 .history-item.active { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }
-.chat-select { min-width: 0; flex: 1; padding: 9px 30px 10px 10px; border: 0; background: transparent; color: var(--text); text-align: left; }
+.chat-select { min-width: 0; padding: 9px 6px 10px 10px; border: 0; background: transparent; color: var(--text); text-align: left; }
 .chat-select strong { display: block; overflow: hidden; color: var(--text-strong); font-size: 11px; font-weight: 690; text-overflow: ellipsis; white-space: nowrap; }
 .chat-select span { display: flex; justify-content: space-between; gap: 10px; margin-top: 5px; color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
 .chat-select b { color: var(--muted); font-weight: 550; white-space: nowrap; }
-.chat-remove { position: absolute; top: 7px; right: 4px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); opacity: 0; }
+.chat-remove { display: grid; place-items: center; align-self: start; width: 24px; height: 24px; margin: 7px 4px 0 0; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); opacity: 0; }
 .history-item:hover .chat-remove,.chat-remove:focus-visible { opacity: 1; }
 .chat-remove:hover { background: var(--surface); color: var(--red); }
 </style>

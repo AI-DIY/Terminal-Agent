@@ -9,6 +9,7 @@ const state = vi.hoisted(() => {
     recoverInterruptedStreams: vi.fn(() => recovery.promise),
     recordPackagedWindowsInstallPath: vi.fn(async () => undefined),
     regexLoad: vi.fn(async () => undefined),
+    setApplicationMenu: vi.fn(),
   }
 })
 
@@ -31,6 +32,7 @@ vi.mock('electron', () => {
       isPackaged: false,
     },
     BrowserWindow,
+    Menu: { setApplicationMenu: state.setApplicationMenu },
     safeStorage: { decryptString: vi.fn(), encryptString: vi.fn(), isEncryptionAvailable: vi.fn(() => true) },
     dialog: { showOpenDialog: vi.fn() },
     ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
@@ -82,6 +84,7 @@ describe('main chat startup ordering', () => {
 
       state.recovery.resolve()
       await vi.waitFor(() => expect(state.windows).toHaveLength(1))
+      expect(state.setApplicationMenu).toHaveBeenCalledWith(null)
     } finally {
       state.recovery.resolve()
       await vi.waitFor(() => expect(state.windows).toHaveLength(1))

@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   workbenchPreferencesConstructor: vi.fn(),
   registerWorkbenchSettingsHandlers: vi.fn(),
   disposeWorkbenchSettingsHandlers: vi.fn(),
+  setApplicationMenu: vi.fn(),
 }))
 
 vi.mock('electron', () => {
@@ -55,6 +56,7 @@ vi.mock('electron', () => {
       isPackaged: false,
     },
     BrowserWindow,
+    Menu: { setApplicationMenu: state.setApplicationMenu },
     safeStorage: {
       decryptString: vi.fn(), encryptString: vi.fn(), isEncryptionAvailable: vi.fn(() => true),
     },
@@ -119,6 +121,7 @@ describe('main chat lifecycle', () => {
     expect(state.registerChatHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.anything(), expect.anything())
     expect(state.workbenchPreferencesConstructor).toHaveBeenCalledWith(join('D:\\terminal-agent-user-data', 'workbench-preferences.json'))
     expect(state.registerWorkbenchSettingsHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.any(Function))
+    expect(state.setApplicationMenu).toHaveBeenCalledWith(null)
     expect(window.options).toMatchObject({ show: false })
     expect(window.shown).toBe(false)
 

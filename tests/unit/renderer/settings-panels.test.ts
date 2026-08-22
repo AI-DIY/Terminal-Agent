@@ -37,11 +37,13 @@ describe('settings panels', () => {
     expect(canvas).toContain('单行高度（占工作区）')
   })
 
-  it('themes the settings and host-memory surfaces for pearl and graphite', () => {
+  it('themes the settings and host-memory surfaces through shared tokens', () => {
     const settings = readFileSync(new URL('../../../src/renderer/src/views/SettingsView.vue', import.meta.url), 'utf8')
     const memory = readFileSync(new URL('../../../src/renderer/src/components/settings/HostMemorySettings.vue', import.meta.url), 'utf8')
 
-    expect(settings).toContain(':global(:root[data-theme="graphite"])')
+    expect(settings).toContain('background: var(--surface)')
+    expect(settings).toContain('background: var(--chrome)')
+    expect(settings).toContain('color: var(--text)')
     expect(memory).toContain('memory-status')
     expect(memory).toContain('scope-card')
   })

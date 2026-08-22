@@ -6,9 +6,10 @@ describe('Terminal-Agent branding', () => {
     const packageJson = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'))
     const shell = readFileSync(new URL('../../../src/renderer/src/components/workbench/WorkbenchShell.vue', import.meta.url), 'utf8')
     const iconGenerator = readFileSync(new URL('../../../scripts/windows/generate-ta-icon.ps1', import.meta.url), 'utf8')
+    const settings = readFileSync(new URL('../../../src/renderer/src/views/SettingsView.vue', import.meta.url), 'utf8')
     const icon = new URL('../../../build-resources/ta-icon.ico', import.meta.url)
 
-    expect(packageJson.version).toBe('1.0.6')
+    expect(packageJson.version).toBe('1.0.7')
     expect(packageJson.build.win.icon).toBe('build-resources/ta-icon.ico')
     expect(existsSync(icon)).toBe(true)
     expect(readFileSync(icon).subarray(0, 4)).toEqual(Buffer.from([0, 0, 1, 0]))
@@ -18,6 +19,11 @@ describe('Terminal-Agent branding', () => {
     expect(iconGenerator).toContain("[System.Drawing.RectangleF]::new(0, 0, $size, $size)")
     expect(shell).toContain('width: 28px; height: 28px')
     expect(shell).not.toContain('margin: 8px')
+    expect(settings).toContain('width: 100vw')
+    expect(settings).toContain('height: 100vh')
+    expect(settings).not.toContain('margin: 8px')
+    expect(settings).not.toContain('border-radius: 8px')
+    expect(settings).not.toContain('box-shadow: 0 10px')
   })
 
   it('names the side regions as task history and AI workspace with directional expand actions', () => {
@@ -28,6 +34,8 @@ describe('Terminal-Agent branding', () => {
     expect(history).toContain('任务历史区')
     expect(history).toContain('scrollbar-width: thin')
     expect(history).toContain('::-webkit-scrollbar-thumb')
+    expect(history).toContain('grid-template-columns: minmax(0, 1fr) 28px')
+    expect(history).not.toContain('.chat-remove { position: absolute')
     expect(shell).toContain('展开任务历史区')
     expect(shell).toContain('展开 AI工作区')
     expect(shell).toContain('调整任务历史区宽度')

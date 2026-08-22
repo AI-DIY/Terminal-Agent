@@ -1,3 +1,27 @@
+# Terminal-Agent v1.0.7
+
+Release date: 2026-08-22
+
+## CETA interface refinements
+
+- Removes Electron's redundant native application menu while retaining the standard Windows title bar and window controls, and lets the workbench fill the complete client area.
+- Uses the same stripe-free `TA` mark for the executable, installer, taskbar, window, and in-app branding.
+- Names the side regions `任务历史区` and `AI工作区`, improves the task-history scrollbar, and keeps narrow-window controls contained and keyboard accessible.
+- Makes historical-only Shell content explicit with `Shell 历史回放`, host and record counts, and a clear read-only notice.
+- Raises Shell row-height presets to Compact (48%), Standard (64%), and Relaxed (80%), with semantic migration of existing layouts.
+
+## Host memory and AI verification
+
+- Displays the complete ordered list of fixed read-only host-information commands in Settings, including the current enabled or disabled scope state for every command.
+- Executes those commands only after `我已知道`, keeps `hostname` first, and stores filtered structured facts by the observed hostname.
+- Verifies the model connection API and `AI工作区` against the same local HTTP provider configuration, including streaming, temporary failure, retry, persistence, cancellation, and supersession coverage.
+
+## Windows release assets
+
+- Includes `Terminal-Agent-Setup-1.0.7.exe`, a newly compiled standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.7.zip`.
+
+---
+
 # Terminal-Agent v1.0.6
 
 Release date: 2026-08-22

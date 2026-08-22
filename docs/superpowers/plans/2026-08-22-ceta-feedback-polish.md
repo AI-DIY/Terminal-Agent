@@ -634,7 +634,7 @@ Only add production files that actually changed.
 - Generate: `release/Terminal-Agent-Setup-1.0.7.exe`
 - Generate: `release/Terminal-Agent-Uninstall-Cleanup-1.0.7.zip`
 
-- [ ] **Step 1: Update release metadata with a failing branding assertion first**
+- [x] **Step 1: Update release metadata with a failing branding assertion first**
 
 Change the branding test to:
 
@@ -650,7 +650,7 @@ npx vitest run tests/unit/windows/app-branding.test.ts
 
 Expected: FAIL because package metadata is still 1.0.6.
 
-- [ ] **Step 2: Apply the patch version and release notes**
+- [x] **Step 2: Apply the patch version and release notes**
 
 Run:
 
@@ -660,7 +660,7 @@ npm version 1.0.7 --no-git-tag-version
 
 Update README artifact names to `1.0.7`. Add a 1.0.7 release-note section listing window chrome, consistent icon, region labels, history UI, taller layouts, visible host commands, and model/AI verification. Do not create a git tag.
 
-- [ ] **Step 3: Run the complete automated verification matrix**
+- [x] **Step 3: Run the complete automated verification matrix**
 
 Run each command independently:
 
@@ -674,7 +674,7 @@ npm run test:integration
 
 Expected: every command exits 0. Record exact test counts from Vitest and Playwright output.
 
-- [ ] **Step 4: Perform desktop and constrained visual checks**
+- [x] **Step 4: Perform desktop and constrained visual checks**
 
 Launch the Electron build with a temporary user-data directory. Capture `1440x900` and `1024x768` screenshots for:
 
@@ -687,7 +687,7 @@ AI workspace with a streamed response
 
 Verify by screenshot inspection and DOM bounds that the native menu is absent, the app content begins immediately under the title bar, labels do not clip, no controls overlap, history is unambiguously read-only, and there is no page-level horizontal overflow.
 
-- [ ] **Step 5: Build and inspect the Windows installer**
+- [x] **Step 5: Build and inspect the Windows installer**
 
 Run:
 
@@ -699,7 +699,7 @@ Get-Item release/Terminal-Agent-Setup-1.0.7.exe | Select-Object FullName,Length,
 
 Expected: `Terminal-Agent-Setup-1.0.7.exe` and the cleanup ZIP exist and are non-empty; the SHA-256 hash is captured.
 
-- [ ] **Step 6: Smoke-test packaged launch and commit release changes**
+- [x] **Step 6: Smoke-test packaged launch and commit release changes**
 
 Launch `release/win-unpacked/Terminal-Agent-runtime.exe` with a temporary user-data directory, confirm a responsive main window and visible `设置`, `任务历史区`, and `AI工作区`, then close it cleanly.
 
