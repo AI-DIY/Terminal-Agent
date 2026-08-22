@@ -22,15 +22,15 @@ function createdLabel(chat: ChatSummary): string {
 </script>
 
 <template>
-  <aside class="session-sidebar" aria-label="聊天会话">
+  <aside class="session-sidebar" aria-label="任务历史区">
     <header class="sidebar-header">
-      <div class="panel-title"><strong>聊天会话</strong><span>标题由 AI 自动生成</span></div>
-      <button type="button" class="collapse-button" aria-label="收起聊天会话" title="收起聊天会话" @click="emit('collapse')"><PanelLeftClose :size="14" aria-hidden="true" /><span>收起</span></button>
+      <div class="panel-title"><strong>任务历史区</strong><span>聊天与 Shell 记录</span></div>
+      <button type="button" class="collapse-button" aria-label="收起任务历史区" title="收起任务历史区" @click="emit('collapse')"><PanelLeftClose :size="14" aria-hidden="true" /><span>收起</span></button>
     </header>
     <button type="button" class="new-chat" aria-label="新建聊天" @click="emit('create')"><Plus :size="14" aria-hidden="true" /><span>新建聊天</span></button>
     <p v-if="error" class="status error" role="alert">{{ error }}</p>
     <p v-else-if="loading" class="status">正在读取聊天…</p>
-    <nav v-else aria-label="聊天列表">
+    <nav v-else aria-label="任务历史列表">
       <p v-if="!groups.length" class="empty">暂无聊天</p>
       <section v-for="group in groups" :key="group.label" class="chat-group" :aria-label="group.label">
         <h2>{{ group.label }}</h2>
@@ -52,7 +52,11 @@ function createdLabel(chat: ChatSummary): string {
 .panel-title { min-width: 0; }.panel-title strong { display: block; overflow: hidden; color: var(--text-strong); font-size: 14px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }.panel-title span { display: block; margin-top: 3px; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .collapse-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 66px; height: 30px; margin-left: auto; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 10px; font-weight: 650; white-space: nowrap; }.collapse-button:hover { border-color: var(--focus); background: var(--hover); }
 .new-chat { display: flex; align-items: center; gap: 7px; height: 32px; margin: 7px 9px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 11px; font-weight: 650; text-align: left; }.new-chat:hover { border-color: var(--focus); background: var(--hover); }
-nav { min-height: 0; overflow-y: auto; padding: 6px 7px 14px; }
+nav { min-height: 0; overflow-y: auto; padding: 6px 7px 14px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; scrollbar-gutter: stable; }
+nav::-webkit-scrollbar { width: 8px; }
+nav::-webkit-scrollbar-track { background: transparent; }
+nav::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 4px; background: color-mix(in srgb, var(--muted) 58%, transparent); background-clip: padding-box; }
+nav::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .status,.empty { grid-row: 3 / -1; margin: 0; padding: 16px 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .error { color: var(--red); }
 .chat-group + .chat-group { margin-top: 11px; }

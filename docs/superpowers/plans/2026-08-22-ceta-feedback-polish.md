@@ -161,7 +161,7 @@ git commit -m "fix: unify CETA window chrome and branding"
 - Modify: `src/renderer/src/components/workbench/WorkbenchSessionSidebar.vue`
 - Modify: `src/renderer/src/components/chat/GlobalChatPanel.vue`
 
-- [ ] **Step 1: Write failing naming and scrollbar tests**
+- [x] **Step 1: Write failing naming and scrollbar tests**
 
 Replace the former label expectations with:
 
@@ -178,7 +178,7 @@ expect(history).toContain('::-webkit-scrollbar-thumb')
 
 Update Playwright locators to use the new collapse, expand, and separator accessible names.
 
-- [ ] **Step 2: Run focused tests and observe failure**
+- [x] **Step 2: Run focused tests and observe failure**
 
 Run:
 
@@ -188,7 +188,7 @@ npx vitest run tests/unit/windows/app-branding.test.ts tests/unit/renderer/v18-v
 
 Expected: FAIL on the old `聊天会话` and `AI 聊天` region names and missing custom scrollbar rules.
 
-- [ ] **Step 3: Implement the region vocabulary and scrollbar**
+- [x] **Step 3: Implement the region vocabulary and scrollbar**
 
 Use these visible and accessible labels:
 
@@ -223,7 +223,7 @@ nav::-webkit-scrollbar-thumb {
 nav::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 ```
 
-- [ ] **Step 4: Run focused unit and UI locator tests**
+- [x] **Step 4: Run focused unit and UI locator tests**
 
 Run:
 
@@ -234,7 +234,7 @@ npx playwright test tests/e2e/workbench.spec.ts --grep "persists resized and col
 
 Expected: PASS with the new names and keyboard-operable splitters.
 
-- [ ] **Step 5: Commit side-region polish**
+- [x] **Step 5: Commit side-region polish**
 
 ```powershell
 git add tests/unit/windows/app-branding.test.ts tests/unit/renderer/v18-visual-contract.test.ts tests/e2e/workbench.spec.ts src/renderer/src/components/workbench/WorkbenchShell.vue src/renderer/src/components/workbench/WorkbenchSessionSidebar.vue src/renderer/src/components/chat/GlobalChatPanel.vue

@@ -34,11 +34,11 @@ onBeforeUnmount(() => store.dispose())
 </script>
 
 <template>
-  <section class="global-chat-panel" aria-label="AI 聊天">
+  <section class="global-chat-panel" aria-label="AI工作区">
     <header class="ai-head">
       <span class="ai-avatar" aria-hidden="true">AI</span>
-      <div class="ai-head-copy"><h3>{{ readOnly ? 'AI 历史交互' : 'AI 聊天' }}</h3><span v-if="running" role="status">正在生成回复</span><span v-else>{{ readOnly ? '只读聊天与执行记录' : '当前聊天的全局协作助手' }}</span></div>
-      <button type="button" class="collapse-button" aria-label="收起 AI 聊天" title="收起 AI 聊天" @click="emit('collapse')"><span>收起</span><PanelRightClose :size="14" aria-hidden="true" /></button>
+      <div class="ai-head-copy"><h3>{{ readOnly ? 'AI工作区 · 历史' : 'AI工作区' }}</h3><span v-if="running" role="status">正在生成回复</span><span v-else>{{ readOnly ? '只读聊天与执行记录' : '当前任务的全局协作助手' }}</span></div>
+      <button type="button" class="collapse-button" aria-label="收起 AI工作区" title="收起 AI工作区" @click="emit('collapse')"><span>收起</span><PanelRightClose :size="14" aria-hidden="true" /></button>
       <fieldset class="ai-mode-group" :disabled="readOnly">
         <legend>AI 执行模式</legend>
         <label class="ai-mode-option copilot" :class="{ selected: mode === 'copilot' }"><input type="radio" name="driving-mode" value="copilot" :checked="mode === 'copilot'" :disabled="mode === 'autonomous' || readOnly"><Circle :size="11" :stroke-width="mode === 'copilot' ? 4 : 1.5" aria-hidden="true" /><span>辅助驾驶</span></label>

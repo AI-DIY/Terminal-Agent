@@ -20,13 +20,19 @@ describe('Terminal-Agent branding', () => {
     expect(shell).not.toContain('margin: 8px')
   })
 
-  it('names the V18 side regions as chat sessions and AI chat with directional expand actions', () => {
+  it('names the side regions as task history and AI workspace with directional expand actions', () => {
     const shell = readFileSync(new URL('../../../src/renderer/src/components/workbench/WorkbenchShell.vue', import.meta.url), 'utf8')
     const history = readFileSync(new URL('../../../src/renderer/src/components/workbench/WorkbenchSessionSidebar.vue', import.meta.url), 'utf8')
+    const chat = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
 
-    expect(history).toContain('聊天会话')
-    expect(shell).toContain('展开聊天会话')
-    expect(shell).toContain('展开 AI 聊天')
+    expect(history).toContain('任务历史区')
+    expect(history).toContain('scrollbar-width: thin')
+    expect(history).toContain('::-webkit-scrollbar-thumb')
+    expect(shell).toContain('展开任务历史区')
+    expect(shell).toContain('展开 AI工作区')
+    expect(shell).toContain('调整任务历史区宽度')
+    expect(shell).toContain('调整 AI工作区宽度')
+    expect(chat).toContain('aria-label="AI工作区"')
     expect(shell).toContain('PanelLeftOpen')
     expect(shell).toContain('PanelRightOpen')
   })

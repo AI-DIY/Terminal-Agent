@@ -572,8 +572,8 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
   try {
     app = (await launchApp()).app
     const page = await app.firstWindow()
-    const leftSeparator = page.getByRole('separator', { name: '调整聊天会话栏宽度' })
-    const rightSeparator = page.getByRole('separator', { name: '调整 AI 工作区宽度' })
+    const leftSeparator = page.getByRole('separator', { name: '调整任务历史区宽度' })
+    const rightSeparator = page.getByRole('separator', { name: '调整 AI工作区宽度' })
 
     await expect(leftSeparator).toHaveAttribute('aria-valuenow', '222')
     const leftBox = await leftSeparator.boundingBox()
@@ -594,10 +594,10 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
     for (let index = 0; index < 16; index += 1) await page.keyboard.press('ArrowLeft')
     await expect(rightSeparator).toHaveAttribute('aria-valuenow', '520')
 
-    await page.getByRole('button', { name: '收起聊天会话', exact: true }).click()
-    await page.getByRole('button', { name: '收起 AI 聊天', exact: true }).click()
-    await expect(page.getByRole('button', { name: '展开聊天会话', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '展开 AI 聊天', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '收起任务历史区', exact: true }).click()
+    await page.getByRole('button', { name: '收起 AI工作区', exact: true }).click()
+    await expect(page.getByRole('button', { name: '展开任务历史区', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开 AI工作区', exact: true })).toBeVisible()
     await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({
       leftWidth: 210,
       rightWidth: 520,
@@ -606,8 +606,8 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
     })
 
     await page.reload()
-    await expect(page.getByRole('button', { name: '展开聊天会话', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '展开 AI 聊天', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开任务历史区', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开 AI工作区', exact: true })).toBeVisible()
     await expect(leftSeparator).toHaveAttribute('aria-valuenow', '210')
     await expect(rightSeparator).toHaveAttribute('aria-valuenow', '520')
   } finally {
