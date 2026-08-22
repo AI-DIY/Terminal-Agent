@@ -28,6 +28,15 @@ test('opens real settings with ordered panels, host memory controls, and termina
       '运行进程名称、PID 和进程工作目录',
       '当前用户、工作目录和常用服务状态',
     ]) await expect(page.getByLabel(label)).toBeVisible()
+    const catalog = page.getByRole('region', { name: '采集命令清单', exact: true })
+    await expect(catalog).toBeVisible()
+    await expect(catalog.locator('code')).toHaveCount(13)
+    await expect(catalog.locator('code').nth(0)).toHaveText('hostname')
+    await expect(catalog.locator('code').nth(1)).toHaveText('uname -s')
+    await page.getByLabel('运行进程名称、PID 和进程工作目录').uncheck()
+    const processCommand = catalog.getByRole('listitem').filter({ hasText: '运行进程' })
+    await expect(processCommand).toHaveClass(/disabled/)
+    await expect(processCommand.getByText('当前不执行', { exact: true })).toBeVisible()
 
     await panels.nth(1).click()
     await expect(page.getByPlaceholder('未配置密钥。请使用导入密钥。')).toHaveCount(1)

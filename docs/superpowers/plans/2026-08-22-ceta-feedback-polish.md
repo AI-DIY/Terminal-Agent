@@ -437,7 +437,7 @@ git commit -m "feat: increase Shell workspace heights"
 - Modify: `src/main/observation/register-session-observation.ts`
 - Modify: `src/renderer/src/components/settings/HostMemorySettings.vue`
 
-- [ ] **Step 1: Write failing shared-catalog and renderer tests**
+- [x] **Step 1: Write failing shared-catalog and renderer tests**
 
 Define expected public behavior:
 
@@ -458,7 +458,7 @@ expect(memory).toContain('<code>{{ item.command }}</code>')
 expect(memory).toContain("settings.scopes[item.scope]")
 ```
 
-- [ ] **Step 2: Run focused tests and observe failure**
+- [x] **Step 2: Run focused tests and observe failure**
 
 Run:
 
@@ -468,7 +468,7 @@ npx vitest run tests/unit/shared/host-memory-commands.test.ts tests/unit/observa
 
 Expected: FAIL because the shared catalog does not exist and Settings does not disclose commands.
 
-- [ ] **Step 3: Implement the authoritative catalog**
+- [x] **Step 3: Implement the authoritative catalog**
 
 Create the catalog with exact commands already used by the observation runner:
 
@@ -513,7 +513,7 @@ export function hostMemoryCommandsForScopes(scopes: HostMemoryScopes): readonly 
 
 Keep the long command constants in this same file above the catalog. Re-export them from `observation-runner.ts` for current consumers. Derive `commandsFor()` and `commandAllowed()` from the shared catalog so display and execution cannot drift.
 
-- [ ] **Step 4: Render the read-only catalog and verify consent execution**
+- [x] **Step 4: Render the read-only catalog and verify consent execution**
 
 Add this settings structure:
 
@@ -534,7 +534,7 @@ Add this settings structure:
 
 Extend the existing observation test to compare every `executeReadOnly` command, in order, with `hostMemoryCommandsForScopes(scopes).map(item => item.command)`. Extend Settings E2E to assert `hostname`, `uname -s`, and the disabled-scope state are visible.
 
-- [ ] **Step 5: Run host collection tests and commit**
+- [x] **Step 5: Run host collection tests and commit**
 
 Run:
 

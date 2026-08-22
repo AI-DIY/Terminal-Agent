@@ -2,6 +2,7 @@
 import { RefreshCw } from '@lucide/vue'
 import { nextTick, onMounted, ref } from 'vue'
 import { hostMemoryRecordSchema, type HostMemoryRecord, type HostMemorySettings } from '../../../../shared/contracts'
+import { HOST_MEMORY_COMMANDS } from '../../../../shared/host-memory-commands'
 import { summarizeHostMemoryRecord } from './host-memory-summary'
 
 type DiskDraft = { name: string; totalBytes: string }
@@ -260,6 +261,24 @@ function formatBytes(value: number | undefined): string {
     </fieldset>
     <p class="privacy">不会保存密码、私钥、API Key、令牌、环境变量值、命令行或完整终端内容。所有记忆仅保存在本机，可逐台清除。</p>
 
+    <section class="command-catalog" aria-labelledby="command-catalog-title">
+      <div class="section-head">
+        <div><h3 id="command-catalog-title">采集命令清单</h3><p>连接 Shell 后，点击“我已知道”才会按以下顺序执行。</p></div>
+        <span>只读预制</span>
+      </div>
+      <ol>
+        <li
+          v-for="item in HOST_MEMORY_COMMANDS"
+          :key="item.id"
+          :class="{ disabled: item.scope && !settings.scopes[item.scope] }"
+          :aria-disabled="item.scope ? !settings.scopes[item.scope] : false"
+        >
+          <span><strong>{{ item.label }}</strong><small>{{ item.required ? '始终执行' : item.scope && settings.scopes[item.scope] ? '将执行' : '当前不执行' }}</small></span>
+          <code>{{ item.command }}</code>
+        </li>
+      </ol>
+    </section>
+
     <section class="remembered-hosts" aria-labelledby="remembered-hosts-title">
       <div class="section-head"><div><h3 id="remembered-hosts-title">已建立记忆的主机</h3><p>展开主机可查看本地缓存的事实；进入编辑后可修正过期或识别错误的信息。</p></div><div class="section-head-actions"><span>{{ records.length }} 台</span><button type="button" class="refresh-button" :disabled="loading" aria-label="刷新主机记忆" title="刷新" @click="refresh"><RefreshCw :size="14" aria-hidden="true" /></button></div></div>
       <p v-if="loading">正在加载...</p>
@@ -322,7 +341,14 @@ button:not(:disabled) { cursor: pointer; } button:disabled { opacity: .55; }butt
 .scopes input { width: 15px; height: 15px; margin-top: 1px; accent-color: var(--accent); }
 .scope-card { min-height: 46px; padding: 11px 12px; border: 0; border-radius: 0; background: transparent; }.scope-card:nth-child(odd) { border-right: 1px solid var(--line); }.scope-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.scope-card > span { display: grid; min-width: 0; }.scope-card small { color: var(--text); font-size: 10px; line-height: 1.4; }
 .privacy { color: var(--muted); font-size: 10px; }
-.remembered-hosts { display: grid; gap: 10px; min-width: 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.command-catalog,.remembered-hosts { display: grid; gap: 10px; min-width: 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.command-catalog > .section-head > span { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
+.command-catalog ol { margin: 0; padding: 0; border-bottom: 1px solid var(--line); list-style: none; }
+.command-catalog li { display: grid; grid-template-columns: minmax(130px, .34fr) minmax(0, 1fr); gap: 10px; min-width: 0; padding: 8px 0; border-top: 1px solid var(--line); }
+.command-catalog li > span { display: grid; align-content: start; gap: 2px; min-width: 0; }
+.command-catalog li strong { color: var(--text-strong); font-size: 10px; }.command-catalog li small { color: var(--accent); font-size: 9px; }
+.command-catalog li.disabled strong,.command-catalog li.disabled code { color: var(--muted); }.command-catalog li.disabled small { color: var(--faint); }
+.command-catalog code { min-width: 0; padding: 5px 7px; overflow-wrap: anywhere; border-radius: 3px; background: var(--surface-soft); color: var(--text); font: 9px/1.45 "Cascadia Mono",Consolas,monospace; white-space: pre-wrap; }
 .section-head-actions { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }.refresh-button { width: 28px; padding: 0; }
 .empty { padding: 18px 0; color: var(--muted); text-align: center; }
 .host-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -354,5 +380,5 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); }
 .error { color: var(--red); font-size: 11px; }
 .confirm { position: fixed; z-index: 40; inset: 0; display: grid; place-content: center; gap: 12px; padding: 24px; background: rgb(15 23 35 / 48%); }
 .confirm > p,.confirm > div { box-sizing: border-box; width: min(420px, calc(100vw - 48px)); }.confirm > p { padding: 18px 18px 0; border: 1px solid var(--line); border-bottom: 0; border-radius: 6px 6px 0 0; background: var(--surface); }.confirm > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: -12px; padding: 14px 18px 18px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 6px 6px; background: var(--surface); }
-@media (max-width: 760px) { .scopes,.form-grid,.fact-grid { grid-template-columns: 1fr; }.scope-card:nth-child(odd) { border-right: 0; }.scope-card:nth-child(-n+3) { border-bottom: 1px solid var(--line); }.host-row { grid-template-columns: minmax(0, 1fr) auto auto; }.host-row > span,.host-row time { grid-column: 1 / -1; }.repeat-row,.process-row,.network-row { grid-template-columns: 1fr; }.repeat-row > button { justify-self: end; } }
+@media (max-width: 760px) { .scopes,.form-grid,.fact-grid,.command-catalog li { grid-template-columns: 1fr; }.scope-card:nth-child(odd) { border-right: 0; }.scope-card:nth-child(-n+3) { border-bottom: 1px solid var(--line); }.host-row { grid-template-columns: minmax(0, 1fr) auto auto; }.host-row > span,.host-row time { grid-column: 1 / -1; }.repeat-row,.process-row,.network-row { grid-template-columns: 1fr; }.repeat-row > button { justify-self: end; } }
 </style>

@@ -1,17 +1,26 @@
 import { hostMemoryRecordSchema, type HostMemoryScopes } from '../../shared/contracts'
+import {
+  HOST_MEMORY_COMMANDS,
+  hostMemoryCommandsForScopes,
+  linuxCpuModelCommand,
+  linuxDiskCommand,
+  linuxMemoryCommand,
+  linuxNetworkCommand,
+  linuxProcessCommand,
+  linuxServiceCommand,
+} from '../../shared/host-memory-commands'
 import { containsSensitiveHostMemoryData, normalizeSafeHostMemoryConnectionIp } from '../../shared/host-memory-safety'
 import type { HostFacts, ObservationPlatform } from './observation-schema'
 
-export const linuxCpuModelCommand = 'awk -F: \'/^model name[[:space:]]*:/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }\' /proc/cpuinfo'
-export const linuxMemoryCommand = 'awk \'/^MemTotal:/ { print $2; exit }\' /proc/meminfo'
-export const linuxDiskCommand = 'lsblk -b -dn -o NAME,SIZE,TYPE | head -n 64'
-export const linuxNetworkCommand = 'ip -o addr show | head -n 128'
-export const linuxProcessCommand = 'for p in /proc/[0-9]*; do [ -r "$p/comm" ] || continue; pid=${p##*/}; name=$(head -n 1 "$p/comm"); cwd=$(readlink "$p/cwd" 2>/dev/null || true); printf \'%s\\t%s\\t%s\\n\' "$pid" "$name" "$cwd"; done | head -n 200'
-export const linuxServiceCommand = 'systemctl list-units --type=service --state=running,failed --no-pager --no-legend | head -n 128'
-export const linuxReadOnlyCommands = [
-  'hostname', 'uname -s', 'uname -r', linuxCpuModelCommand, 'uname -m', 'getconf _NPROCESSORS_ONLN',
-  linuxMemoryCommand, linuxDiskCommand, linuxNetworkCommand, linuxProcessCommand, 'id -un', 'pwd -P', linuxServiceCommand,
-] as const
+export {
+  linuxCpuModelCommand,
+  linuxDiskCommand,
+  linuxMemoryCommand,
+  linuxNetworkCommand,
+  linuxProcessCommand,
+  linuxServiceCommand,
+} from '../../shared/host-memory-commands'
+export const linuxReadOnlyCommands: readonly string[] = HOST_MEMORY_COMMANDS.map(item => item.command)
 export const maxObservationOutputBytes = 256 * 1024
 
 export type ObservationOutput = Readonly<Record<string, string>>
@@ -88,13 +97,9 @@ const allScopes: HostMemoryScopes = { identity: true, hardware: true, processes:
 function commandsFor(platform: ObservationPlatform, scopes: HostMemoryScopes | undefined, includeHostname: boolean): readonly string[] {
   if (platform !== 'linux') throw new Error(`Unsupported observation platform: ${platform}`)
   const selected = scopes ?? allScopes
-  return [
-    ...(includeHostname ? ['hostname'] : []),
-    ...(selected.identity ? ['uname -s', 'uname -r'] : []),
-    ...(selected.hardware ? [linuxCpuModelCommand, 'uname -m', 'getconf _NPROCESSORS_ONLN', linuxMemoryCommand, linuxDiskCommand, linuxNetworkCommand] : []),
-    ...(selected.processes ? [linuxProcessCommand] : []),
-    ...(selected.runtime ? ['id -un', 'pwd -P', linuxServiceCommand] : []),
-  ]
+  return hostMemoryCommandsForScopes(selected)
+    .filter(item => includeHostname || item.scope !== null)
+    .map(item => item.command)
 }
 
 function boundedOutput(value: string): string {

@@ -158,6 +158,17 @@ describe('host memory renderer contracts', () => {
     expect(source).not.toContain('JSON.stringify(record, null, 2)')
   })
 
+  it('renders the authoritative read-only command catalog with scope state', () => {
+    const source = readFileSync(new URL('../../../src/renderer/src/components/settings/HostMemorySettings.vue', import.meta.url), 'utf8')
+
+    expect(source).toContain("import { HOST_MEMORY_COMMANDS")
+    expect(source).toContain('采集命令清单')
+    expect(source).toContain('点击“我已知道”才会按以下顺序执行')
+    expect(source).toContain('v-for="item in HOST_MEMORY_COMMANDS"')
+    expect(source).toContain('<code>{{ item.command }}</code>')
+    expect(source).toContain('settings.scopes[item.scope]')
+  })
+
   it('keeps the authoritative migrated software and installation facts editable', () => {
     const source = readFileSync(new URL('../../../src/renderer/src/components/settings/HostMemorySettings.vue', import.meta.url), 'utf8')
 

@@ -6,6 +6,7 @@ import { registerSessionObservation } from '../../../src/main/observation/regist
 import { linuxProcessCommand, linuxServiceCommand } from '../../../src/main/observation/observation-runner'
 import type { HostFacts } from '../../../src/main/observation/observation-schema'
 import { HostMemorySettingsService } from '../../../src/main/settings/host-memory-settings-service'
+import { hostMemoryCommandsForScopes } from '../../../src/shared/host-memory-commands'
 
 describe('registerSessionObservation', () => {
   it('does not create a disclosure after close wins a deferred collection gate', async () => {
@@ -778,12 +779,9 @@ describe('registerSessionObservation', () => {
     await registration.acknowledge(renderer.send.mock.calls[0]![1].token)
     await vi.waitFor(() => expect(facts.observe).toHaveBeenCalledOnce())
 
+    const scopes = { identity: false, hardware: false, processes: false, runtime: true }
     const commands = sessions.executeReadOnly.mock.calls.map(([, command]) => command)
-    expect(commands.filter(command => command === 'hostname')).toHaveLength(1)
-    expect(commands).toContain(linuxServiceCommand)
-    expect(commands).not.toContain(linuxProcessCommand)
-    expect(commands).not.toContain('uname -s')
-    expect(commands).not.toContain('uname -m')
+    expect(commands).toEqual(hostMemoryCommandsForScopes(scopes).map(item => item.command))
   })
 
   it('keeps concurrent disclosures separate and releases dismissed pending state', async () => {

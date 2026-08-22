@@ -4,8 +4,9 @@ import { normalizeHostname } from '../facts/host-facts-service'
 import type { HostMemoryAuthorizationUndo, HostMemorySettingsService } from '../settings/host-memory-settings-service'
 import { normalizeSafeHostMemoryConnectionLabel, normalizeSafeHostMemoryHostnameOutput } from '../../shared/host-memory-safety'
 import type { HostMemoryDisclosure, HostMemoryScopes } from '../../shared/contracts'
+import { HOST_MEMORY_COMMANDS } from '../../shared/host-memory-commands'
 import type { ConnectedSession, SessionService } from '../ssh/session-service'
-import { ObservationRunner, linuxCpuModelCommand, linuxDiskCommand, linuxMemoryCommand, linuxNetworkCommand, linuxProcessCommand, linuxServiceCommand } from './observation-runner'
+import { ObservationRunner } from './observation-runner'
 
 type SessionObservationSource = Pick<SessionService, 'executeReadOnly' | 'onOpened' | 'setObservedHostname' | 'clearObservedHostname' | 'supportsReadOnlyObservation'> & Partial<Pick<SessionService, 'onClosed' | 'connectionIp'>>
 type HostFactsSink = { observe(facts: Parameters<HostFactsService['observe']>[0], canPersist?: () => boolean | Promise<boolean>): Promise<unknown> }
@@ -213,10 +214,8 @@ async function continueObservation(sessions: SessionObservationSource, facts: Ho
   return hostname
 }
 function commandAllowed(command: string, scopes: HostMemoryScopes): boolean {
-  if (command === 'uname -s' || command === 'uname -r') return scopes.identity
-  if ([linuxCpuModelCommand, 'uname -m', 'getconf _NPROCESSORS_ONLN', linuxMemoryCommand, linuxDiskCommand, linuxNetworkCommand].includes(command)) return scopes.hardware
-  if (command === linuxProcessCommand) return scopes.processes
-  return ['id -un', 'pwd -P', linuxServiceCommand].includes(command) && scopes.runtime
+  const item = HOST_MEMORY_COMMANDS.find(candidate => candidate.command === command)
+  return item !== undefined && (item.scope === null || scopes[item.scope])
 }
 function safeHostname(value: string): string | null { try { return normalizeSafeHostMemoryHostnameOutput(value) } catch { return null } }
 function safeLabel(value: string): string | null { try { return normalizeSafeHostMemoryConnectionLabel(value) } catch { return null } }

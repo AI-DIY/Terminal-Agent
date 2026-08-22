@@ -4,6 +4,7 @@ import {
   linuxReadOnlyCommands,
   ObservationRunner,
 } from '../../../src/main/observation/observation-runner'
+import { HOST_MEMORY_COMMANDS, hostMemoryCommandsForScopes } from '../../../src/shared/host-memory-commands'
 
 describe('ObservationRunner', () => {
   it('drops synthetic bare credential formats from recursive observation facts', async () => {
@@ -110,10 +111,22 @@ describe('ObservationRunner', () => {
     const execute = vi.fn().mockResolvedValue('ok')
     await new ObservationRunner(execute).run('linux')
 
-    expect(execute.mock.calls.flat()).toEqual([...linuxReadOnlyCommands])
+    expect(linuxReadOnlyCommands).toEqual(HOST_MEMORY_COMMANDS.map(item => item.command))
+    expect(execute.mock.calls.flat()).toEqual(HOST_MEMORY_COMMANDS.map(item => item.command))
     expect(execute.mock.calls.flat().join('\n')).toContain('systemctl list-units --type=service --state=running,failed --no-pager --no-legend')
     expect(execute.mock.calls.flat().join('\n')).not.toMatch(/\b(kill|rm|vi|systemctl\s+restart)\b/)
     expect(execute.mock.calls.flat().join('\n')).not.toMatch(/(?:cmdline|environ|printenv)/)
+  })
+
+  it('uses the shared catalog order for an enabled scope subset', async () => {
+    const execute = vi.fn((command: string) => Promise.resolve(command === 'hostname' ? 'api-prod\n' : ''))
+    const scopes = { identity: false, hardware: false, processes: false, runtime: true }
+
+    await new ObservationRunner(execute).collectFacts('linux', { scopes })
+
+    expect(execute.mock.calls.map(([command]) => command)).toEqual(
+      hostMemoryCommandsForScopes(scopes).map(item => item.command),
+    )
   })
 
   it('collects only bounded hardware structures when only hardware is enabled', async () => {
