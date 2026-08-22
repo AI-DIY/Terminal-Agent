@@ -9,7 +9,7 @@ export const WORKBENCH_RIGHT_WIDTH_MAX = 520
 export const workbenchThemeSchema = z.enum(['pearl', 'graphite'])
 export type WorkbenchTheme = z.infer<typeof workbenchThemeSchema>
 
-export const shellRowHeightPercentSchema = z.union([z.literal(34), z.literal(48), z.literal(64)])
+export const shellRowHeightPercentSchema = z.union([z.literal(48), z.literal(64), z.literal(80)])
 export type ShellRowHeightPercent = z.infer<typeof shellRowHeightPercentSchema>
 
 export const workbenchLayoutSchema = z.object({
@@ -33,7 +33,7 @@ export const workbenchPreferencesSchema = z.object({
 export type WorkbenchPreferences = z.infer<typeof workbenchPreferencesSchema>
 
 export const workbenchPreferencesDocumentSchema = z.object({
-  version: z.literal(2),
+  version: z.literal(3),
   appearance: z.object({ theme: workbenchThemeSchema }).strict(),
   layout: workbenchLayoutSchema,
   routing: z.object({}).strict(),
@@ -50,7 +50,7 @@ export function createDefaultWorkbenchPreferences(): WorkbenchPreferences {
     rightCollapsed: false,
     visibleCount: 3,
     columns: 3,
-    rowHeightPercent: 48,
+    rowHeightPercent: 64,
   }
 }
 

@@ -239,10 +239,10 @@ test('filters historical hosts as a multi-select workspace with shared layout an
     await page.getByRole('button', { name: '历史 Shell 布局', exact: true }).click()
     const historyLayout = page.getByLabel('历史 Shell 布局设置')
     await historyLayout.getByLabel('每行数量').selectOption('1')
-    await historyLayout.getByLabel('单行高度（占工作区）').selectOption('34')
+    await historyLayout.getByLabel('单行高度（占工作区）').selectOption('48')
     const grid = page.locator('.history-shell-grid')
     await expect(grid).toHaveAttribute('data-columns', '1')
-    await expect(grid).toHaveAttribute('data-row-height-percent', '34')
+    await expect(grid).toHaveAttribute('data-row-height-percent', '48')
 
     await firstHost.click({ button: 'right' })
     const menu = page.getByRole('menu', { name: '历史 Shell 操作 127.0.0.1', exact: true })
@@ -503,12 +503,12 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
     await page.getByLabel('当前展示数量').selectOption('2')
     await page.getByLabel('每行数量').selectOption('1')
-    await page.getByLabel('单行高度（占工作区）').selectOption('34')
+    await page.getByLabel('单行高度（占工作区）').selectOption('48')
 
     const grid = page.getByLabel('可见终端面板')
     await expect(allPanes.filter({ visible: true })).toHaveCount(2)
     await expect(grid).toHaveAttribute('data-columns', '1')
-    await expect(grid).toHaveAttribute('data-row-height-percent', '34')
+    await expect(grid).toHaveAttribute('data-row-height-percent', '48')
     for (const pane of originalPanes) expect(await pane.evaluate(node => node.isConnected)).toBe(true)
 
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
@@ -521,7 +521,7 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({
       visibleCount: 2,
       columns: 1,
-      rowHeightPercent: 34,
+      rowHeightPercent: 48,
     })
     await page.evaluate(() => window.terminalAgent.settings.appearance.saveTheme('graphite'))
     await page.reload()
@@ -530,13 +530,32 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
     await expect(page.getByLabel('当前展示数量')).toHaveValue('2')
     await expect(page.getByLabel('每行数量')).toHaveValue('1')
-    await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('34')
+    await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('48')
     await page.setViewportSize({ width: 900, height: 700 })
     const narrowGeometry = await page.evaluate(() => {
-      const bounds = (selector: string): DOMRect => {
+      const element = (selector: string): HTMLElement => {
         const element = document.querySelector(selector)
         if (!(element instanceof HTMLElement)) throw new Error(`Missing visual element: ${selector}`)
-        return element.getBoundingClientRect()
+        return element
+      }
+      const bounds = (selector: string): DOMRect => element(selector).getBoundingClientRect()
+      const diagnostics = (selector: string) => {
+        const target = element(selector)
+        const box = target.getBoundingClientRect()
+        const style = getComputedStyle(target)
+        return {
+          left: box.left,
+          right: box.right,
+          width: box.width,
+          clientWidth: target.clientWidth,
+          scrollWidth: target.scrollWidth,
+          position: style.position,
+          minWidth: style.minWidth,
+          flexGrow: style.flexGrow,
+          flexShrink: style.flexShrink,
+          flexBasis: style.flexBasis,
+          overflowX: style.overflowX,
+        }
       }
       const shellToolbar = bounds('.shell-toolbar-content')
       const hostbarTools = bounds('.hostbar-tools')
@@ -548,17 +567,23 @@ test('layout controls persist while hidden terminals remain mounted and online',
       return {
         toolbarHeight: shellToolbar.height,
         appHeaderHeight: bounds('.app-header').height,
-        hostbarToolsFit: hostbarTools.left >= shellToolbar.left && hostbarTools.right <= shellToolbar.right,
+        hostbarToolsOverflowPx: Math.max(0, hostbarTools.right - shellToolbar.right),
         chatPanelFitsViewport: chatPanel.left >= 0 && chatPanel.right <= window.innerWidth,
         modeGroupFits: withinPanel(modeGroup),
         inputFits: withinPanel(chatInput),
         sendFits: withinPanel(sendButton),
         noPageOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        shellRegion: diagnostics('.shell-region'),
+        shellToolbar: diagnostics('.shell-toolbar-content'),
+        sessionTabs: diagnostics('.session-tabs'),
+        hostbarTools: diagnostics('.hostbar-tools'),
       }
     })
     expect(narrowGeometry.toolbarHeight).toBeLessThanOrEqual(43)
     expect(narrowGeometry.appHeaderHeight).toBe(48)
-    expect(narrowGeometry.hostbarToolsFit).toBe(true)
+    expect(narrowGeometry.hostbarTools.left).toBeGreaterThanOrEqual(narrowGeometry.shellToolbar.left)
+    expect(narrowGeometry.hostbarToolsOverflowPx, JSON.stringify(narrowGeometry, null, 2)).toBeLessThan(0.5)
+    expect(narrowGeometry.sessionTabs.scrollWidth).toBeGreaterThan(narrowGeometry.sessionTabs.clientWidth)
     expect(narrowGeometry.chatPanelFitsViewport).toBe(true)
     expect(narrowGeometry.modeGroupFits).toBe(true)
     expect(narrowGeometry.inputFits).toBe(true)

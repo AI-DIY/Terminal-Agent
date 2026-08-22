@@ -23,9 +23,9 @@ export type WorkbenchPreferencesApi = {
 export type LayoutPreferencesStore = ReturnType<typeof createLayoutPreferencesStore>
 
 export const SHELL_ROW_HEIGHT_PRESETS: ReadonlyArray<{ label: string; value: ShellRowHeightPercent }> = [
-  { label: '紧凑', value: 34 },
-  { label: '标准', value: 48 },
-  { label: '宽松', value: 64 },
+  { label: '紧凑', value: 48 },
+  { label: '标准', value: 64 },
+  { label: '宽松', value: 80 },
 ]
 
 export function shellGridStyle(columns: number, rowHeightPercent: ShellRowHeightPercent, focused: boolean): Record<string, string> {

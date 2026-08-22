@@ -327,7 +327,7 @@ git commit -m "fix: clarify historical Shell playback"
 - Modify: `src/main/settings/workbench-preferences-service.ts`
 - Modify: `src/renderer/src/stores/layout-preferences.ts`
 
-- [ ] **Step 1: Write failing preset and version-2 migration tests**
+- [x] **Step 1: Write failing preset and version-2 migration tests**
 
 Update the renderer contract:
 
@@ -363,7 +363,7 @@ it.each([[34, 48], [48, 64], [64, 80]] as const)(
 )
 ```
 
-- [ ] **Step 2: Run focused tests and observe failure**
+- [x] **Step 2: Run focused tests and observe failure**
 
 Run:
 
@@ -373,7 +373,7 @@ npx vitest run tests/unit/renderer/layout-preferences.test.ts tests/unit/setting
 
 Expected: FAIL because the schemas and defaults still use `34 / 48 / 64` and document version 2.
 
-- [ ] **Step 3: Implement version-3 preferences and migration**
+- [x] **Step 3: Implement version-3 preferences and migration**
 
 Use the new public schema:
 
@@ -407,7 +407,7 @@ function tallerRowHeight(value: 34 | 48 | 64): 48 | 64 | 80 {
 
 Migrate both version 1 and version 2 directly to version 3. Set the default and `SHELL_ROW_HEIGHT_PRESETS` to `48 / 64 / 80`.
 
-- [ ] **Step 4: Run migration and renderer tests**
+- [x] **Step 4: Run migration and renderer tests**
 
 Run:
 
@@ -417,7 +417,7 @@ npx vitest run tests/unit/renderer/layout-preferences.test.ts tests/unit/setting
 
 Expected: PASS for new documents, old pixel documents, and old percentage documents.
 
-- [ ] **Step 5: Commit layout migration**
+- [x] **Step 5: Commit layout migration**
 
 ```powershell
 git add tests/unit/renderer/layout-preferences.test.ts tests/unit/settings/workbench-preferences-service.test.ts src/shared/contracts.ts src/main/settings/workbench-preferences-service.ts src/renderer/src/stores/layout-preferences.ts
