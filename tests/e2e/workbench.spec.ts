@@ -220,6 +220,10 @@ test('filters historical hosts as a multi-select workspace with shared layout an
     await expect(firstHost).toHaveAttribute('aria-pressed', 'true')
     await expect(secondHost).toHaveAttribute('aria-pressed', 'true')
     await expect(historicalCards).toHaveCount(2)
+    await expect(page.getByText('Shell 历史回放', { exact: true })).toBeVisible()
+    await expect(page.getByText('2 台主机 · 2 条记录', { exact: true })).toBeVisible()
+    await expect(page.getByText('以下 Shell 已关闭，仅提供只读回放', { exact: true })).toBeVisible()
+    await expect(page.locator('.shell-title')).toHaveCount(0)
 
     await firstHost.click()
     await expect(firstHost).toHaveAttribute('aria-pressed', 'false')

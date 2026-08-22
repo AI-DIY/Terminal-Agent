@@ -249,7 +249,7 @@ git commit -m "fix: clarify CETA workbench regions"
 - Modify: `src/renderer/src/components/workbench/ShellCanvas.vue`
 - Modify: `src/renderer/src/views/WorkbenchView.vue`
 
-- [ ] **Step 1: Write failing historical-state tests**
+- [x] **Step 1: Write failing historical-state tests**
 
 Add static and runtime expectations:
 
@@ -269,7 +269,7 @@ await expect(page.getByText(/以下 Shell 已关闭，仅提供只读回放/)).t
 await expect(page.getByText(/个关联 · .*个正在显示/)).toHaveCount(0)
 ```
 
-- [ ] **Step 2: Run the focused tests and observe failure**
+- [x] **Step 2: Run the focused tests and observe failure**
 
 Run:
 
@@ -279,7 +279,7 @@ npx vitest run tests/unit/renderer/shell-canvas.test.ts
 
 Expected: FAIL because historical mode still says `Shell 历史` and renders the generic live-association summary.
 
-- [ ] **Step 3: Implement explicit live/history toolbars and copy**
+- [x] **Step 3: Implement explicit live/history toolbars and copy**
 
 Use a historical heading independent of `shellCount`:
 
@@ -300,7 +300,7 @@ Use a historical heading independent of `shellCount`:
 
 Keep the history host tabs, context menu, selected-host filtering, read-only preview slot, and reconnect action unchanged.
 
-- [ ] **Step 4: Run focused unit and historical Playwright tests**
+- [x] **Step 4: Run focused unit and historical Playwright tests**
 
 Run:
 
@@ -311,7 +311,7 @@ npx playwright test tests/e2e/workbench.spec.ts --grep "historical"
 
 Expected: PASS; historical tasks show no contradictory live Shell summary.
 
-- [ ] **Step 5: Commit historical-state polish**
+- [x] **Step 5: Commit historical-state polish**
 
 ```powershell
 git add tests/unit/renderer/shell-canvas.test.ts tests/e2e/workbench.spec.ts src/renderer/src/components/workbench/ShellCanvas.vue src/renderer/src/views/WorkbenchView.vue

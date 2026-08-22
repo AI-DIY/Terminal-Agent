@@ -44,6 +44,15 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(view).toContain(':style="historyGridStyle"')
   })
 
+  it('labels historical-only tasks as closed read-only playback instead of live Shell activity', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+
+    expect(canvas).toContain('Shell 历史回放')
+    expect(canvas).toContain('{{ historyHosts.length }} 台主机')
+    expect(canvas).toContain('以下 Shell 已关闭，仅提供只读回放')
+    expect(canvas).toContain('v-if="isLive" class="shell-title"')
+  })
+
   it('keeps upgrade control in the AI workspace and removes save and upgrade controls from Shell workspace', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const chat = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')

@@ -145,12 +145,13 @@ watch(
         @select="selectSession"
         @close="closeSession"
       />
-      <div v-else class="history-toolbar-title"><strong>Shell 历史</strong><span>{{ shellCount }} 个关联</span></div>
+      <div v-else class="history-toolbar-title"><strong>Shell 历史回放</strong><span>{{ historyHosts.length }} 台主机 · {{ shellCount }} 条记录</span></div>
       <div class="hostbar-tools">
-        <div class="shell-title">
+        <div v-if="isLive" class="shell-title">
           <strong>Shell</strong>
           <span>{{ shellCount }} 个关联 · {{ displayedSessionIds.length }} 个正在显示</span>
         </div>
+        <span v-else class="history-readonly-note">以下 Shell 已关闭，仅提供只读回放</span>
         <button v-if="isLive" type="button" class="connect-button" @click="emit('connect')"><Plus :size="13" aria-hidden="true" /><span>新建 SSH 连接</span></button>
         <button v-else-if="liveChatAvailable" type="button" class="connect-button" @click="emit('restoreLive')">返回实时聊天</button>
         <button
@@ -275,6 +276,7 @@ watch(
 .shell-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; }
 .shell-title strong { color: var(--text-strong); font-size: 10px; white-space: nowrap; }
 .shell-title span { max-width: 170px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.history-readonly-note { max-width: 220px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .hostbar-tools button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 29px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 10px; font-weight: 650; white-space: nowrap; }
 .hostbar-tools button:hover { border-color: var(--focus); background: var(--hover); }
 .hostbar-tools .connect-button { border-color: var(--accent); background: var(--accent); color: #fff; }
