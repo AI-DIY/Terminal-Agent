@@ -129,7 +129,7 @@ onBeforeUnmount(widthSaver.flush)
   box-shadow: none;
 }
 .app-header { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); }
-.brand { display: flex; align-items: center; gap: 9px; min-width: 176px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; font-weight: 700; }.brand-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: var(--text-strong); color: var(--surface); font-size: 10px; font-weight: 800; }
+.brand { display: flex; align-items: center; gap: 9px; min-width: 176px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; font-weight: 700; }.brand-mark { display: grid; place-items: center; box-sizing: border-box; width: 28px; height: 28px; border: 1px solid #535e6a; border-radius: 0; background: #1d242c; color: #fff; font-size: 10px; font-weight: 800; }
 .current-chat { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .current-chat b { color: var(--text-strong); font-size: 11px; font-weight: 680; }
 .current-chat span { margin-left: 9px; color: var(--faint); }

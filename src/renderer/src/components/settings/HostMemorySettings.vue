@@ -2,7 +2,12 @@
 import { RefreshCw } from '@lucide/vue'
 import { nextTick, onMounted, ref } from 'vue'
 import { hostMemoryRecordSchema, type HostMemoryRecord, type HostMemorySettings } from '../../../../shared/contracts'
-import { HOST_MEMORY_COMMANDS } from '../../../../shared/host-memory-commands'
+import {
+  HOST_MEMORY_COMMAND_GROUPS,
+  HOST_MEMORY_COMMANDS,
+  hostMemoryCommandWillRun,
+  type HostMemoryCommand,
+} from '../../../../shared/host-memory-commands'
 import { summarizeHostMemoryRecord } from './host-memory-summary'
 
 type DiskDraft = { name: string; totalBytes: string }
@@ -43,6 +48,10 @@ const clearTarget = ref<string | null>(null)
 const clearing = ref(false)
 const clearDialog = ref<HTMLElement | null>(null)
 const panel = ref<HTMLElement | null>(null)
+const commandGroups = HOST_MEMORY_COMMAND_GROUPS.map(group => ({
+  ...group,
+  commands: HOST_MEMORY_COMMANDS.filter(item => item.group === group.id),
+}))
 let clearFocusOrigin: HTMLElement | null = null
 
 onMounted(() => { void refresh() })
@@ -235,6 +244,11 @@ function formatBytes(value: number | undefined): string {
   while (current >= 1024 && unit < units.length - 1) { current /= 1024; unit += 1 }
   return `${current >= 10 || unit === 0 ? current.toFixed(0) : current.toFixed(1)} ${units[unit]}`
 }
+function commandWillRun(item: HostMemoryCommand): boolean { return hostMemoryCommandWillRun(item, settings.value) }
+function commandStatus(item: HostMemoryCommand): string {
+  if (!commandWillRun(item)) return '当前不执行'
+  return item.required ? '始终执行' : '将执行'
+}
 </script>
 
 <template>
@@ -266,17 +280,22 @@ function formatBytes(value: number | undefined): string {
         <div><h3 id="command-catalog-title">采集命令清单</h3><p>连接 Shell 后，点击“我已知道”才会按以下顺序执行。</p></div>
         <span>只读预制</span>
       </div>
-      <ol>
-        <li
-          v-for="item in HOST_MEMORY_COMMANDS"
-          :key="item.id"
-          :class="{ disabled: item.scope && !settings.scopes[item.scope] }"
-          :aria-disabled="item.scope ? !settings.scopes[item.scope] : false"
-        >
-          <span><strong>{{ item.label }}</strong><small>{{ item.required ? '始终执行' : item.scope && settings.scopes[item.scope] ? '将执行' : '当前不执行' }}</small></span>
-          <code>{{ item.command }}</code>
-        </li>
-      </ol>
+      <div class="command-groups">
+        <section v-for="group in commandGroups" :key="group.id" class="command-group" :aria-labelledby="`command-group-${group.id}`">
+          <h4 :id="`command-group-${group.id}`">{{ group.label }}</h4>
+          <ol>
+            <li
+              v-for="item in group.commands"
+              :key="item.id"
+              :class="{ disabled: !commandWillRun(item) }"
+              :aria-disabled="!commandWillRun(item)"
+            >
+              <span><strong>{{ item.label }}</strong><small>{{ commandStatus(item) }}</small></span>
+              <code>{{ item.command }}</code>
+            </li>
+          </ol>
+        </section>
+      </div>
     </section>
 
     <section class="remembered-hosts" aria-labelledby="remembered-hosts-title">
@@ -343,6 +362,8 @@ button:not(:disabled) { cursor: pointer; } button:disabled { opacity: .55; }butt
 .privacy { color: var(--muted); font-size: 10px; }
 .command-catalog,.remembered-hosts { display: grid; gap: 10px; min-width: 0; padding-top: 14px; border-top: 1px solid var(--line); }
 .command-catalog > .section-head > span { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
+.command-groups { display: grid; gap: 12px; min-width: 0; }
+.command-group { min-width: 0; }.command-group h4 { margin: 0 0 5px; color: var(--text-strong); font-size: 11px; }
 .command-catalog ol { margin: 0; padding: 0; border-bottom: 1px solid var(--line); list-style: none; }
 .command-catalog li { display: grid; grid-template-columns: minmax(130px, .34fr) minmax(0, 1fr); gap: 10px; min-width: 0; padding: 8px 0; border-top: 1px solid var(--line); }
 .command-catalog li > span { display: grid; align-content: start; gap: 2px; min-width: 0; }

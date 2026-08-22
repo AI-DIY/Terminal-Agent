@@ -8,6 +8,7 @@ describe('Terminal-Agent branding', () => {
     const iconGenerator = readFileSync(new URL('../../../scripts/windows/generate-ta-icon.ps1', import.meta.url), 'utf8')
     const settings = readFileSync(new URL('../../../src/renderer/src/views/SettingsView.vue', import.meta.url), 'utf8')
     const icon = new URL('../../../build-resources/ta-icon.ico', import.meta.url)
+    const brandMarkRule = /\.brand-mark\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
 
     expect(packageJson.version).toBe('1.0.7')
     expect(packageJson.build.win.icon).toBe('build-resources/ta-icon.ico')
@@ -18,6 +19,11 @@ describe('Terminal-Agent branding', () => {
     expect(iconGenerator).not.toContain('accentBrush')
     expect(iconGenerator).toContain("[System.Drawing.RectangleF]::new(0, 0, $size, $size)")
     expect(shell).toContain('width: 28px; height: 28px')
+    expect(brandMarkRule).toContain('border: 1px solid #535e6a')
+    expect(brandMarkRule).toContain('border-radius: 0')
+    expect(brandMarkRule).toContain('background: #1d242c')
+    expect(brandMarkRule).toContain('color: #fff')
+    expect(brandMarkRule).not.toContain('var(')
     expect(shell).not.toContain('margin: 8px')
     expect(settings).toContain('width: 100vw')
     expect(settings).toContain('height: 100vh')

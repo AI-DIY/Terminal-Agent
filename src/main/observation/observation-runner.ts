@@ -98,7 +98,7 @@ function commandsFor(platform: ObservationPlatform, scopes: HostMemoryScopes | u
   if (platform !== 'linux') throw new Error(`Unsupported observation platform: ${platform}`)
   const selected = scopes ?? allScopes
   return hostMemoryCommandsForScopes(selected)
-    .filter(item => includeHostname || item.scope !== null)
+    .filter(item => includeHostname || item.id !== 'hostname')
     .map(item => item.command)
 }
 

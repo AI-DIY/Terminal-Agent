@@ -13,7 +13,7 @@ Release date: 2026-08-22
 ## Host memory and AI verification
 
 - Displays the complete ordered list of fixed read-only host-information commands in Settings, including the current enabled or disabled scope state for every command.
-- Executes those commands only after `我已知道`, keeps `hostname` first, and stores filtered structured facts by the observed hostname.
+- Executes those commands only after `我已知道` and a required Linux platform check, keeps `hostname` first, and stores filtered structured facts by the observed hostname.
 - Verifies the model connection API and `AI工作区` against the same local HTTP provider configuration, including streaming, temporary failure, retry, persistence, cancellation, and supersession coverage.
 
 ## Windows release assets

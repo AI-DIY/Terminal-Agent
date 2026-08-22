@@ -92,7 +92,7 @@ describe('registerSessionObservation', () => {
     resolveScopes({ identity: true, hardware: true, processes: true, runtime: true })
     await new Promise(resolve => setImmediate(resolve))
 
-    expect(sessions.executeReadOnly.mock.calls).toEqual([['s1', 'hostname']])
+    expect(sessions.executeReadOnly.mock.calls).toEqual([['s1', 'hostname'], ['s1', 'uname -s']])
     expect(facts.observe).not.toHaveBeenCalled()
     expect(sessions.setObservedHostname).not.toHaveBeenCalled()
     registration()
@@ -625,7 +625,7 @@ describe('registerSessionObservation', () => {
     await registration.acknowledge(renderer.send.mock.calls[0]![1].token)
     await new Promise(resolve => setImmediate(resolve))
 
-    expect(sessions.executeReadOnly.mock.calls).toEqual([['s1', 'hostname']])
+    expect(sessions.executeReadOnly.mock.calls).toEqual([['s1', 'hostname'], ['s1', 'uname -s']])
     expect(facts.observe).not.toHaveBeenCalled()
     expect(sessions.setObservedHostname).not.toHaveBeenCalled()
     registration()
@@ -784,6 +784,33 @@ describe('registerSessionObservation', () => {
     expect(commands).toEqual(hostMemoryCommandsForScopes(scopes).map(item => item.command))
   })
 
+  it('stops after the required platform check on an unsupported SSH host', async () => {
+    const sessions = createSessions(true)
+    sessions.executeReadOnly.mockImplementation((_sessionId: string, command: string) => Promise.resolve(
+      command === 'hostname' ? 'windows-host\r\n' : command === 'uname -s' ? 'Windows_NT\r\n' : commandOutput(command),
+    ))
+    const facts = { observe: vi.fn() }
+    const authorizeConnectionBinding = vi.fn().mockResolvedValue(true)
+    const memory = createMemory({
+      isConnectionAcknowledged: vi.fn().mockResolvedValue(true),
+      authorizeConnectionBinding,
+    })
+    const registration = registerSessionObservation(sessions, facts, memory)
+
+    sessions.openedListener?.({ id: 's1', hostname: '192.0.2.10', mode: 'copilot' })
+    await vi.waitFor(() => expect(sessions.executeReadOnly).toHaveBeenCalledTimes(2))
+    await new Promise(resolve => setImmediate(resolve))
+
+    expect(sessions.executeReadOnly.mock.calls).toEqual([
+      ['s1', 'hostname'],
+      ['s1', 'uname -s'],
+    ])
+    expect(facts.observe).not.toHaveBeenCalled()
+    expect(sessions.setObservedHostname).not.toHaveBeenCalled()
+    expect(authorizeConnectionBinding).not.toHaveBeenCalled()
+    registration()
+  })
+
   it('keeps concurrent disclosures separate and releases dismissed pending state', async () => {
     const sessions = createSessions(true)
     sessions.executeReadOnly.mockImplementation((sessionId: string, command: string) => Promise.resolve(
@@ -915,6 +942,7 @@ function createSessions(supportsObservation: boolean) {
 
 function commandOutput(command: string): string {
   if (command === 'hostname') return 'api-prod\n'
+  if (command === 'uname -s') return 'Linux\n'
   if (command === linuxProcessCommand) return '42\tnginx\t/usr/sbin\n'
   if (command === linuxServiceCommand) {
     return 'nginx.service loaded active running nginx\n'

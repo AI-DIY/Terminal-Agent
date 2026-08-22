@@ -30,9 +30,16 @@ test('opens real settings with ordered panels, host memory controls, and termina
     ]) await expect(page.getByLabel(label)).toBeVisible()
     const catalog = page.getByRole('region', { name: '采集命令清单', exact: true })
     await expect(catalog).toBeVisible()
+    for (const heading of ['身份与系统', '硬件', '进程', '运行环境']) {
+      await expect(catalog.getByRole('heading', { name: heading, exact: true })).toBeVisible()
+    }
     await expect(catalog.locator('code')).toHaveCount(13)
     await expect(catalog.locator('code').nth(0)).toHaveText('hostname')
     await expect(catalog.locator('code').nth(1)).toHaveText('uname -s')
+    await expect(catalog.getByRole('listitem')).toHaveCount(13)
+    await expect(catalog.getByRole('listitem').filter({ hasText: '当前不执行' })).toHaveCount(13)
+    await page.getByLabel('启用本地主机记忆').check()
+    await expect(catalog.getByRole('listitem').filter({ hasText: '始终执行' })).toHaveCount(2)
     await page.getByLabel('运行进程名称、PID 和进程工作目录').uncheck()
     const processCommand = catalog.getByRole('listitem').filter({ hasText: '运行进程' })
     await expect(processCommand).toHaveClass(/disabled/)

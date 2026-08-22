@@ -84,9 +84,10 @@ describe('ObservationRunner', () => {
       scopes: { identity: false, hardware: false, processes: true, runtime: false },
     })
     const commands = execute.mock.calls.map(([command]) => command)
+    expect(commands).toHaveLength(3)
     expect(commands[0]).toBe('hostname')
-    expect(commands.slice(1)).toHaveLength(1)
-    expect(commands[1]).toContain('/proc/[0-9]*')
+    expect(commands[1]).toBe('uname -s')
+    expect(commands[2]).toContain('/proc/[0-9]*')
   })
 
   it('checks the current gate before every remote read', async () => {
@@ -99,13 +100,17 @@ describe('ObservationRunner', () => {
   it('stops before the next scoped read when that scope is disabled', async () => {
     let processes = true
     const commands: string[] = []
-    const runner = new ObservationRunner(async command => { commands.push(command); processes = false; return '' })
+    const runner = new ObservationRunner(async command => {
+      commands.push(command)
+      if (command === linuxProcessCommand) processes = false
+      return command === 'uname -s' ? 'Linux\n' : ''
+    })
     await runner.collectFacts('linux', {
       knownHostname: 'api-prod',
-      scopes: { identity: false, hardware: false, processes: true, runtime: false },
+      scopes: { identity: false, hardware: false, processes: true, runtime: true },
       beforeCommand: async () => processes,
     })
-    expect(commands).toEqual([linuxProcessCommand])
+    expect(commands).toEqual(['uname -s', linuxProcessCommand])
   })
   it('sends only its fixed read-only Linux observation commands', async () => {
     const execute = vi.fn().mockResolvedValue('ok')
@@ -148,7 +153,7 @@ describe('ObservationRunner', () => {
       scopes: { identity: false, hardware: false, processes: false, runtime: false },
     })
 
-    expect(execute.mock.calls.flat()).toEqual(['hostname'])
+    expect(execute.mock.calls.flat()).toEqual(['hostname', 'uname -s'])
     expect(facts).toEqual({ hostname: 'api-prod', observedAt: expect.any(String) })
   })
 })

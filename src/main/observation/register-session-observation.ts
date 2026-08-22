@@ -4,7 +4,7 @@ import { normalizeHostname } from '../facts/host-facts-service'
 import type { HostMemoryAuthorizationUndo, HostMemorySettingsService } from '../settings/host-memory-settings-service'
 import { normalizeSafeHostMemoryConnectionLabel, normalizeSafeHostMemoryHostnameOutput } from '../../shared/host-memory-safety'
 import type { HostMemoryDisclosure, HostMemoryScopes } from '../../shared/contracts'
-import { HOST_MEMORY_COMMANDS } from '../../shared/host-memory-commands'
+import { HOST_MEMORY_COMMANDS, linuxPlatformCommand } from '../../shared/host-memory-commands'
 import type { ConnectedSession, SessionService } from '../ssh/session-service'
 import { ObservationRunner } from './observation-runner'
 
@@ -193,13 +193,17 @@ async function continueObservation(sessions: SessionObservationSource, facts: Ho
   }
   if (!await permitted()) return undefined
   const hostname = safeHostname(await sessions.executeReadOnly(session.id, 'hostname'))
-  if (!hostname || !await permitted()) return undefined
+  if (!hostname || hostRevokedSinceStart(hostname) || !await permitted()) return undefined
   onHostname?.(hostname)
+  const platformOutput = await sessions.executeReadOnly(session.id, linuxPlatformCommand)
+  if (!isLinuxPlatform(platformOutput) || hostRevokedSinceStart(hostname) || !await permitted()) return undefined
   if (label && memory.authorizeConnectionBinding) {
     if (!await memory.authorizeConnectionBinding(label, hostname)) { if (isActive()) onConsentRequired(); return undefined }
     if (!await permitted(hostname)) return undefined
   } else if (!await permitted(hostname, true)) return undefined
-  const runner = new ObservationRunner(command => sessions.executeReadOnly(session.id, command))
+  const runner = new ObservationRunner(command => command === linuxPlatformCommand
+    ? Promise.resolve(platformOutput)
+    : sessions.executeReadOnly(session.id, command))
   const scopes = await memory.collectionScopes()
   if (!await permitted(hostname)) return undefined
   const observed = await runner.collectFacts('linux', { knownHostname: hostname, connectionIp: sessions.connectionIp?.(session.id), scopes, beforeCommand: async command => await permitted(hostname) && commandAllowed(command, scopes) })
@@ -219,3 +223,4 @@ function commandAllowed(command: string, scopes: HostMemoryScopes): boolean {
 }
 function safeHostname(value: string): string | null { try { return normalizeSafeHostMemoryHostnameOutput(value) } catch { return null } }
 function safeLabel(value: string): string | null { try { return normalizeSafeHostMemoryConnectionLabel(value) } catch { return null } }
+function isLinuxPlatform(value: string): boolean { return value.split(/\r?\n/, 1)[0]?.trim() === 'Linux' }
