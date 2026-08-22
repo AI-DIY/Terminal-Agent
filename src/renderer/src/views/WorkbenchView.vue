@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Settings } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { BastionCatalogSnapshot, BastionHostSummary, BastionLaunchRequest, ChatWorkspace, SavedDirectSessionInput, TerminalDataEvent } from '../../../shared/contracts'
 import type { ConnectionDialogRequest } from '../components/ConnectionDialog.vue'
@@ -598,6 +599,11 @@ async function confirmAutonomousUpgrade(): Promise<void> {
     const result = await window.terminalAgent.sessionModes.upgrade(sessionId)
     const session = sessions.value.find(item => item.id === sessionId)
     if (session) addSession({ ...session, mode: result.mode }, false)
+    const chatId = chatStore.state.selectedId
+    if (chatId) {
+      const snapshot = await window.terminalAgent.chats.setMode({ requestId: crypto.randomUUID(), chatId, mode: result.mode })
+      chatStore.merge(snapshot)
+    }
   } catch (error) {
     connectionError.value = error instanceof Error ? error.message : '无法升级当前会话。'
   }
@@ -739,10 +745,10 @@ onBeforeUnmount(() => {
   >
     <template #app-actions>
       <p v-if="connectionError" class="connection-error" role="alert">{{ connectionError }}</p>
-      <button type="button" class="header-button" @click="emit('showSettings')">设置</button>
+      <button type="button" class="header-button" @click="emit('showSettings')"><Settings :size="14" aria-hidden="true" /><span>设置</span></button>
     </template>
 
-    <template #sidebar>
+    <template #sidebar="{ collapse }">
       <WorkbenchSessionSidebar
         :groups="chatStore.state.groups"
         :current-chat-id="chatStore.state.selectedId"
@@ -751,6 +757,7 @@ onBeforeUnmount(() => {
         @select="selectChat"
         @remove="removeChat"
         @create="createChat"
+        @collapse="collapse"
       />
     </template>
 
@@ -815,12 +822,13 @@ onBeforeUnmount(() => {
       </ShellCanvas>
     </template>
 
-    <template #agent>
+    <template #agent="{ collapse }">
       <GlobalChatPanel
         :chat="chatStore.state.selected"
         :read-only="!isLiveChat"
         :can-upgrade="activeSession?.mode === 'copilot'"
         @upgrade="requestAutonomousUpgrade"
+        @collapse="collapse"
       />
     </template>
 
@@ -881,7 +889,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.header-button { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; }
+.header-button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; font-weight: 600; }.header-button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
 .empty-state { display: grid; min-width: 0; min-height: 0; overflow: auto; background: var(--surface); }
 .agent-empty { display: grid; gap: 7px; padding: 16px; }
 .history-playback { height: 100%; overflow: auto; padding: 8px; background: var(--surface-soft); }
@@ -897,7 +905,7 @@ onBeforeUnmount(() => {
 .agent-empty strong { color: var(--text-strong); font-size: 12px; }
 .agent-empty p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .connection-error { max-width: min(42vw, 480px); margin: 0; overflow: hidden; color: var(--red); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.connection-modal { position: fixed; z-index: 10; inset: 40px 0 0; display: grid; align-content: center; justify-content: center; padding: 16px; overflow: auto; background: rgb(20 24 29 / 42%); }
+.connection-modal { position: fixed; z-index: 10; inset: 57px 9px 9px; display: grid; align-content: center; justify-content: center; padding: 16px; overflow: auto; border-radius: 0 0 7px 7px; background: rgb(20 24 29 / 52%); backdrop-filter: blur(1px); }
 .autonomous-upgrade-dialog { display: grid; gap: 12px; width: min(460px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 18px 48px rgb(16 24 40 / 18%); }
 .autonomous-upgrade-dialog h2,.autonomous-upgrade-dialog p { margin: 0; }
 .autonomous-upgrade-actions { display: flex; justify-content: flex-end; gap: 8px; }

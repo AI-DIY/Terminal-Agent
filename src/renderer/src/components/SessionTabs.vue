@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Circle, X } from '@lucide/vue'
 import { sessionLabel, type SessionView } from '../stores/sessions'
 
 defineProps<{ sessions: SessionView[]; activeSessionId: string | null }>()
@@ -13,21 +14,25 @@ const emit = defineEmits<{ select: [sessionId: string]; close: [sessionId: strin
       class="session-tab"
       :class="{ active: session.id === activeSessionId }"
     >
-      <button type="button" class="select" :aria-label="`选择终端会话 ${sessionLabel(session)}`" @click="emit('select', session.id)">
-        <span>{{ sessionLabel(session) }}</span>
-        <small>{{ session.mode === 'copilot' ? '辅助驾驶' : '全自动驾驶' }}</small>
+      <button type="button" class="select" :aria-label="`选择终端会话 ${sessionLabel(session)}`" :aria-current="session.id === activeSessionId ? 'page' : undefined" @click="emit('select', session.id)">
+        <Circle :size="7" :stroke-width="0" fill="currentColor" aria-hidden="true" />
+        <strong>{{ sessionLabel(session) }}</strong>
+        <small>已连接</small>
       </button>
-      <button type="button" class="close" :aria-label="`关闭终端会话 ${sessionLabel(session)}`" @click="emit('close', session.id)">×</button>
+      <button type="button" class="close" :aria-label="`关闭终端会话 ${sessionLabel(session)}`" title="关闭 Shell" @click="emit('close', session.id)"><X :size="13" aria-hidden="true" /></button>
     </div>
   </nav>
 </template>
 
 <style scoped>
-.session-tabs { display: flex; gap: 7px; overflow-x: auto; padding: 7px 10px; background: var(--surface-soft, #f5f7f9); }
-.session-tab { display: flex; border: 1px solid var(--line, #d9dfe6); background: var(--surface, #fff); border-radius: 5px; white-space: nowrap; }
-.session-tab.active { border-color: var(--accent, #2f6fc4); background: var(--accent-soft, #dfeafa); }
-button { border: 0; background: transparent; color: var(--text, #39424c); }
-.select { display: flex; gap: 8px; align-items: center; padding: 7px 9px; }
-small { color: var(--muted, #68737f); }
-.close { padding: 5px 9px; font-size: 18px; line-height: 12px; color: var(--muted, #68737f); }
+.session-tabs { display: flex; min-width: 0; flex: 1 1 auto; overflow-x: auto; background: var(--panel); scrollbar-width: thin; }
+.session-tab { display: flex; height: 41px; flex: 0 0 auto; align-items: center; max-width: 245px; border-right: 1px solid var(--line-soft); background: transparent; color: var(--muted); white-space: nowrap; }
+.session-tab:hover { background: var(--hover); }
+.session-tab.active { background: var(--surface); box-shadow: inset 0 -2px 0 var(--accent); color: var(--text-strong); }
+button { border: 0; background: transparent; color: inherit; }
+.select { display: flex; min-width: 0; align-items: center; gap: 7px; height: 100%; padding: 0 4px 0 10px; text-align: left; }
+.select > svg { flex: 0 0 auto; color: var(--green); }.session-tab.active .select > svg { color: var(--accent); }
+.select strong { max-width: 128px; overflow: hidden; color: var(--text-strong); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+small { color: var(--faint); font-size: 9px; }
+.close { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 auto; padding: 0; border-radius: 4px; color: var(--faint); }.close:hover { background: var(--hover); color: var(--red); }
 </style>

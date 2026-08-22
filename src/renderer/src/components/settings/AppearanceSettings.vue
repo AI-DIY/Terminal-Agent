@@ -38,16 +38,15 @@ function selectedNumber(event: Event): number {
     <header class="panel-head">
       <div>
         <h2 id="appearance-title">外观</h2>
-        <p>主题和 Shell 布局会在工作台与历史回放中保持一致。</p>
+        <p>选择工作台主题。布局、侧栏宽度和 Shell 展示方式会自动记忆。</p>
       </div>
       <span class="save-state" role="status">{{ message }}</span>
     </header>
 
-    <section class="settings-band" aria-labelledby="theme-title">
-      <div class="section-copy"><h3 id="theme-title">工作台主题</h3><p>两个主题使用相同的信息层级和交互状态。</p></div>
+    <section class="theme-band" aria-label="工作台主题">
       <div class="theme-options" role="group" aria-label="工作台主题">
-        <button type="button" :class="{ selected: layout.state.theme === 'pearl' }" :aria-pressed="layout.state.theme === 'pearl'" @click="saveTheme('pearl')"><span class="theme-swatch pearl" aria-hidden="true"><i /><i /></span><span><strong>珍珠白</strong><small>明亮、清晰</small></span></button>
-        <button type="button" :class="{ selected: layout.state.theme === 'graphite' }" :aria-pressed="layout.state.theme === 'graphite'" @click="saveTheme('graphite')"><span class="theme-swatch graphite" aria-hidden="true"><i /><i /></span><span><strong>石墨黑</strong><small>低光、专注</small></span></button>
+        <button type="button" :class="{ selected: layout.state.theme === 'pearl' }" :aria-pressed="layout.state.theme === 'pearl'" @click="saveTheme('pearl')"><span class="theme-swatch pearl" aria-hidden="true"><i /><i /></span><span><strong>珍珠白</strong><small>接近 IDEA Light 的冷白层次</small></span></button>
+        <button type="button" :class="{ selected: layout.state.theme === 'graphite' }" :aria-pressed="layout.state.theme === 'graphite'" @click="saveTheme('graphite')"><span class="theme-swatch graphite" aria-hidden="true"><i /><i /></span><span><strong>石墨黑</strong><small>接近 IDEA Darcula 的深灰层次</small></span></button>
       </div>
     </section>
 
@@ -74,11 +73,10 @@ function selectedNumber(event: Event): number {
 .save-state { min-width: 84px; color: var(--accent); font-size: 11px; text-align: right; }
 .settings-band { display: grid; grid-template-columns: minmax(180px, .65fr) minmax(320px, 1.35fr); gap: 24px; padding: 20px 2px; border-top: 1px solid var(--line); }
 .section-copy h3 { color: var(--text-strong); font-size: 13px; }
-.theme-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.theme-options button { display: flex; align-items: center; gap: 11px; min-width: 0; min-height: 62px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); text-align: left; }
-.theme-options button.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.theme-options button > span:last-child { display: grid; gap: 3px; min-width: 0; }.theme-options strong { color: var(--text-strong); font-size: 11px; }.theme-options small { color: var(--muted); font-size: 10px; }
-.theme-swatch { display: grid; grid-template-columns: 9px 1fr; flex: 0 0 42px; height: 34px; overflow: hidden; border: 1px solid #c7ced7; border-radius: 4px; background: #fff; }.theme-swatch i:first-child { background: #eef1f4; }.theme-swatch i:last-child { border-left: 1px solid #d9dfe6; background: #fff; }.theme-swatch.graphite { border-color: #4a535d; background: #22272e; }.theme-swatch.graphite i:first-child { background: #171a1e; }.theme-swatch.graphite i:last-child { border-left-color: #414951; background: #22272e; }
+.theme-band { padding: 8px 2px 20px; }.theme-options { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; max-width: 640px; }
+.theme-options button { display: grid; gap: 11px; min-width: 0; min-height: 174px; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); text-align: left; }.theme-options button:hover { border-color: var(--focus); }.theme-options button.selected { border-color: var(--accent); background: var(--selected); box-shadow: inset 0 0 0 1px var(--accent-soft); }
+.theme-options button > span:last-child { display: grid; align-content: start; gap: 4px; min-width: 0; }.theme-options strong { color: var(--text-strong); font-size: 12px; }.theme-options small { color: var(--muted); font-size: 10px; }
+.theme-swatch { position: relative; display: grid; grid-template-columns: 24% 1fr; width: 100%; height: 92px; overflow: hidden; border: 1px solid #d6dce4; border-radius: 5px; background: #f7f9fb; }.theme-swatch::before { content: ""; position: absolute; z-index: 2; top: 0; right: 0; left: 0; height: 14px; border-bottom: 1px solid #dce2e9; background: #eef2f6; }.theme-swatch::after { content: ""; position: absolute; z-index: 3; top: 30px; right: 18%; bottom: 13px; left: 30%; border: 1px solid #d5dce5; border-radius: 3px; background: #fff; box-shadow: inset 0 12px 0 #f2f5f8; }.theme-swatch i:first-child { border-right: 1px solid #dce2e9; background: #f0f3f6; }.theme-swatch i:last-child { background: #fff; }.theme-swatch.graphite { border-color: #414a54; background: #1d2228; }.theme-swatch.graphite::before { border-color: #3a424c; background: #242a31; }.theme-swatch.graphite::after { border-color: #414a54; background: #151a20; box-shadow: inset 0 12px 0 #252b32; }.theme-swatch.graphite i:first-child { border-color: #353d46; background: #171b20; }.theme-swatch.graphite i:last-child { background: #20252b; }
 .layout-band { align-items: start; }.layout-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .layout-fields label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 10px; }.layout-fields select { width: 100%; min-height: 34px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 5px; outline: 0; background: var(--surface); color: var(--text); }.layout-fields select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .layout-preview { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--surface); }.layout-preview strong { color: var(--text-strong); font-size: 11px; }.layout-preview span { color: var(--muted); font-size: 10px; }

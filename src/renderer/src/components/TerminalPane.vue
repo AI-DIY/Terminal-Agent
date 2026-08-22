@@ -21,7 +21,20 @@ function resize(): void {
 }
 
 onMounted(() => {
-  terminal = new Terminal({ convertEol: true, cursorBlink: true, theme: { background: '#151a20', foreground: '#d8dade' } })
+  const styles = getComputedStyle(terminalElement.value!)
+  const background = styles.getPropertyValue('--terminal').trim() || '#151a20'
+  terminal = new Terminal({
+    convertEol: true,
+    cursorBlink: true,
+    fontFamily: '"Cascadia Mono", Consolas, "Courier New", monospace',
+    fontSize: 13,
+    theme: {
+      background,
+      foreground: '#d8dade',
+      cursor: '#eef2f7',
+      selectionBackground: '#35577a',
+    },
+  })
   fit = new FitAddon()
   terminal.loadAddon(fit)
   terminal.open(terminalElement.value!)
@@ -58,7 +71,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.terminal-pane { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line, #3d4046); background: var(--terminal, #151a20); }
-.terminal-pane.active { border-color: var(--accent, #2f6fc4); }
-.terminal-element { height: 100%; min-height: 0; padding: 8px; }
+.terminal-pane { min-width: 0; min-height: 0; overflow: hidden; background: var(--terminal, #151a20); }
+.terminal-element { height: 100%; min-height: 0; padding: 11px 12px; }
 </style>

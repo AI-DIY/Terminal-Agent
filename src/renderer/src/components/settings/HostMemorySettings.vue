@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { RefreshCw } from '@lucide/vue'
 import { nextTick, onMounted, ref } from 'vue'
 import { hostMemoryRecordSchema, type HostMemoryRecord, type HostMemorySettings } from '../../../../shared/contracts'
 import { summarizeHostMemoryRecord } from './host-memory-summary'
@@ -238,32 +239,29 @@ function formatBytes(value: number | undefined): string {
 <template>
   <section ref="panel" class="settings-panel host-memory" aria-label="本地主机记忆设置">
     <header class="panel-head">
-      <div><h2>本地主机记忆</h2><p>开启后，通过只读命令采集基础事实并保存在本机。每台新主机首次接入时会先显示信息告知。</p></div>
-      <button type="button" :disabled="loading" @click="refresh">刷新</button>
+      <div><h2>本地主机记忆</h2><p>开启后，通过只读命令采集基础事实并保存在本机，用于后续聊天理解环境。每台新主机首次接入时会显示一次信息告知。</p></div>
     </header>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
 
-    <section class="memory-status" aria-label="主机记忆状态">
-      <div><span class="status-dot" :class="{ enabled: settings.enabled }" aria-hidden="true" /><span>采集状态</span><strong>{{ settings.enabled ? '已启用' : '已停用' }}</strong></div>
-      <div><span>已记忆主机</span><strong>{{ records.length }} 台</strong></div>
-      <div><span>采集方式</span><strong>预制只读命令</strong></div>
-      <p>连接确认后依次执行固定检查，按主机名分别保存和查看。</p>
-    </section>
+    <label class="memory-status memory-toggle">
+      <span><strong>启用本地主机记忆</strong><small>新主机连接成功后显示告知；确认后执行只读采集。关闭后不采集、不保存。</small></span>
+      <input v-model="settings.enabled" class="switch-input" type="checkbox" :disabled="loading" @change="scheduleSaveSettings">
+      <span class="switch-control" :class="{ enabled: settings.enabled }" aria-hidden="true"><i /></span>
+    </label>
 
     <fieldset class="collection" :disabled="loading">
-      <legend>采集控制</legend>
-      <label class="master"><input v-model="settings.enabled" type="checkbox" @change="scheduleSaveSettings"> <span><strong>启用本地主机记忆</strong><small>关闭后不再采集或保存新观察，已有记录会保留。</small></span></label>
+      <legend>告知后将保存的内容</legend>
       <div class="scopes">
-        <label class="scope-card"><input v-model="settings.scopes.identity" type="checkbox" @change="scheduleSaveSettings"><span><strong>身份与系统</strong><small>主机名、连接 IP、操作系统和基础版本</small></span></label>
-        <label class="scope-card"><input v-model="settings.scopes.hardware" type="checkbox" @change="scheduleSaveSettings"><span><strong>硬件与网络</strong><small>CPU、内存、磁盘、网络等基础信息</small></span></label>
-        <label class="scope-card"><input v-model="settings.scopes.processes" type="checkbox" @change="scheduleSaveSettings"><span><strong>进程</strong><small>运行进程名称、PID 和进程工作目录</small></span></label>
-        <label class="scope-card"><input v-model="settings.scopes.runtime" type="checkbox" @change="scheduleSaveSettings"><span><strong>运行环境</strong><small>当前用户、工作目录和常用服务状态</small></span></label>
+        <label class="scope-card"><input v-model="settings.scopes.identity" type="checkbox" @change="scheduleSaveSettings"><span><small>主机名、连接 IP、操作系统和基础版本</small></span></label>
+        <label class="scope-card"><input v-model="settings.scopes.hardware" type="checkbox" @change="scheduleSaveSettings"><span><small>CPU、内存、磁盘、网络等基础信息</small></span></label>
+        <label class="scope-card"><input v-model="settings.scopes.processes" type="checkbox" @change="scheduleSaveSettings"><span><small>运行进程名称、PID 和进程工作目录</small></span></label>
+        <label class="scope-card"><input v-model="settings.scopes.runtime" type="checkbox" @change="scheduleSaveSettings"><span><small>当前用户、工作目录和常用服务状态</small></span></label>
       </div>
     </fieldset>
     <p class="privacy">不会保存密码、私钥、API Key、令牌、环境变量值、命令行或完整终端内容。所有记忆仅保存在本机，可逐台清除。</p>
 
     <section class="remembered-hosts" aria-labelledby="remembered-hosts-title">
-      <div class="section-head"><div><h3 id="remembered-hosts-title">已建立记忆的主机</h3><p>展开主机可核对本机缓存的结构化事实。</p></div><span>{{ records.length }} 台</span></div>
+      <div class="section-head"><div><h3 id="remembered-hosts-title">已建立记忆的主机</h3><p>展开主机可查看本地缓存的事实；进入编辑后可修正过期或识别错误的信息。</p></div><div class="section-head-actions"><span>{{ records.length }} 台</span><button type="button" class="refresh-button" :disabled="loading" aria-label="刷新主机记忆" title="刷新" @click="refresh"><RefreshCw :size="14" aria-hidden="true" /></button></div></div>
       <p v-if="loading">正在加载...</p>
       <p v-else-if="!records.length" class="empty">尚无已告知主机的记忆。</p>
       <ul v-else class="host-list" aria-label="已记忆主机">
@@ -301,6 +299,8 @@ function formatBytes(value: number | undefined): string {
       </ul>
     </section>
 
+    <div class="settings-actions"><button type="button" class="primary-button" :disabled="loading" @click="saveSettings">保存记忆设置</button></div>
+
     <div v-if="clearTarget" ref="clearDialog" class="confirm" role="dialog" aria-modal="true" aria-label="确认清除主机记忆" :aria-busy="clearing" @keydown.capture="onClearDialogKeydown">
       <p>确认清除 {{ clearTarget }} 的本地主机记忆？</p><div><button type="button" :disabled="clearing" @click="removeRecord">{{ clearing ? '正在清除...' : '确认清除' }}</button><button type="button" :disabled="clearing" @click="closeClearDialog">取消</button></div>
     </div>
@@ -314,19 +314,16 @@ function formatBytes(value: number | undefined): string {
 .panel-head > div,.section-head > div,.host-identity,.detail-head > div { display: grid; gap: 4px; min-width: 0; }
 .panel-head p,.section-head p,.privacy,.detail-head span,.host-identity small { color: var(--muted); font-size: 11px; line-height: 1.5; }
 button { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; }
-button:not(:disabled) { cursor: pointer; } button:disabled { opacity: .55; }
-.memory-status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.memory-status > div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 7px; align-items: center; min-width: 0; padding: 10px 12px; border-right: 1px solid var(--line); }.memory-status > div:last-of-type { border-right: 0; }.memory-status span { color: var(--muted); font-size: 10px; }.memory-status strong { grid-column: 1 / -1; color: var(--text-strong); font-size: 12px; }.memory-status .status-dot { grid-column: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }.memory-status .status-dot + span { grid-column: 2; }.memory-status .status-dot + span + strong { grid-column: 1 / -1; }.memory-status .status-dot.enabled { background: var(--green); }.memory-status p { grid-column: 1 / -1; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--surface-soft); color: var(--muted); font-size: 10px; }
-.collection { display: grid; gap: 11px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
-.collection legend,.editor legend { padding: 0 5px; color: var(--text-strong); font-size: 11px; font-weight: 700; }
-.master { display: flex; align-items: center; gap: 9px; }.master span { display: grid; gap: 2px; }.master small { color: var(--muted); font-size: 10px; }
-.scopes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
+button:not(:disabled) { cursor: pointer; } button:disabled { opacity: .55; }button:hover:not(:disabled) { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
+.memory-toggle { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-width: 0; padding: 13px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); cursor: pointer; }.memory-toggle > span:first-child { display: grid; gap: 4px; min-width: 0; }.memory-toggle strong { color: var(--text-strong); font-size: 11px; }.memory-toggle small { color: var(--muted); font-size: 10px; line-height: 1.45; }.switch-input { position: absolute; width: 1px; height: 1px; opacity: 0; }.switch-control { box-sizing: border-box; width: 42px; height: 23px; flex: 0 0 auto; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--line); transition: background .15s,border-color .15s; }.switch-control i { display: block; width: 17px; height: 17px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(19 27 36 / 22%); transition: transform .15s; }.switch-control.enabled { border-color: var(--accent); background: var(--accent); }.switch-control.enabled i { transform: translateX(17px); }.switch-input:focus-visible + .switch-control { box-shadow: 0 0 0 3px var(--accent-soft); }
+.collection { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }.collection legend,.editor legend { padding: 0; color: var(--text-strong); font-size: 11px; font-weight: 700; }
+.scopes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .scopes label { display: flex; align-items: flex-start; gap: 8px; min-width: 0; color: var(--text); font-size: 11px; line-height: 1.4; }
-.scopes input { margin-top: 2px; }
-.scope-card { min-height: 54px; padding: 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }.scope-card > span { display: grid; gap: 3px; min-width: 0; }.scope-card strong { color: var(--text-strong); font-size: 11px; }.scope-card small { color: var(--muted); font-size: 10px; line-height: 1.4; }
-.privacy { padding-left: 10px; border-left: 3px solid var(--accent); }
-.remembered-hosts { display: grid; gap: 10px; min-width: 0; }
-.section-head > span { color: var(--muted); font-size: 11px; }
+.scopes input { width: 15px; height: 15px; margin-top: 1px; accent-color: var(--accent); }
+.scope-card { min-height: 46px; padding: 11px 12px; border: 0; border-radius: 0; background: transparent; }.scope-card:nth-child(odd) { border-right: 1px solid var(--line); }.scope-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.scope-card > span { display: grid; min-width: 0; }.scope-card small { color: var(--text); font-size: 10px; line-height: 1.4; }
+.privacy { color: var(--muted); font-size: 10px; }
+.remembered-hosts { display: grid; gap: 10px; min-width: 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.section-head-actions { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }.refresh-button { width: 28px; padding: 0; }
 .empty { padding: 18px 0; color: var(--muted); text-align: center; }
 .host-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .host-list > li { min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
@@ -334,6 +331,7 @@ button:not(:disabled) { cursor: pointer; } button:disabled { opacity: .55; }
 .host-row > span,.host-row time { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .host-identity strong { overflow: hidden; color: var(--text-strong); text-overflow: ellipsis; white-space: nowrap; }
 .danger { border-color: color-mix(in srgb, var(--red) 60%, var(--line)); color: var(--red); }
+.settings-actions { display: flex; align-items: center; }.primary-button { border-color: var(--accent); background: var(--accent); color: #fff; font-weight: 650; }.primary-button:hover:not(:disabled) { background: color-mix(in srgb,var(--accent) 88%,#000); color: #fff; }
 .memory-detail { display: grid; gap: 12px; padding: 12px; border-top: 1px solid var(--line); background: var(--surface-soft); }
 .detail-head > span { flex: 0 0 auto; }
 .fact-section { display: grid; gap: 8px; min-width: 0; }
@@ -356,5 +354,5 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); }
 .error { color: var(--red); font-size: 11px; }
 .confirm { position: fixed; z-index: 40; inset: 0; display: grid; place-content: center; gap: 12px; padding: 24px; background: rgb(15 23 35 / 48%); }
 .confirm > p,.confirm > div { box-sizing: border-box; width: min(420px, calc(100vw - 48px)); }.confirm > p { padding: 18px 18px 0; border: 1px solid var(--line); border-bottom: 0; border-radius: 6px 6px 0 0; background: var(--surface); }.confirm > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: -12px; padding: 14px 18px 18px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 6px 6px; background: var(--surface); }
-@media (max-width: 760px) { .memory-status,.scopes,.form-grid,.fact-grid { grid-template-columns: 1fr; }.memory-status > div { border-right: 0; border-bottom: 1px solid var(--line); }.host-row { grid-template-columns: minmax(0, 1fr) auto auto; }.host-row > span,.host-row time { grid-column: 1 / -1; }.repeat-row,.process-row,.network-row { grid-template-columns: 1fr; }.repeat-row > button { justify-self: end; } }
+@media (max-width: 760px) { .scopes,.form-grid,.fact-grid { grid-template-columns: 1fr; }.scope-card:nth-child(odd) { border-right: 0; }.scope-card:nth-child(-n+3) { border-bottom: 1px solid var(--line); }.host-row { grid-template-columns: minmax(0, 1fr) auto auto; }.host-row > span,.host-row time { grid-column: 1 / -1; }.repeat-row,.process-row,.network-row { grid-template-columns: 1fr; }.repeat-row > button { justify-self: end; } }
 </style>

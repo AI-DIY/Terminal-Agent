@@ -96,7 +96,7 @@ test('restores a newly created zero-Shell chat as a connectable live workspace a
 
     const restoredChat = page.getByRole('button', { name: `选择聊天 ${title}`, exact: true })
     await expect(restoredChat).toHaveAttribute('aria-current', 'page')
-    await expect(page.getByRole('button', { name: '新建 SSH 连接', exact: true })).toBeVisible()
+    await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
     await expect(page.getByLabel('聊天 Shell 历史回放')).toHaveCount(0)
     await expect(page.getByRole('button', { name: '返回实时聊天', exact: true })).toHaveCount(0)
 
@@ -126,7 +126,7 @@ test('restores an empty live workspace while another chat keeps a running Shell'
     await page.reload()
 
     await expect(page.locator('.history-item.active')).toContainText('0 个 Shell')
-    await expect(page.getByRole('button', { name: '新建 SSH 连接', exact: true })).toBeVisible()
+    await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
     await page.locator('.history-item').filter({ hasText: '1 个 Shell' }).locator('.chat-select').click()
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()
     await sendCommand(page.locator('[data-testid^="terminal-pane-"]:visible'), page, 'after-empty-reload')
@@ -159,7 +159,7 @@ test('restores the current empty workspace after a background chat closes', asyn
     await page.reload()
 
     await expect(page.locator('.history-item.active')).toContainText('0 个 Shell')
-    await expect(page.getByRole('button', { name: '新建 SSH 连接', exact: true })).toBeVisible()
+    await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
     await expect(page.getByLabel('聊天 Shell 历史回放')).toHaveCount(0)
   } finally {
     await app?.close()
@@ -535,30 +535,31 @@ test('layout controls persist while hidden terminals remain mounted and online',
         return element.getBoundingClientRect()
       }
       const shellToolbar = bounds('.shell-toolbar-content')
-      const shellTitle = bounds('.shell-title strong')
-      const toolbarActions = bounds('.toolbar-actions')
+      const hostbarTools = bounds('.hostbar-tools')
       const chatPanel = bounds('.global-chat-panel')
-      const upgradeButton = bounds('.upgrade-button')
+      const modeGroup = bounds('.ai-mode-group')
       const chatInput = bounds('.global-chat-panel textarea')
-      const sendButton = bounds('.global-chat-panel footer button')
+      const sendButton = bounds('.global-chat-panel .send-button')
       const withinPanel = (item: DOMRect) => item.left >= chatPanel.left && item.right <= chatPanel.right
       return {
         toolbarHeight: shellToolbar.height,
-        shellTitleFits: shellTitle.left >= shellToolbar.left && shellTitle.right <= toolbarActions.left,
-        toolbarActionsFit: toolbarActions.right <= shellToolbar.right,
+        appHeaderHeight: bounds('.app-header').height,
+        hostbarToolsFit: hostbarTools.left >= shellToolbar.left && hostbarTools.right <= shellToolbar.right,
         chatPanelFitsViewport: chatPanel.left >= 0 && chatPanel.right <= window.innerWidth,
-        upgradeFits: withinPanel(upgradeButton),
+        modeGroupFits: withinPanel(modeGroup),
         inputFits: withinPanel(chatInput),
         sendFits: withinPanel(sendButton),
+        noPageOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
       }
     })
-    expect(narrowGeometry.toolbarHeight).toBeLessThanOrEqual(55)
-    expect(narrowGeometry.shellTitleFits).toBe(true)
-    expect(narrowGeometry.toolbarActionsFit).toBe(true)
+    expect(narrowGeometry.toolbarHeight).toBeLessThanOrEqual(43)
+    expect(narrowGeometry.appHeaderHeight).toBe(48)
+    expect(narrowGeometry.hostbarToolsFit).toBe(true)
     expect(narrowGeometry.chatPanelFitsViewport).toBe(true)
-    expect(narrowGeometry.upgradeFits).toBe(true)
+    expect(narrowGeometry.modeGroupFits).toBe(true)
     expect(narrowGeometry.inputFits).toBe(true)
     expect(narrowGeometry.sendFits).toBe(true)
+    expect(narrowGeometry.noPageOverflow).toBe(true)
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
@@ -571,7 +572,7 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
   try {
     app = (await launchApp()).app
     const page = await app.firstWindow()
-    const leftSeparator = page.getByRole('separator', { name: '调整任务历史宽度' })
+    const leftSeparator = page.getByRole('separator', { name: '调整聊天会话栏宽度' })
     const rightSeparator = page.getByRole('separator', { name: '调整 AI 工作区宽度' })
 
     await expect(leftSeparator).toHaveAttribute('aria-valuenow', '222')
@@ -593,10 +594,10 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
     for (let index = 0; index < 16; index += 1) await page.keyboard.press('ArrowLeft')
     await expect(rightSeparator).toHaveAttribute('aria-valuenow', '520')
 
-    await page.getByRole('button', { name: '收起任务历史', exact: true }).click()
-    await page.getByRole('button', { name: '收起 AI 工作区', exact: true }).click()
-    await expect(page.getByRole('button', { name: '展开任务历史', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '展开 AI 工作区', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '收起聊天会话', exact: true }).click()
+    await page.getByRole('button', { name: '收起 AI 聊天', exact: true }).click()
+    await expect(page.getByRole('button', { name: '展开聊天会话', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开 AI 聊天', exact: true })).toBeVisible()
     await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({
       leftWidth: 210,
       rightWidth: 520,
@@ -605,8 +606,8 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
     })
 
     await page.reload()
-    await expect(page.getByRole('button', { name: '展开任务历史', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '展开 AI 工作区', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开聊天会话', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开 AI 聊天', exact: true })).toBeVisible()
     await expect(leftSeparator).toHaveAttribute('aria-valuenow', '210')
     await expect(rightSeparator).toHaveAttribute('aria-valuenow', '520')
   } finally {
@@ -635,8 +636,8 @@ test('maximize and restore preserve every connected terminal DOM node', async ({
     const canvasBox = await page.locator('.canvas-content').boundingBox()
     const maximizedFrameBox = await page.locator('.terminal-frame:visible').boundingBox()
     if (!canvasBox || !maximizedFrameBox) throw new Error('Expected maximized Shell canvas geometry')
-    expect(maximizedFrameBox.height).toBeGreaterThanOrEqual(canvasBox.height - 18)
-    expect(maximizedFrameBox.width).toBeGreaterThanOrEqual(canvasBox.width - 18)
+    expect(maximizedFrameBox.height).toBeGreaterThanOrEqual(canvasBox.height - 22)
+    expect(maximizedFrameBox.width).toBeGreaterThanOrEqual(canvasBox.width - 22)
     for (const pane of originalPanes) expect(await pane.evaluate(node => node.isConnected)).toBe(true)
 
     await page.getByRole('button', { name: '还原终端会话 127.0.0.2', exact: true }).click()
@@ -1058,7 +1059,7 @@ test('acknowledging host memory resumes observation for the open SSH session', a
 
     await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('button', { name: '本地主机记忆', exact: true }).click()
-    await page.getByRole('button', { name: '刷新', exact: true }).click()
+    await page.getByRole('button', { name: '刷新主机记忆', exact: true }).click()
     const rememberedHosts = page.getByRole('list', { name: '已记忆主机' })
     await expect(rememberedHosts.getByText('api-prod', { exact: true })).toBeVisible({ timeout: 15000 })
     await expect(rememberedHosts.getByText('身份 3 项；硬件 4 项；进程 1 项；运行环境 3 项', { exact: true })).toBeVisible()
@@ -1113,7 +1114,7 @@ test('clearing acknowledged host memory persists removal and requires fresh SSH 
 
     await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('button', { name: '本地主机记忆', exact: true }).click()
-    await page.getByRole('button', { name: '刷新', exact: true }).click()
+    await page.getByRole('button', { name: '刷新主机记忆', exact: true }).click()
     const rememberedHosts = page.getByRole('list', { name: '已记忆主机' })
     await expect(rememberedHosts.getByText('api-prod', { exact: true })).toBeVisible({ timeout: 15_000 })
     await rememberedHosts.getByRole('button', { name: '清除', exact: true }).click()
@@ -1146,9 +1147,7 @@ test('clearing acknowledged host memory persists removal and requires fresh SSH 
       const newChat = restartedPage.getByRole('button', { name: '新建聊天', exact: true })
       await expect(newChat).toBeVisible()
       await newChat.click()
-      const reconnectButton = restartedPage.locator('.shell-toolbar-content').getByRole('button', { name: '新建 SSH 连接', exact: true })
-      await expect(reconnectButton).toBeVisible()
-      await reconnectButton.click()
+      await expect(restartedPage.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
       await connect(restartedPage, sshServer.port)
       const freshDisclosure = restartedPage.getByRole('dialog', { name: '允许本地主机记忆？', exact: true })
       await expect(freshDisclosure).toBeVisible()
@@ -1324,18 +1323,27 @@ test('adds a visible terminal session when AccessClient starts a second Electron
 async function connect(page: Awaited<ReturnType<ElectronApplication['firstWindow']>>, port: number, host = '127.0.0.1'): Promise<void> {
   const panes = page.locator('[data-testid^="terminal-pane-"]')
   const previousPaneCount = await panes.count()
-  if (previousPaneCount > 0) {
-    const connectButton = page.locator('.shell-toolbar-content').getByRole('button', { name: '新建 SSH 连接', exact: true })
-    await expect(connectButton).toBeVisible()
+  const embeddedLauncher = page.locator('.empty-slot')
+  const embeddedLauncherTab = embeddedLauncher.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })
+  const connectionDialog = page.getByRole('dialog', { name: '新建 SSH 连接', exact: true })
+  const connectButton = page.locator('.shell-toolbar-content').getByRole('button', { name: '新建 SSH 连接', exact: true })
+  await expect(embeddedLauncherTab.or(connectButton)).toBeVisible()
+  const opensDialog = !await embeddedLauncherTab.isVisible()
+  if (opensDialog) {
     await connectButton.click()
+    await expect(connectionDialog).toBeVisible()
   }
-  await page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true }).click()
-  await page.getByLabel('主机地址').fill(host)
-  await page.getByLabel('端口').fill(String(port))
-  await page.getByRole('textbox', { name: '用户名', exact: true }).fill('ops')
-  await page.getByRole('textbox', { name: '密码', exact: true }).fill('secret')
-  await page.getByRole('button', { name: '连接', exact: true }).click()
-    await expect(panes).toHaveCount(previousPaneCount + 1)
+  const launcher = opensDialog ? connectionDialog : embeddedLauncher
+  const launcherTab = launcher.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })
+  await expect(launcherTab).toBeVisible()
+  await launcherTab.click()
+  await launcher.getByLabel('主机地址').fill(host)
+  await launcher.getByLabel('端口').fill(String(port))
+  await launcher.getByRole('textbox', { name: '用户名', exact: true }).fill('ops')
+  await launcher.getByRole('textbox', { name: '密码', exact: true }).fill('secret')
+  await launcher.getByRole('button', { name: '连接', exact: true }).click()
+  await expect(panes).toHaveCount(previousPaneCount + 1)
+  if (opensDialog) await expect(connectionDialog).toHaveCount(0)
 }
 
 async function createNamedChat(
@@ -1350,10 +1358,11 @@ async function createNamedChat(
   await chat.click()
   await expect(chat).toHaveAttribute('aria-current', 'page')
   const connectButton = page.locator('.shell-toolbar-content').getByRole('button', { name: '新建 SSH 连接', exact: true })
+  const launcherTab = page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })
   const restoreButton = page.getByRole('button', { name: '返回实时聊天', exact: true })
-  await expect(connectButton.or(restoreButton)).toBeVisible()
+  await expect(connectButton.or(launcherTab).or(restoreButton)).toBeVisible()
   if (await restoreButton.isVisible()) await restoreButton.click()
-  await expect(connectButton).toBeVisible()
+  await expect(connectButton.or(launcherTab)).toBeVisible()
   return chatId
 }
 

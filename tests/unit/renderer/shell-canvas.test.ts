@@ -51,8 +51,10 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
 
     expect(canvas).not.toContain('已保存会话')
     expect(canvas).not.toContain('升级为全自动驾驶')
-    expect(chat).toContain('AI 工作区')
-    expect(chat).toContain('升级自动驾驶')
+    expect(chat).toContain('AI 聊天')
+    expect(chat).toContain('辅助驾驶')
+    expect(chat).toContain('全自动驾驶')
+    expect(chat).toContain("emit('upgrade')")
     expect(view).toContain('@upgrade="requestAutonomousUpgrade"')
   })
 })

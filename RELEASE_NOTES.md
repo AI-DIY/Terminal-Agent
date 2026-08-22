@@ -1,3 +1,25 @@
+# Terminal-Agent v1.0.6
+
+Release date: 2026-08-22
+
+## V18 workbench visual parity
+
+- Rebuilds the production workbench around the approved V18 desktop frame with a compact top bar, Chat Sessions sidebar, unified Shell host bar, responsive terminal grid, and dedicated AI Chat panel.
+- Restyles the real four-mode SSH launcher, connected terminals, historical Shell playback, streaming AI conversation, panel resizing, collapse rails, and Pearl/Graphite themes without introducing prototype sample data.
+- Uses Lucide icons and consistent semantic colors, focus treatment, typography, spacing, scrollbars, and compact controls across the renderer.
+
+## Settings visual parity and retained behavior
+
+- Rebuilds all six real settings routes with the V18 navigation, model-routing cards, split model-profile editor, safety-fence table and tester, host-memory controls, and full workbench theme previews.
+- Retains real SSH, chat, AI model, history, host-memory, persistence, protected-key, safety-fence, cancellation, retry, and autonomous-upgrade confirmation behavior.
+- Adds responsive coverage for 1440x900, 1024x768, and 900x700 layouts, including page-overflow, terminal mounting, and settings-table checks.
+
+## Windows release assets
+
+- Includes `Terminal-Agent-Setup-1.0.6.exe`, a newly compiled standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.6.zip`.
+
+---
+
 # Terminal-Agent v1.0.5
 
 Release date: 2026-08-21
