@@ -17,7 +17,7 @@
 - Inspect: `package-lock.json`
 - Inspect: `tests/**/*.test.ts`
 
-- [ ] **Step 1: Confirm branch and clean tracked state**
+- [x] **Step 1: Confirm branch and clean tracked state**
 
 Run:
 
@@ -28,7 +28,7 @@ git status --short
 
 Expected: branch is `codex/ceta-feedback-polish` and there are no tracked modifications.
 
-- [ ] **Step 2: Install the locked dependency graph**
+- [x] **Step 2: Install the locked dependency graph**
 
 Run:
 
@@ -38,7 +38,7 @@ npm ci
 
 Expected: exit 0 with no `package-lock.json` change.
 
-- [ ] **Step 3: Run the unit baseline**
+- [x] **Step 3: Run the unit baseline**
 
 Run:
 
@@ -48,7 +48,7 @@ npm test
 
 Expected: all existing Vitest tests pass before production changes.
 
-- [ ] **Step 4: Run the production build baseline**
+- [x] **Step 4: Run the production build baseline**
 
 Run:
 
@@ -69,7 +69,7 @@ Expected: Electron/Vite bundles and `vue-tsc --noEmit` complete successfully.
 - Regenerate: `build-resources/ta-icon.png`
 - Regenerate: `build-resources/ta-icon.ico`
 
-- [ ] **Step 1: Write failing window and icon contract tests**
+- [x] **Step 1: Write failing window and icon contract tests**
 
 Add these assertions:
 
@@ -92,7 +92,7 @@ expect(shell).toContain('width: 28px; height: 28px')
 expect(shell).not.toContain('margin: 8px')
 ```
 
-- [ ] **Step 2: Run the focused tests and observe failure**
+- [x] **Step 2: Run the focused tests and observe failure**
 
 Run:
 
@@ -102,7 +102,7 @@ npx vitest run tests/unit/electron-startup.test.ts tests/unit/windows/app-brandi
 
 Expected: FAIL because the application menu is still installed, the icon generator still draws an accent strip, and the workbench is still a floating inset frame.
 
-- [ ] **Step 3: Implement the minimal window and icon changes**
+- [x] **Step 3: Implement the minimal window and icon changes**
 
 Use the following main-process behavior:
 
@@ -133,7 +133,7 @@ $graphics.DrawString('TA', $font, $textBrush, $textArea, $format)
 
 Make `.workbench-shell` fill the renderer viewport with `width: 100vw`, `height: 100vh`, `margin: 0`, `border: 0`, `border-radius: 0`, and `box-shadow: none`. Keep the native frame enabled.
 
-- [ ] **Step 4: Regenerate both icon formats and rerun tests**
+- [x] **Step 4: Regenerate both icon formats and rerun tests**
 
 Run:
 
@@ -144,7 +144,7 @@ npx vitest run tests/unit/electron-startup.test.ts tests/unit/windows/app-brandi
 
 Expected: PASS; the PNG and ICO are regenerated from the stripe-free source.
 
-- [ ] **Step 5: Commit window integration**
+- [x] **Step 5: Commit window integration**
 
 ```powershell
 git add tests/unit/electron-startup.test.ts tests/unit/windows/app-branding.test.ts src/main/main.ts src/renderer/src/components/workbench/WorkbenchShell.vue scripts/windows/generate-ta-icon.ps1 build-resources/ta-icon.png build-resources/ta-icon.ico

@@ -111,22 +111,22 @@ onBeforeUnmount(widthSaver.flush)
   position: relative;
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
-  width: calc(100vw - 16px);
+  width: 100vw;
   min-width: 0;
-  height: calc(100vh - 16px);
+  height: 100vh;
   min-height: 604px;
-  margin: 8px;
+  margin: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--line) 86%, var(--text));
-  border-radius: 8px;
+  border: 0;
+  border-radius: 0;
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 10px 30px rgb(35 44 55 / 12%), 0 1px 4px rgb(35 44 55 / 8%);
+  box-shadow: none;
   font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 .workbench-shell.theme-graphite {
   color-scheme: dark;
-  box-shadow: 0 12px 34px rgb(0 0 0 / 36%), 0 1px 4px rgb(0 0 0 / 30%);
+  box-shadow: none;
 }
 .app-header { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 176px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; font-weight: 700; }.brand-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: var(--text-strong); color: var(--surface); font-size: 10px; font-weight: 800; }

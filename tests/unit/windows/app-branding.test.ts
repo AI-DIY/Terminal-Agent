@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-describe('Terminal-Agent 1.0.6 branding', () => {
-  it('packages a TA application icon and presents the same mark in the workbench header', () => {
+describe('Terminal-Agent branding', () => {
+  it('packages one stripe-free TA mark across native and workbench surfaces', () => {
     const packageJson = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'))
     const shell = readFileSync(new URL('../../../src/renderer/src/components/workbench/WorkbenchShell.vue', import.meta.url), 'utf8')
+    const iconGenerator = readFileSync(new URL('../../../scripts/windows/generate-ta-icon.ps1', import.meta.url), 'utf8')
     const icon = new URL('../../../build-resources/ta-icon.ico', import.meta.url)
 
     expect(packageJson.version).toBe('1.0.6')
@@ -12,6 +13,11 @@ describe('Terminal-Agent 1.0.6 branding', () => {
     expect(existsSync(icon)).toBe(true)
     expect(readFileSync(icon).subarray(0, 4)).toEqual(Buffer.from([0, 0, 1, 0]))
     expect(shell).toContain('<span class="brand-mark" aria-hidden="true">TA</span>')
+    expect(iconGenerator).not.toContain('accentWidth')
+    expect(iconGenerator).not.toContain('accentBrush')
+    expect(iconGenerator).toContain("[System.Drawing.RectangleF]::new(0, 0, $size, $size)")
+    expect(shell).toContain('width: 28px; height: 28px')
+    expect(shell).not.toContain('margin: 8px')
   })
 
   it('names the V18 side regions as chat sessions and AI chat with directional expand actions', () => {

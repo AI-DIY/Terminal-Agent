@@ -18,25 +18,21 @@ foreach ($size in $sizes) {
     $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
     $graphics.Clear([System.Drawing.Color]::FromArgb(29, 36, 44))
 
-    $accentWidth = [Math]::Max(2, [Math]::Round($size * 0.075))
-    $accentBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(71, 142, 225))
     $borderPen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(83, 94, 106), [Math]::Max(1, $size / 128))
     $font = [System.Drawing.Font]::new('Segoe UI', [Math]::Max(7, $size * 0.38), [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
     $textBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
     $format = [System.Drawing.StringFormat]::new()
     try {
-      $graphics.FillRectangle($accentBrush, 0, 0, $accentWidth, $size)
       $graphics.DrawRectangle($borderPen, 0, 0, $size - 1, $size - 1)
       $format.Alignment = [System.Drawing.StringAlignment]::Center
       $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-      $textArea = [System.Drawing.RectangleF]::new($accentWidth, 0, $size - $accentWidth, $size)
+      $textArea = [System.Drawing.RectangleF]::new(0, 0, $size, $size)
       $graphics.DrawString('TA', $font, $textBrush, $textArea, $format)
     } finally {
       $format.Dispose()
       $textBrush.Dispose()
       $font.Dispose()
       $borderPen.Dispose()
-      $accentBrush.Dispose()
     }
 
     $stream = [System.IO.MemoryStream]::new()

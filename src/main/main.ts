@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu } from 'electron'
 import { join } from 'node:path'
 import { registerSessionHandlers } from './ipc/register-handlers'
 import { PpkToOpenSshConverter, PrivateKeyLoader } from './ssh/private-key-loader'
@@ -167,10 +167,12 @@ const bastionLaunches = new BastionLaunchService(
 sessions.onClosed(event => bastionLaunches.closeSession(event.sessionId))
 
 export function createMainWindow(): BrowserWindow {
+  Menu.setApplicationMenu(null)
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     show: false,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
