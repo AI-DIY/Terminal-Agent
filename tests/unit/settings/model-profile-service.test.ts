@@ -4,7 +4,7 @@ import type { ModelProfileDocument } from '../../../src/main/settings/model-prof
 
 const endpoint = 'https://api.openai.com/v1/chat/completions'
 
-function createService(initialDocument: ModelProfileDocument = { version: 1, profiles: [], activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {} }) {
+function createService(initialDocument: ModelProfileDocument = { version: 2, profiles: [], activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {} }) {
   let document = initialDocument
   const repository = {
     load: vi.fn().mockImplementation(async () => document),
@@ -18,10 +18,26 @@ function createService(initialDocument: ModelProfileDocument = { version: 1, pro
   return { service: new ModelProfileService(repository, secrets), repository, secrets, getDocument: () => document }
 }
 
+function referencedVlmDocument(): ModelProfileDocument {
+  return {
+    version: 2,
+    profiles: [
+      { id: 'shared-llm', kind: 'llm', name: 'Shared LLM', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 },
+      { id: 'vision', kind: 'vlm', name: 'Vision', provider: 'openai', model: 'gpt-vision', endpoint, maxImages: 4 },
+    ],
+    activeLlmId: 'shared-llm',
+    activeVlmId: 'vision',
+    routing: 'combined',
+    migrations: {
+      apiKeyReferences: [{ sourceProfileId: 'shared-llm', targetProfileId: 'vision' }],
+    },
+  }
+}
+
 describe('ModelProfileService', () => {
   it('does not brick profile operations or move an orphaned legacy key when legacy settings are absent', async () => {
     const initialDocument: ModelProfileDocument = {
-      version: 1,
+      version: 2,
       profiles: [{ id: 'existing', kind: 'llm', name: 'existing', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
       activeLlmId: 'existing', activeVlmId: null, routing: 'combined',
       migrations: { legacyModelSettings: 1 },
@@ -43,13 +59,145 @@ describe('ModelProfileService', () => {
     ['PEM private key', '-----BEGIN RSA PRIVATE KEY-----\nmaterial\n-----END RSA PRIVATE KEY-----'],
   ])('rejects %s in direct API-key saves', async (_label, value) => {
     const { service, secrets } = createService({
-      version: 1,
+      version: 2,
       profiles: [{ id: 'existing', kind: 'llm', name: 'existing', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
       activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: { legacyModelSettings: 1 },
     })
 
     await expect(service.saveApiKey('existing', value)).rejects.toThrow()
     expect(secrets.save).not.toHaveBeenCalled()
+  })
+
+  it('copies a pending shared key into VLM-owned storage without removing the LLM key', async () => {
+    const { service, secrets, getDocument } = createService(referencedVlmDocument())
+    const protectedKeys = new Map([['model-profile.shared-llm.apiKey', 'shared-secret']])
+    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
+    secrets.save.mockImplementation(async (key: string, value: string) => { protectedKeys.set(key, value) })
+
+    await expect(service.list('vlm')).resolves.toEqual([
+      expect.objectContaining({ id: 'vision', active: true, hasApiKey: true }),
+    ])
+
+    expect(secrets.save).toHaveBeenCalledWith('model-profile.vision.apiKey', 'shared-secret')
+    expect(protectedKeys.get('model-profile.shared-llm.apiKey')).toBe('shared-secret')
+    expect(protectedKeys.get('model-profile.vision.apiKey')).toBe('shared-secret')
+    expect(getDocument().migrations).not.toHaveProperty('apiKeyReferences')
+  })
+
+  it('does not overwrite a VLM key that already exists while clearing pending metadata', async () => {
+    const { service, secrets, getDocument } = createService(referencedVlmDocument())
+    const protectedKeys = new Map([
+      ['model-profile.shared-llm.apiKey', 'shared-secret'],
+      ['model-profile.vision.apiKey', 'vision-secret'],
+    ])
+    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
+
+    await expect(service.list('vlm')).resolves.toEqual([
+      expect.objectContaining({ id: 'vision', active: true, hasApiKey: true }),
+    ])
+
+    expect(secrets.save).not.toHaveBeenCalled()
+    expect(protectedKeys.get('model-profile.vision.apiKey')).toBe('vision-secret')
+    expect(getDocument().migrations).not.toHaveProperty('apiKeyReferences')
+  })
+
+  it('deactivates an active non-Ollama VLM when its pending source key is missing', async () => {
+    const { service, secrets, getDocument } = createService(referencedVlmDocument())
+
+    await expect(service.list('vlm')).resolves.toEqual([
+      expect.objectContaining({ id: 'vision', active: false, hasApiKey: false }),
+    ])
+
+    expect(secrets.save).not.toHaveBeenCalled()
+    expect(getDocument()).toMatchObject({ activeVlmId: null, autoActivateVlm: false })
+    expect(getDocument().migrations).not.toHaveProperty('apiKeyReferences')
+  })
+
+  it('rejects invalid pending source material without removing it and deactivates the VLM', async () => {
+    const { service, secrets, getDocument } = createService(referencedVlmDocument())
+    const privateKey = '-----BEGIN PRIVATE KEY-----\nmaterial\n-----END PRIVATE KEY-----'
+    const protectedKeys = new Map([['model-profile.shared-llm.apiKey', privateKey]])
+    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
+
+    await expect(service.list('vlm')).resolves.toEqual([
+      expect.objectContaining({ id: 'vision', active: false, hasApiKey: false }),
+    ])
+
+    expect(secrets.save).not.toHaveBeenCalled()
+    expect(secrets.remove).not.toHaveBeenCalled()
+    expect(protectedKeys.get('model-profile.shared-llm.apiKey')).toBe(privateKey)
+    expect(getDocument()).toMatchObject({ activeVlmId: null, autoActivateVlm: false })
+    expect(getDocument().migrations).not.toHaveProperty('apiKeyReferences')
+  })
+
+  it('keeps a copied target key when metadata persistence fails and retries without rewriting it', async () => {
+    const { service, repository, secrets, getDocument } = createService(referencedVlmDocument())
+    const protectedKeys = new Map([['model-profile.shared-llm.apiKey', 'shared-secret']])
+    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
+    secrets.save.mockImplementation(async (key: string, value: string) => { protectedKeys.set(key, value) })
+    repository.save.mockRejectedValueOnce(new Error('disk unavailable'))
+
+    await expect(service.list('vlm')).rejects.toThrow('disk unavailable')
+    expect(protectedKeys.get('model-profile.vision.apiKey')).toBe('shared-secret')
+    expect(getDocument().migrations.apiKeyReferences).toHaveLength(1)
+
+    const retryingService = new ModelProfileService(repository, secrets)
+    await expect(retryingService.list('vlm')).resolves.toEqual([
+      expect.objectContaining({ id: 'vision', active: true, hasApiKey: true }),
+    ])
+    expect(secrets.save).toHaveBeenCalledTimes(1)
+    expect(getDocument().migrations).not.toHaveProperty('apiKeyReferences')
+  })
+
+  it('retains pending metadata and retries when copying the target key fails', async () => {
+    const { service, secrets, getDocument } = createService(referencedVlmDocument())
+    const protectedKeys = new Map([['model-profile.shared-llm.apiKey', 'shared-secret']])
+    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
+    secrets.save
+      .mockRejectedValueOnce(new Error('secret store unavailable'))
+      .mockImplementation(async (key: string, value: string) => { protectedKeys.set(key, value) })
+
+    await expect(service.list('vlm')).rejects.toThrow('secret store unavailable')
+    expect(getDocument().migrations.apiKeyReferences).toHaveLength(1)
+
+    await expect(service.list('vlm')).resolves.toEqual([
+      expect.objectContaining({ id: 'vision', active: true, hasApiKey: true }),
+    ])
+    expect(secrets.save).toHaveBeenCalledTimes(2)
+    expect(getDocument().migrations).not.toHaveProperty('apiKeyReferences')
+  })
+
+  it('clears an active OpenAI profile key and disables automatic activation', async () => {
+    const { service, secrets, getDocument } = createService({
+      version: 2,
+      profiles: [{ id: 'active', kind: 'llm', name: 'Active', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
+      activeLlmId: 'active', activeVlmId: null, routing: 'combined', migrations: {},
+    })
+    const protectedKeys = new Map([['model-profile.active.apiKey', 'active-secret']])
+    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
+    secrets.remove.mockImplementation(async (key: string) => { protectedKeys.delete(key) })
+
+    await expect(service.clearApiKey('active')).resolves.toMatchObject({
+      id: 'active', active: false, hasApiKey: false,
+    })
+
+    expect(protectedKeys.has('model-profile.active.apiKey')).toBe(false)
+    expect(getDocument()).toMatchObject({ activeLlmId: null, autoActivateLlm: false })
+    expect(secrets.load).not.toHaveBeenCalled()
+  })
+
+  it('restores active state when clearing a key fails in protected storage', async () => {
+    const { service, repository, secrets, getDocument } = createService({
+      version: 2,
+      profiles: [{ id: 'active', kind: 'llm', name: 'Active', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
+      activeLlmId: 'active', activeVlmId: null, routing: 'combined', migrations: {},
+    })
+    secrets.remove.mockRejectedValueOnce(new Error('secret store unavailable'))
+
+    await expect(service.clearApiKey('active')).rejects.toThrow('secret store unavailable')
+
+    expect(getDocument()).toMatchObject({ activeLlmId: 'active' })
+    expect(repository.save).toHaveBeenCalledTimes(2)
   })
 
   it('keeps API keys in the secret store and omits them from renderer DTOs', async () => {
@@ -82,7 +230,7 @@ describe('ModelProfileService', () => {
 
   it('restores an existing direct key when saving its profile update fails', async () => {
     const { service, repository, secrets, getDocument } = createService({
-      version: 1,
+      version: 2,
       profiles: [{ id: 'existing', kind: 'llm', name: 'existing', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
       activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {},
     })
@@ -100,7 +248,7 @@ describe('ModelProfileService', () => {
 
   it('serializes routed reads behind an in-flight profile save', async () => {
     const harness = createService({
-      version: 1,
+      version: 2,
       profiles: [{ id: 'existing', kind: 'llm', name: 'existing', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
       activeLlmId: 'existing', activeVlmId: null, routing: 'combined', migrations: {},
     })
@@ -137,7 +285,7 @@ describe('ModelProfileService', () => {
 
   it('does not expose an in-flight key when profile persistence fails', async () => {
     const harness = createService({
-      version: 1,
+      version: 2,
       profiles: [{ id: 'existing', kind: 'llm', name: 'existing', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
       activeLlmId: 'existing', activeVlmId: null, routing: 'combined', migrations: {},
     })
@@ -278,7 +426,7 @@ describe('ModelProfileService', () => {
     const firstProfile = { id: 'first-llm', kind: 'llm' as const, name: 'First', provider: 'openai' as const, model: 'gpt-5', endpoint, contextLimit: 8_000 }
     const secondProfile = { id: 'second-llm', kind: 'llm' as const, name: 'Second', provider: 'openai' as const, model: 'gpt-5-mini', endpoint, contextLimit: 8_000 }
     const harness = createService({
-      version: 1,
+      version: 2,
       profiles: [firstProfile, secondProfile],
       activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {},
     })
@@ -313,7 +461,7 @@ describe('ModelProfileService', () => {
     const { service, repository } = createService()
     const first = await service.save({ kind: 'llm', name: 'one', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 })
     repository.load.mockResolvedValue({
-      version: 1,
+      version: 2,
       profiles: [{ id: first.id, kind: 'llm', name: 'one', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 }],
       activeLlmId: first.id, activeVlmId: null, routing: 'combined', migrations: {},
     })
@@ -343,7 +491,7 @@ describe('ModelProfileService', () => {
 
   it('preserves an explicit no-route choice across later profile saves and API-key imports', async () => {
     const { service, secrets, getDocument } = createService({
-      version: 1,
+      version: 2,
       profiles: [
         { id: 'primary-llm', kind: 'llm', name: 'Primary LLM', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 },
         { id: 'later-llm', kind: 'llm', name: 'Later LLM', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 },
@@ -377,7 +525,7 @@ describe('ModelProfileService', () => {
   it('requires a replacement before deleting an active profile when alternatives exist', async () => {
     const { service, repository } = createService()
     repository.load.mockResolvedValue({
-      version: 1,
+      version: 2,
       profiles: [
         { id: 'one', kind: 'llm', name: 'one', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 },
         { id: 'two', kind: 'llm', name: 'two', provider: 'ollama', model: 'qwen2', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 },
@@ -392,7 +540,7 @@ describe('ModelProfileService', () => {
 
   it('requires explicit no-route authorization before deleting an active profile without a replacement', async () => {
     const { service, getDocument } = createService({
-      version: 1,
+      version: 2,
       profiles: [{ id: 'active', kind: 'llm', name: 'active', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 }],
       activeLlmId: 'active', activeVlmId: null, routing: 'combined', migrations: {},
     })
@@ -404,27 +552,9 @@ describe('ModelProfileService', () => {
     expect(getDocument()).toMatchObject({ activeLlmId: null, autoActivateLlm: false })
   })
 
-  it('rejects deleting an LLM profile while a VLM still references its API key', async () => {
-    const { service, repository, secrets, getDocument } = createService({
-      version: 1,
-      profiles: [
-        { id: 'llm', kind: 'llm', name: 'llm', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 },
-        { id: 'vlm', kind: 'vlm', name: 'vlm', provider: 'openai', model: 'gpt-vision', endpoint, maxImages: 4, apiKeyProfileId: 'llm' },
-      ],
-      activeLlmId: 'llm', activeVlmId: 'vlm', routing: 'combined', migrations: {},
-    })
-
-    await expect(service.delete('llm', { allowNoActive: true })).rejects.toThrow('referenced')
-
-    expect(secrets.remove).not.toHaveBeenCalled()
-    expect(repository.save).not.toHaveBeenCalled()
-    expect(getDocument().activeVlmId).toBe('vlm')
-    expect(getDocument().profiles.find(profile => profile.id === 'vlm')).toMatchObject({ apiKeyProfileId: 'llm' })
-  })
-
   it('rejects an active replacement profile that is unavailable without an API key', async () => {
     const { service, repository, secrets } = createService({
-      version: 1,
+      version: 2,
       profiles: [
         { id: 'active', kind: 'llm', name: 'active', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 },
         { id: 'unavailable', kind: 'llm', name: 'unavailable', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 },
@@ -440,7 +570,7 @@ describe('ModelProfileService', () => {
 
   it('keeps the active profile and protected key when deleting profile persistence fails', async () => {
     const { service, repository, secrets, getDocument } = createService({
-      version: 1,
+      version: 2,
       profiles: [{ id: 'active', kind: 'llm', name: 'active', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 }],
       activeLlmId: 'active', activeVlmId: null, routing: 'combined', migrations: {},
     })
@@ -458,7 +588,7 @@ describe('ModelProfileService', () => {
 
   it('restores the profile document when protected-key cleanup fails', async () => {
     const { service, repository, secrets, getDocument } = createService({
-      version: 1,
+      version: 2,
       profiles: [{ id: 'active', kind: 'llm', name: 'active', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 }],
       activeLlmId: 'active', activeVlmId: null, routing: 'combined', migrations: {},
     })
@@ -469,30 +599,6 @@ describe('ModelProfileService', () => {
     expect(getDocument().activeLlmId).toBe('active')
     expect(getDocument().profiles).toEqual([expect.objectContaining({ id: 'active' })])
     expect(repository.save).toHaveBeenCalledTimes(2)
-  })
-
-  it('clears a VLM API key reference when importing a direct protected key', async () => {
-    const { service, secrets, getDocument } = createService({
-      version: 1,
-      profiles: [
-        { id: 'llm', kind: 'llm', name: 'llm', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 },
-        { id: 'vlm', kind: 'vlm', name: 'vlm', provider: 'openai', model: 'gpt-vision', endpoint, maxImages: 4, apiKeyProfileId: 'llm' },
-      ],
-      activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {},
-    })
-    const protectedKeys = new Map<string, string>()
-    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
-    secrets.save.mockImplementation(async (key: string, value: string) => { protectedKeys.set(key, value) })
-
-    const saved = await service.saveApiKey('vlm', 'vlm-direct-key')
-    expect(saved).toMatchObject({
-      id: 'vlm', active: true, hasApiKey: true,
-    })
-    expect(JSON.stringify(saved)).not.toContain('vlm-direct-key')
-    const savedProfile = getDocument().profiles.find(profile => profile.id === 'vlm')
-
-    expect(savedProfile).not.toHaveProperty('apiKeyProfileId')
-    await expect(service.get('vlm')).resolves.toMatchObject({ id: 'vlm', active: true, hasApiKey: true })
   })
 
   it.each([
@@ -511,7 +617,7 @@ describe('ModelProfileService', () => {
   it('routes combined requests to VLM only when images are present and vision-only requests to VLM always', async () => {
     const { service, repository } = createService()
     repository.load.mockResolvedValue({
-      version: 1,
+      version: 2,
       profiles: [
         { id: 'llm', kind: 'llm', name: 'llm', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 },
         { id: 'vlm', kind: 'vlm', name: 'vlm', provider: 'ollama', model: 'llava', endpoint: 'http://127.0.0.1:11434/api/chat', maxImages: 4 },
@@ -523,7 +629,7 @@ describe('ModelProfileService', () => {
     await expect(service.resolveRoute({ hasImages: true })).resolves.toMatchObject({ id: 'vlm' })
     await service.setRouting('vision-only')
     repository.load.mockResolvedValue({
-      version: 1,
+      version: 2,
       profiles: [
         { id: 'llm', kind: 'llm', name: 'llm', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 },
         { id: 'vlm', kind: 'vlm', name: 'vlm', provider: 'ollama', model: 'llava', endpoint: 'http://127.0.0.1:11434/api/chat', maxImages: 4 },

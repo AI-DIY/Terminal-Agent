@@ -10,7 +10,7 @@ describe('ModelProfileRepository', () => {
     try {
       const repository = new ModelProfileRepository(join(directory, 'model-profiles.json'))
       await repository.save({
-        version: 1,
+        version: 2,
         profiles: [{
           id: 'llm-1', kind: 'llm', name: 'Primary', provider: 'openai',
           model: 'gpt-5', endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 12_000,
@@ -23,7 +23,7 @@ describe('ModelProfileRepository', () => {
 
       const raw = await readFile(join(directory, 'model-profiles.json'), 'utf8')
       expect(raw).not.toContain('secret')
-      await expect(repository.load()).resolves.toMatchObject({ version: 1, activeLlmId: 'llm-1', routing: 'combined' })
+      await expect(repository.load()).resolves.toMatchObject({ version: 2, activeLlmId: 'llm-1', routing: 'combined' })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -37,7 +37,7 @@ describe('ModelProfileRepository', () => {
         endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o', contextLimit: 8_000,
       }), 'utf8')
       const repository = new ModelProfileRepository(path)
-      await expect(repository.load()).resolves.toMatchObject({ version: 1, profiles: [] })
+      await expect(repository.load()).resolves.toMatchObject({ version: 2, profiles: [] })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -52,7 +52,7 @@ describe('ModelProfileRepository', () => {
     try {
       const repository = new ModelProfileRepository(join(directory, 'model-profiles.json'))
       const baseDocument = {
-        version: 1 as const,
+        version: 2 as const,
         profiles: [{
           id: 'llm-1', kind: 'llm' as const, name: 'Primary', provider: 'openai' as const,
           model: 'gpt-5', endpoint: unsafeEndpoint, contextLimit: 12_000,
@@ -61,6 +61,47 @@ describe('ModelProfileRepository', () => {
       }
 
       await expect(repository.save(baseDocument)).rejects.toThrow()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('migrates version 1 API-key references into pending version 2 metadata', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-model-key-reference-migration-'))
+    try {
+      const path = join(directory, 'model-profiles.json')
+      await writeFile(path, JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            id: 'shared-llm', kind: 'llm', name: 'Shared LLM', provider: 'openai',
+            model: 'gpt-5', endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 12_000,
+          },
+          {
+            id: 'vision', kind: 'vlm', name: 'Vision', provider: 'openai',
+            model: 'gpt-vision', endpoint: 'https://api.openai.com/v1/chat/completions', maxImages: 4,
+            apiKeyProfileId: 'shared-llm',
+          },
+        ],
+        activeLlmId: 'shared-llm',
+        activeVlmId: 'vision',
+        routing: 'combined',
+        migrations: {},
+      }), 'utf8')
+
+      const repository = new ModelProfileRepository(path)
+      const migrated = await repository.load()
+
+      expect(migrated).toMatchObject({
+        version: 2,
+        migrations: {
+          apiKeyReferences: [{ sourceProfileId: 'shared-llm', targetProfileId: 'vision' }],
+        },
+      })
+      expect(migrated.profiles.find(profile => profile.id === 'vision')).not.toHaveProperty('apiKeyProfileId')
+      const persisted = await readFile(path, 'utf8')
+      expect(persisted).not.toContain('apiKeyProfileId')
+      expect(JSON.parse(persisted)).toMatchObject({ version: 2 })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

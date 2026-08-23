@@ -87,7 +87,7 @@ describe('ModelSettingsService', () => {
 
   it('uses a direct legacy API key through the profile adapter without exposing it to the renderer', async () => {
     let document: ModelProfileDocument = {
-      version: 1, profiles: [], activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {},
+      version: 2, profiles: [], activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {},
     }
     const protectedKeys = new Map<string, string>()
     const profiles = new ModelProfileService(
@@ -119,7 +119,7 @@ describe('ModelSettingsService', () => {
     ['an over-limit UTF-8 key', '密'.repeat(2_049)],
   ])('rejects %s from the legacy profile adapter before protected storage', async (_label, apiKey) => {
     let document: ModelProfileDocument = {
-      version: 1, profiles: [], activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {},
+      version: 2, profiles: [], activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {},
     }
     const secrets = {
       load: vi.fn().mockResolvedValue(null),

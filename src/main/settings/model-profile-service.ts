@@ -29,6 +29,7 @@ type ModelProfileServiceOptions = {
 export class ModelProfileService {
   private readonly createId: () => string
   private readonly legacySettings: LegacyModelSettingsSource | undefined
+  private apiKeyReferenceMigrationChecked = false
   private migrationChecked = false
   private mutationTail: Promise<void> = Promise.resolve()
 
@@ -66,9 +67,6 @@ export class ModelProfileService {
       if (current && current.kind !== parsed.kind) throw new Error('Model profile kind cannot change')
 
       const id = current?.id ?? this.createId()
-      const apiKeyProfileId = apiKey ? undefined : parsed.apiKeyProfileId ?? current?.apiKeyProfileId
-      if (apiKeyProfileId) this.requireLlmKeyProfile(document, apiKeyProfileId, id)
-
       const profile: PersistedModelProfile = {
         id,
         name: parsed.name,
@@ -78,7 +76,6 @@ export class ModelProfileService {
         endpoint: parsed.endpoint,
         ...(parsed.contextLimit === undefined ? {} : { contextLimit: parsed.contextLimit }),
         ...(parsed.maxImages === undefined ? {} : { maxImages: parsed.maxImages }),
-        ...(apiKeyProfileId ? { apiKeyProfileId } : {}),
       }
       const next: ModelProfileDocument = {
         ...document,
@@ -120,9 +117,6 @@ export class ModelProfileService {
       const document = await this.loadDocumentInMutation()
       const profile = document.profiles.find(candidate => candidate.id === id)
       if (!profile) throw new Error('Unknown model profile')
-      if (profile.kind === 'llm' && document.profiles.some(candidate => candidate.kind === 'vlm' && candidate.apiKeyProfileId === profile.id)) {
-        throw new Error('Cannot delete a model profile while its API key is referenced by a VLM')
-      }
       const activeId = profile.kind === 'llm' ? document.activeLlmId : document.activeVlmId
       let replacementId = activeId
 
@@ -176,7 +170,7 @@ export class ModelProfileService {
       if (!activeId) throw new Error(`No active ${kind.toUpperCase()} model profile`)
       const profile = document.profiles.find(candidate => candidate.id === activeId && candidate.kind === kind)
       if (!profile) throw new Error(`Active ${kind.toUpperCase()} model profile is unavailable`)
-      return this.toProtectedProfile(profile, document)
+      return this.toProtectedProfile(profile)
     })
   }
 
@@ -185,7 +179,7 @@ export class ModelProfileService {
       if (!document.activeLlmId) return null
       const profile = document.profiles.find(candidate => candidate.id === document.activeLlmId && candidate.kind === 'llm')
       if (!profile || profile.contextLimit === undefined) return null
-      const protectedProfile = await this.toProtectedProfile(profile, document)
+      const protectedProfile = await this.toProtectedProfile(profile)
       return { endpoint: profile.endpoint, model: profile.model, contextLimit: profile.contextLimit, apiKey: protectedProfile.apiKey ?? '', provider: profile.provider, profileId: profile.id }
     })
   }
@@ -193,7 +187,7 @@ export class ModelProfileService {
   async prepareForConnectionTest(input: ModelProfileInput): Promise<RoutedModelSettings> {
     const parsed = modelProfileInputSchema.parse(input)
     const apiKey = parsed.apiKey === undefined ? undefined : validateModelApiKey(parsed.apiKey)
-    return this.read(async document => {
+    return this.read(async () => {
       const id = parsed.id ?? this.createId()
       const profile: PersistedModelProfile = {
         id,
@@ -204,9 +198,8 @@ export class ModelProfileService {
         endpoint: parsed.endpoint,
         ...(parsed.contextLimit === undefined ? {} : { contextLimit: parsed.contextLimit }),
         ...(parsed.maxImages === undefined ? {} : { maxImages: parsed.maxImages }),
-        ...(parsed.apiKeyProfileId ? { apiKeyProfileId: parsed.apiKeyProfileId } : {}),
       }
-      const resolvedApiKey = apiKey ?? await this.resolveApiKey(profile, document)
+      const resolvedApiKey = apiKey ?? await this.resolveApiKey(profile)
       if (profile.provider !== 'ollama' && !resolvedApiKey) throw new Error('An API key is required for this model provider')
       return {
         endpoint: profile.endpoint,
@@ -229,6 +222,7 @@ export class ModelProfileService {
   }
 
   private async ensureLegacyMigration(): Promise<void> {
+    await this.ensureApiKeyReferenceMigration()
     if (this.migrationChecked || !this.legacySettings) return
     await this.mutate(async () => {
       const document = await this.repository.load()
@@ -280,6 +274,53 @@ export class ModelProfileService {
     })
   }
 
+  private async ensureApiKeyReferenceMigration(): Promise<void> {
+    if (this.apiKeyReferenceMigrationChecked) return
+    await this.mutate(async () => {
+      const document = await this.repository.load()
+      await this.completeApiKeyReferenceMigration(document)
+      this.apiKeyReferenceMigrationChecked = true
+    })
+  }
+
+  private async completeApiKeyReferenceMigration(document: ModelProfileDocument): Promise<void> {
+    const references = document.migrations.apiKeyReferences
+    if (!references?.length) return
+
+    let next = document
+    for (const reference of references) {
+      const target = document.profiles.find(profile => profile.id === reference.targetProfileId && profile.kind === 'vlm')
+      if (!target) continue
+
+      const targetKey = await this.secrets.load(secretKey(target.id))
+      let targetHasKey = Boolean(targetKey)
+      if (!targetKey) {
+        const source = document.profiles.find(profile => profile.id === reference.sourceProfileId && profile.kind === 'llm')
+        const sourceKey = source ? await this.secrets.load(secretKey(source.id)) : null
+        if (sourceKey) {
+          let validatedSourceKey: string | null = null
+          try {
+            validatedSourceKey = validateModelApiKey(sourceKey)
+          } catch {
+            // Invalid source material is left in place, but cannot be copied.
+          }
+          if (validatedSourceKey) {
+            await this.secrets.save(secretKey(target.id), validatedSourceKey)
+            targetHasKey = true
+          }
+        }
+      }
+
+      if (!targetHasKey && target.provider !== 'ollama' && next.activeVlmId === target.id) {
+        next = { ...next, activeVlmId: null, autoActivateVlm: false }
+      }
+    }
+
+    const migrations = { ...next.migrations }
+    delete migrations.apiKeyReferences
+    await this.repository.save({ ...next, migrations })
+  }
+
   private async completeLegacyKeyMigration(document: ModelProfileDocument): Promise<void> {
     if (!document.migrations.legacyModelProfileId) return
     const oldKey = await this.secrets.load('model.apiKey')
@@ -314,37 +355,60 @@ export class ModelProfileService {
       const profile = document.profiles.find(candidate => candidate.id === id)
       if (!profile) throw new Error('Unknown model profile')
       const value = validateModelApiKey(apiKey)
-      const savedProfile = profile.apiKeyProfileId ? omitApiKeyReference(profile) : profile
       const previousApiKey = await this.secrets.load(secretKey(id))
       await this.secrets.save(secretKey(id), value)
-      const withSavedProfile = savedProfile === profile
-        ? document
-        : { ...document, profiles: document.profiles.map(candidate => candidate.id === id ? savedProfile : candidate) }
-      const next = savedProfile.kind === 'llm' && document.activeLlmId === null && document.autoActivateLlm !== false && await this.isValidForActivation(savedProfile, withSavedProfile, value)
-        ? { ...withSavedProfile, activeLlmId: id }
-        : savedProfile.kind === 'vlm' && document.activeVlmId === null && document.autoActivateVlm !== false && await this.isValidForActivation(savedProfile, withSavedProfile, value)
-          ? { ...withSavedProfile, activeVlmId: id }
-          : withSavedProfile
+      const next = profile.kind === 'llm' && document.activeLlmId === null && document.autoActivateLlm !== false && await this.isValidForActivation(profile, document, value)
+        ? { ...document, activeLlmId: id }
+        : profile.kind === 'vlm' && document.activeVlmId === null && document.autoActivateVlm !== false && await this.isValidForActivation(profile, document, value)
+          ? { ...document, activeVlmId: id }
+          : document
       try {
         if (next !== document) await this.repository.save(next)
       } catch (error) {
         await this.restoreSecret(secretKey(id), previousApiKey)
         throw error
       }
-      return this.toRendererProfile(savedProfile, next, value)
+      return this.toRendererProfile(profile, next, value)
     })
   }
 
-  private async isValidForActivation(profile: PersistedModelProfile, document: ModelProfileDocument, currentApiKey?: string): Promise<boolean> {
-    return profile.provider === 'ollama' || Boolean(currentApiKey ?? await this.resolveApiKey(profile, document))
+  async clearApiKey(id: string): Promise<RendererModelProfile> {
+    await this.ensureLegacyMigration()
+    return this.mutate(async () => {
+      const document = await this.loadDocumentInMutation()
+      const profile = document.profiles.find(candidate => candidate.id === id)
+      if (!profile) throw new Error('Unknown model profile')
+
+      const isActive = profile.kind === 'llm'
+        ? document.activeLlmId === profile.id
+        : document.activeVlmId === profile.id
+      const next = isActive && profile.provider !== 'ollama'
+        ? profile.kind === 'llm'
+          ? { ...document, activeLlmId: null, autoActivateLlm: false }
+          : { ...document, activeVlmId: null, autoActivateVlm: false }
+        : document
+
+      if (next !== document) await this.repository.save(next)
+      try {
+        await this.secrets.remove(secretKey(profile.id))
+      } catch (error) {
+        if (next !== document) await this.repository.save(document).catch(() => undefined)
+        throw error
+      }
+      return this.toRendererProfile(profile, next, null)
+    })
+  }
+
+  private async isValidForActivation(profile: PersistedModelProfile, _document: ModelProfileDocument, currentApiKey?: string): Promise<boolean> {
+    return profile.provider === 'ollama' || Boolean(currentApiKey ?? await this.resolveApiKey(profile))
   }
 
   private async toRendererProfile(
     profile: PersistedModelProfile,
     document: ModelProfileDocument,
-    knownApiKey?: string,
+    knownApiKey?: string | null,
   ): Promise<RendererModelProfile> {
-    const apiKey = knownApiKey ?? await this.resolveApiKey(profile, document)
+    const apiKey = knownApiKey === undefined ? await this.resolveApiKey(profile) : knownApiKey
     return {
       id: profile.id,
       name: profile.name,
@@ -355,27 +419,16 @@ export class ModelProfileService {
       ...(profile.contextLimit === undefined ? {} : { contextLimit: profile.contextLimit }),
       ...(profile.maxImages === undefined ? {} : { maxImages: profile.maxImages }),
       hasApiKey: Boolean(apiKey),
-      ...(profile.apiKeyProfileId ? { apiKeyProfileId: profile.apiKeyProfileId } : {}),
       active: profile.kind === 'llm' ? document.activeLlmId === profile.id : document.activeVlmId === profile.id,
     }
   }
 
-  private async toProtectedProfile(profile: PersistedModelProfile, document: ModelProfileDocument): Promise<ProtectedModelProfile> {
-    return { ...profile, apiKey: await this.resolveApiKey(profile, document) }
+  private async toProtectedProfile(profile: PersistedModelProfile): Promise<ProtectedModelProfile> {
+    return { ...profile, apiKey: await this.resolveApiKey(profile) }
   }
 
-  private async resolveApiKey(profile: PersistedModelProfile, document: ModelProfileDocument): Promise<string | null> {
-    if (profile.apiKeyProfileId) {
-      const referenced = document.profiles.find(candidate => candidate.id === profile.apiKeyProfileId && candidate.kind === 'llm')
-      return referenced ? this.secrets.load(secretKey(referenced.id)) : null
-    }
+  private async resolveApiKey(profile: PersistedModelProfile): Promise<string | null> {
     return this.secrets.load(secretKey(profile.id))
-  }
-
-  private requireLlmKeyProfile(document: ModelProfileDocument, referenceId: string, profileId: string): void {
-    if (referenceId === profileId || !document.profiles.some(profile => profile.id === referenceId && profile.kind === 'llm')) {
-      throw new Error('VLM API key reference must target an LLM profile')
-    }
   }
 
   private createMigrationProfileId(document: ModelProfileDocument): string {
@@ -389,7 +442,7 @@ export class ModelProfileService {
       if (previousValue === null) await this.secrets.remove(key)
       else await this.secrets.save(key, previousValue)
     } catch {
-      // Preserve the original persistence error; a later retry can restore the key again.
+      // Preserve the original persistence error when protected-storage rollback is unavailable.
     }
   }
 
@@ -402,10 +455,4 @@ export class ModelProfileService {
 
 function secretKey(id: string): string {
   return `model-profile.${id}.apiKey`
-}
-
-function omitApiKeyReference(profile: PersistedModelProfile): PersistedModelProfile {
-  const withoutReference = { ...profile }
-  delete withoutReference.apiKeyProfileId
-  return withoutReference
 }
