@@ -56,10 +56,10 @@ function edit(profile: RendererModelProfile): void {
   clearTransientKey()
   setForm(createProfileDraft(profile))
 }
-function resetForSettingsClose(): void {
-  reset()
+function clearTransientKeyForSettingsClose(): void {
+  clearTransientKey()
 }
-defineExpose({ resetForSettingsClose })
+defineExpose({ clearTransientKeyForSettingsClose })
 async function save(): Promise<void> {
   busy.value = true
   message.value = ''

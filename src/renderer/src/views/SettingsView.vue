@@ -11,10 +11,10 @@ import { SETTINGS_TABS, type SettingsTabId } from './settings-tabs'
 const emit = defineEmits<{ close: [] }>()
 const tab = ref<SettingsTabId>('routing')
 const tabIcons = { routing: BrainCircuit, llm: Bot, vlm: Eye, fence: Braces, memory: Database, appearance: Palette }
-const modelProfileManager = ref<{ resetForSettingsClose(): void } | null>(null)
+const modelProfileManager = ref<{ clearTransientKeyForSettingsClose(): void } | null>(null)
 
 function closeSettings(): void {
-  modelProfileManager.value?.resetForSettingsClose()
+  modelProfileManager.value?.clearTransientKeyForSettingsClose()
   emit('close')
 }
 </script>

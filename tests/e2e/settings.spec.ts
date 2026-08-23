@@ -64,6 +64,13 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await expect(page.getByText('LLM 密钥引用', { exact: true })).toHaveCount(0)
 
     await panels.nth(1).click()
+    const draftName = '保留的未保存模型草稿'
+    const draftEndpoint = 'http://127.0.0.1:18080/v1/chat/completions'
+    await page.getByLabel('连接名称').fill(draftName)
+    await page.getByLabel('接口类型').selectOption('openai')
+    await page.getByLabel('模型', { exact: true }).fill('preserved-draft-model')
+    await page.getByLabel('接口地址').fill(draftEndpoint)
+    await page.getByLabel('上下文长度').fill('32768')
     const apiKeyBeforeLeavingSettings = page.getByLabel('API Key', { exact: true })
     await apiKeyBeforeLeavingSettings.fill('session-only-key')
 
@@ -75,6 +82,11 @@ test('opens real settings with ordered panels, host memory controls, and termina
     const apiKeyAfterReopeningSettings = page.getByLabel('API Key', { exact: true })
     await expect(apiKeyAfterReopeningSettings).toHaveValue('')
     await expect(apiKeyAfterReopeningSettings).toHaveAttribute('type', 'password')
+    await expect(page.getByLabel('连接名称')).toHaveValue(draftName)
+    await expect(page.getByLabel('接口类型')).toHaveValue('openai')
+    await expect(page.getByLabel('模型', { exact: true })).toHaveValue('preserved-draft-model')
+    await expect(page.getByLabel('接口地址')).toHaveValue(draftEndpoint)
+    await expect(page.getByLabel('上下文长度')).toHaveValue('32768')
   } finally {
     await app?.close()
     await rm(userDataDir, { recursive: true, force: true })
