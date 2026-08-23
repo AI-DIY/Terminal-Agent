@@ -183,6 +183,19 @@ describe('model profile preload API', () => {
     expect(rawProfile).toHaveProperty(obsoleteReferenceField, 'legacy-llm')
   })
 
+  it.each([
+    'https://user:secret@example.test/v1/chat/completions',
+    'https://example.test/v1/chat/completions?api_key=secret',
+    'https://example.test/v1/api_key/chat/completions',
+    'https://example.test/v1/chat/completions#secret',
+  ])('rejects a profile response endpoint that can contain credentials: %s', async endpoint => {
+    const ipc = createIpc()
+    ipc.invoke.mockResolvedValue([{ ...profileResponse, endpoint }])
+    const api = createTerminalAgentApi(ipc)
+
+    await expect(api.settings.models.list('llm')).rejects.toThrow()
+  })
+
   it('exposes a strict clear-key request without retaining a key-import API', async () => {
     const ipc = createIpc()
     ipc.invoke.mockResolvedValue(profileResponse)

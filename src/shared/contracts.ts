@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { containsSensitiveHostMemoryData, normalizeSafeHostMemoryConnectionIp, normalizeSafeHostMemoryConnectionLabel, normalizeSafeHostMemoryIdentity } from './host-memory-safety'
-import { modelProfileIdSchema } from './validation'
+import { modelEndpointSchema, modelProfileIdSchema } from './validation'
 
 export const WORKBENCH_LEFT_WIDTH_MIN = 210
 export const WORKBENCH_LEFT_WIDTH_MAX = 360
@@ -63,7 +63,7 @@ export const rendererModelProfileSchema = z.object({
   kind: z.enum(['llm', 'vlm']),
   provider: z.enum(['openai', 'ollama', 'llama-cpp']),
   model: z.string().trim().min(1).max(255),
-  endpoint: z.string().url(),
+  endpoint: modelEndpointSchema,
   contextLimit: z.number().int().min(1_024).max(1_000_000).optional(),
   maxImages: z.number().int().min(1).max(128).optional(),
   hasApiKey: z.boolean(),
