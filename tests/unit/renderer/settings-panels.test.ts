@@ -40,14 +40,17 @@ describe('settings panels', () => {
   it('themes the settings and host-memory surfaces through shared tokens', () => {
     const settings = readFileSync(new URL('../../../src/renderer/src/views/SettingsView.vue', import.meta.url), 'utf8')
     const memory = readFileSync(new URL('../../../src/renderer/src/components/settings/HostMemorySettings.vue', import.meta.url), 'utf8')
+    const settingsRule = /\.settings\s*\{([^}]*)\}/.exec(settings)?.[1] ?? ''
+    const settingsTopRule = /\.settings-top\s*\{([^}]*)\}/.exec(settings)?.[1] ?? ''
+    const backButtonRule = /\.back-button\s*\{([^}]*)\}/.exec(settings)?.[1] ?? ''
 
-    expect(settings).toContain('background: var(--surface)')
-    expect(settings).toContain('background: var(--chrome)')
-    expect(settings).toContain('color: var(--text)')
-    expect(settings).toContain('--window-controls-inset')
-    expect(settings).toContain('-webkit-app-region: drag')
-    expect(settings).toContain('-webkit-app-region: no-drag')
-    expect(settings).toContain('env(titlebar-area-width')
+    expect(settingsRule).toContain('grid-template-rows: 56px minmax(0, 1fr);')
+    expect(settingsRule).toContain('--window-controls-inset: max(138px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px))));')
+    expect(settingsRule).toContain('background: var(--surface);')
+    expect(settingsTopRule).toContain('padding: 0 calc(16px + var(--window-controls-inset)) 0 16px;')
+    expect(settingsTopRule).toContain('-webkit-app-region: drag;')
+    expect(settingsTopRule).toContain('background: var(--chrome);')
+    expect(backButtonRule).toContain('-webkit-app-region: no-drag;')
     expect(memory).toContain('memory-status')
     expect(memory).toContain('scope-card')
   })

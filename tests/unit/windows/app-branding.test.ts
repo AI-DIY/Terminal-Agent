@@ -9,6 +9,10 @@ describe('Terminal-Agent branding', () => {
     const settings = readFileSync(new URL('../../../src/renderer/src/views/SettingsView.vue', import.meta.url), 'utf8')
     const icon = new URL('../../../build-resources/ta-icon.ico', import.meta.url)
     const brandMarkRule = /\.brand-mark\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
+    const workbenchShellRule = /\.workbench-shell\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
+    const appHeaderRule = /\.app-header\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
+    const appHeaderActionsRule = /\.app-header-actions\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
+    const appHeaderActionsChildrenRule = /\.app-header-actions\s+:deep\(\*\)\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
 
     expect(packageJson.version).toBe('1.0.7')
     expect(packageJson.build.win.icon).toBe('build-resources/ta-icon.ico')
@@ -19,10 +23,12 @@ describe('Terminal-Agent branding', () => {
     expect(iconGenerator).not.toContain('accentBrush')
     expect(iconGenerator).toContain("[System.Drawing.RectangleF]::new(0, 0, $size, $size)")
     expect(shell).toContain('width: 28px; height: 28px')
-    expect(shell).toContain('--window-controls-inset')
-    expect(shell).toContain('-webkit-app-region: drag')
-    expect(shell).toContain('-webkit-app-region: no-drag')
-    expect(shell).toContain('env(titlebar-area-width')
+    expect(workbenchShellRule).toContain('grid-template-rows: 48px minmax(0, 1fr);')
+    expect(workbenchShellRule).toContain('--window-controls-inset: max(138px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px))));')
+    expect(appHeaderRule).toContain('padding: 0 calc(14px + var(--window-controls-inset)) 0 14px;')
+    expect(appHeaderRule).toContain('-webkit-app-region: drag;')
+    expect(appHeaderActionsRule).toContain('-webkit-app-region: no-drag;')
+    expect(appHeaderActionsChildrenRule).toContain('-webkit-app-region: no-drag;')
     expect(brandMarkRule).toContain('border: 1px solid #535e6a')
     expect(brandMarkRule).toContain('border-radius: 0')
     expect(brandMarkRule).toContain('background: #1d242c')
