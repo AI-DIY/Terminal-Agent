@@ -37,7 +37,7 @@ import type {
   HostMemorySettings,
   HostMemoryDisclosure,
 } from '../shared/contracts'
-import { rendererModelSettingsInputSchema, type ModelProfileKind, type ModelRouting, type RendererModelProfileInput, type RendererModelSettingsInput } from '../shared/validation'
+import { modelProfileIdSchema, rendererModelProfileInputSchema, rendererModelSettingsInputSchema, type ModelProfileKind, type ModelRouting, type RendererModelProfileInput, type RendererModelSettingsInput } from '../shared/validation'
 import type { RegexFenceRule } from '../main/agent/regex-fence-service'
 import type { DirectSessionSummary } from '../main/ssh/direct-session-repository'
 
@@ -105,9 +105,9 @@ export type TerminalAgentApi = {
       test(input: RendererModelProfileInput): Promise<{ model: string }>
       activate(id: string): Promise<RendererModelProfile>
       delete(id: string, options?: { replacementId?: string | null; allowNoActive?: boolean }): Promise<void>
+      clearApiKey(id: string): Promise<RendererModelProfile>
       getRouting(): Promise<ModelRouting>
       setRouting(routing: ModelRouting): Promise<ModelRouting>
-      importApiKey(profileId: string): Promise<{ status: 'imported' | 'cancelled'; hasApiKey: boolean }>
     }
     getRegexRules(): Promise<RegexFenceRule[]>
     saveRegexRules(rules: RegexFenceRule[]): Promise<void>
@@ -223,13 +223,16 @@ export function createTerminalAgentApi(ipcRenderer: {
       models: Object.freeze({
         list: (kind?: ModelProfileKind) => ipcRenderer.invoke('settings:models:list', kind === undefined ? undefined : { kind }) as Promise<RendererModelProfile[]>,
         get: (id: string) => ipcRenderer.invoke('settings:models:get', id) as Promise<RendererModelProfile | null>,
-        save: (input: RendererModelProfileInput) => ipcRenderer.invoke('settings:models:save', input) as Promise<RendererModelProfile>,
-        test: (input: RendererModelProfileInput) => ipcRenderer.invoke('settings:models:test', input) as Promise<{ model: string }>,
+        save: (input: RendererModelProfileInput) => ipcRenderer.invoke('settings:models:save', rendererModelProfileInputSchema.parse(input)) as Promise<RendererModelProfile>,
+        test: async (input: RendererModelProfileInput) => {
+          const result = await ipcRenderer.invoke('settings:models:test', rendererModelProfileInputSchema.parse(input)) as { model: string }
+          return { model: result.model }
+        },
         activate: (id: string) => ipcRenderer.invoke('settings:models:activate', id) as Promise<RendererModelProfile>,
         delete: async (id: string, options?: { replacementId?: string | null; allowNoActive?: boolean }) => { await ipcRenderer.invoke('settings:models:delete', { id, ...options }) },
+        clearApiKey: (id: string) => ipcRenderer.invoke('settings:models:key:clear', { id: modelProfileIdSchema.parse(id) }) as Promise<RendererModelProfile>,
         getRouting: () => ipcRenderer.invoke('settings:models:routing:get') as Promise<ModelRouting>,
         setRouting: (routing: ModelRouting) => ipcRenderer.invoke('settings:models:routing:set', routing) as Promise<ModelRouting>,
-        importApiKey: (profileId: string) => ipcRenderer.invoke('settings:models:key:import', { id: profileId }) as Promise<{ status: 'imported' | 'cancelled'; hasApiKey: boolean }>,
       }),
       getRegexRules: () => ipcRenderer.invoke('settings:regex-rules:get') as Promise<RegexFenceRule[]>,
       saveRegexRules: (rules: RegexFenceRule[]) => ipcRenderer.invoke('settings:regex-rules:save', rules) as Promise<void>,

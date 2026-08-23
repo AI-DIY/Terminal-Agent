@@ -7,18 +7,18 @@ export type ModelProfilesApi = {
   test(input: RendererModelProfileInput): Promise<{ model: string }>
   activate(id: string): Promise<RendererModelProfile>
   delete(id: string, options?: { replacementId?: string | null; allowNoActive?: boolean }): Promise<void>
+  clearApiKey(id: string): Promise<RendererModelProfile>
   getRouting(): Promise<ModelRouting>
   setRouting(routing: ModelRouting): Promise<ModelRouting>
-  importApiKey(profileId: string): Promise<{ status: 'imported' | 'cancelled'; hasApiKey: boolean }>
 }
 
-export type ProfileDraft = RendererModelProfileInput & {
+export type ProfileDraft = Omit<RendererModelProfileInput, 'apiKey'>
+type EditableProfileDraft = ProfileDraft & {
   id?: string
-  apiKey?: never
   apiKeyPlaceholder: string
 }
 
-export function createProfileDraft(profile?: RendererModelProfile): ProfileDraft {
+export function createProfileDraft(profile?: RendererModelProfile): EditableProfileDraft {
   const kind = profile?.kind ?? 'llm'
   return {
     ...(profile ? {
@@ -30,7 +30,6 @@ export function createProfileDraft(profile?: RendererModelProfile): ProfileDraft
       endpoint: profile.endpoint,
       contextLimit: profile.contextLimit,
       maxImages: profile.maxImages,
-      apiKeyProfileId: profile.apiKeyProfileId,
     } : {
       name: '',
       kind,
@@ -40,15 +39,16 @@ export function createProfileDraft(profile?: RendererModelProfile): ProfileDraft
       contextLimit: kind === 'llm' ? 12000 : undefined,
       maxImages: kind === 'vlm' ? 4 : undefined,
     }),
-    apiKeyPlaceholder: profile?.hasApiKey ? '已配置密钥，不会回填' : '未配置密钥。请使用导入密钥。',
-  } as ProfileDraft
+    apiKeyPlaceholder: profile?.hasApiKey ? '已配置密钥，不会回填' : '未配置密钥。',
+  }
 }
 
-export function profileDraftInput(draft: ProfileDraft): RendererModelProfileInput {
-  const input = { ...draft } as RendererModelProfileInput & Record<string, unknown>
+export function profileDraftInput(draft: EditableProfileDraft, apiKey = ''): RendererModelProfileInput {
+  const input = { ...draft } as RendererModelProfileInput & { id?: string; apiKeyPlaceholder?: string }
   delete input.id
   delete input.apiKeyPlaceholder
-  return input
+  const value = apiKey.trim()
+  return value ? { ...input, apiKey: value } : input
 }
 
 export function createModelProfilesStore(api: ModelProfilesApi) {
@@ -117,19 +117,17 @@ export function createModelProfilesStore(api: ModelProfilesApi) {
     if (revision === routingRevision) state.routing = next
   }
 
-  async function importApiKey(profileId: string): Promise<void> {
-    const result = await api.importApiKey(profileId)
-    if (result.status === 'imported') {
-      const kind = state.profilesByKind.llm.some(profile => profile.id === profileId) ? 'llm' : state.profilesByKind.vlm.some(profile => profile.id === profileId) ? 'vlm' : state.kind
-      await load(kind)
-    }
+  async function clearApiKey(id: string): Promise<RendererModelProfile> {
+    const cleared = await api.clearApiKey(id)
+    await load(cleared.kind)
+    return cleared
   }
 
   function profilesForKind(kind: ModelProfileKind): RendererModelProfile[] {
     return state.profilesByKind[kind]
   }
 
-  return { state, load, loadAll, profilesForKind, save, test, activate, remove, setRouting, importApiKey }
+  return { state, load, loadAll, profilesForKind, save, test, activate, remove, clearApiKey, setRouting }
 }
 
 let sharedStore: ReturnType<typeof createModelProfilesStore> | undefined

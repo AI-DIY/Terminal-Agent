@@ -64,7 +64,7 @@ describe('ModelProfileService', () => {
       activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: { legacyModelSettings: 1 },
     })
 
-    await expect(service.saveApiKey('existing', value)).rejects.toThrow()
+    await expect(service.save({ id: 'existing', kind: 'llm', name: 'existing', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000, apiKey: value })).rejects.toThrow()
     expect(secrets.save).not.toHaveBeenCalled()
   })
 
@@ -374,7 +374,7 @@ describe('ModelProfileService', () => {
     const persistenceError = new Error('disk unavailable')
     repository.save.mockRejectedValueOnce(persistenceError)
 
-    await expect(service.saveApiKey('existing', 'new-secret')).rejects.toBe(persistenceError)
+    await expect(service.save({ id: 'existing', kind: 'llm', name: 'existing', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000, apiKey: 'new-secret' })).rejects.toBe(persistenceError)
 
     expect(protectedKeys.get('model-profile.existing.apiKey')).toBe('old-secret')
     expect(getDocument().activeLlmId).toBeNull()
@@ -396,7 +396,7 @@ describe('ModelProfileService', () => {
 
     let caught: unknown
     try {
-      await service.saveApiKey('existing', 'new-secret')
+      await service.save({ id: 'existing', kind: 'llm', name: 'existing', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000, apiKey: 'new-secret' })
     } catch (error) {
       caught = error
     }
@@ -673,8 +673,8 @@ describe('ModelProfileService', () => {
       autoActivateVlm: false,
     })
 
-    await expect(service.saveApiKey('later-llm', 'later-llm-key')).resolves.toMatchObject({ active: false })
-    await expect(service.saveApiKey('later-vlm', 'later-vlm-key')).resolves.toMatchObject({ active: false })
+    await expect(service.save({ id: 'later-llm', kind: 'llm', name: 'Later LLM', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000, apiKey: 'later-llm-key' })).resolves.toMatchObject({ active: false })
+    await expect(service.save({ id: 'later-vlm', kind: 'vlm', name: 'Later VLM', provider: 'openai', model: 'gpt-vision', endpoint, maxImages: 4, apiKey: 'later-vlm-key' })).resolves.toMatchObject({ active: false })
     await expect(service.save({
       kind: 'llm', name: 'Replacement LLM', provider: 'ollama', model: 'qwen3',
       endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000,

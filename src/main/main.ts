@@ -37,7 +37,6 @@ import { ElectronSecretStore } from './settings/secret-store'
 import { ModelSettingsService } from './settings/model-settings-service'
 import { ModelProfileRepository } from './settings/model-profile-repository'
 import { ModelProfileService } from './settings/model-profile-service'
-import { ModelApiKeyEntryService } from './settings/model-api-key-entry-service'
 import { registerSettingsHandlers } from './settings/register-settings-handlers'
 import { HostMemorySettingsService } from './settings/host-memory-settings-service'
 import { registerHostMemoryHandlers } from './settings/register-host-memory-handlers'
@@ -94,7 +93,6 @@ const modelProfiles = new ModelProfileService(
   { legacySettings: legacyModelSettings },
 )
 const modelSettings = new ModelSettingsService(modelProfiles)
-const modelApiKeys = new ModelApiKeyEntryService(modelProfiles)
 const chatCompletions = new ModelProviderRouter()
 const agentScheduler = new AgentScheduler(new AgentModelRuntime(modelSettings, chatCompletions, undefined, modelProfiles))
 const approvedExecutionAudit = new ApprovedExecutionAudit()
@@ -224,7 +222,7 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
   unregisterConfirmationHandlers = registerConfirmationHandlers(candidateConfirmations, mainWindow.webContents)
   unregisterExecutionHandlers = registerExecutionHandlers(executionGateway, mainWindow.webContents)
   unregisterAgentHandlers = registerAgentHandlers(agentScheduler, sessions, hostFacts, candidateConfirmations, mainWindow.webContents, executionGateway, { hostMemory: hostMemorySettings })
-  unregisterSettingsHandlers = registerSettingsHandlers(modelSettings, regexRules, mainWindow.webContents, chatCompletions, modelProfiles, modelApiKeys)
+  unregisterSettingsHandlers = registerSettingsHandlers(modelSettings, regexRules, mainWindow.webContents, chatCompletions, modelProfiles)
   unregisterSessionObservation = registerSessionObservation(sessions, hostFacts, hostMemorySettings, mainWindow.webContents)
   unregisterHostMemoryHandlers = registerHostMemoryHandlers(
     hostMemorySettings,

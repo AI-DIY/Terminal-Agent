@@ -389,38 +389,6 @@ export class ModelProfileService {
     await this.secrets.remove('model.apiKey')
   }
 
-  async saveApiKey(id: string, apiKey: string): Promise<RendererModelProfile> {
-    await this.ensureLegacyMigration()
-    return this.mutate(async () => {
-      const document = await this.loadDocumentInMutation()
-      const profile = document.profiles.find(candidate => candidate.id === id)
-      if (!profile) throw new Error('Unknown model profile')
-      const value = validateModelApiKey(apiKey)
-      const previousApiKey = await this.secrets.load(secretKey(id))
-      await this.secrets.save(secretKey(id), value)
-      const next = profile.kind === 'llm' && document.activeLlmId === null && document.autoActivateLlm !== false && await this.isValidForActivation(profile, document, value)
-        ? { ...document, activeLlmId: id }
-        : profile.kind === 'vlm' && document.activeVlmId === null && document.autoActivateVlm !== false && await this.isValidForActivation(profile, document, value)
-          ? { ...document, activeVlmId: id }
-          : document
-      try {
-        if (next !== document) await this.repository.save(next)
-      } catch (persistenceError) {
-        try {
-          await this.restoreSecret(secretKey(id), previousApiKey)
-        } catch (rollbackError) {
-          throw stateUncertainError(
-            'Failed to persist API-key activation and restore the previous API key; protected credential state may be inconsistent',
-            persistenceError,
-            rollbackError,
-          )
-        }
-        throw persistenceError
-      }
-      return this.toRendererProfile(profile, next, value)
-    })
-  }
-
   async clearApiKey(id: string): Promise<RendererModelProfile> {
     await this.ensureLegacyMigration()
     return this.mutate(async () => {

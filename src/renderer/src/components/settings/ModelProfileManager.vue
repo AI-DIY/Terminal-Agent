@@ -11,8 +11,7 @@ const store = getModelProfilesStore()
 const editingId = ref<string | null>(null)
 const busy = ref(false)
 const message = ref('')
-const keyPlaceholder = ref('未配置密钥。请使用导入密钥。')
-const llmProfiles = ref<RendererModelProfile[]>([])
+const keyPlaceholder = ref('未配置密钥。')
 const replacements = reactive<Record<string, string>>({})
 const testGuard = createAsyncTestResultGuard()
 const form = reactive<RendererModelProfileInput>({
@@ -22,7 +21,7 @@ const profiles = computed(() => store.profilesForKind(props.kind))
 const isVlm = computed(() => props.kind === 'vlm')
 function reset(): void {
   editingId.value = null
-  keyPlaceholder.value = '未配置密钥。请使用导入密钥。'
+  keyPlaceholder.value = '未配置密钥。'
   setForm({ name: '', kind: props.kind, provider: 'ollama', model: '', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: isVlm.value ? undefined : 12000, maxImages: isVlm.value ? 4 : undefined })
 }
 function setForm(input: RendererModelProfileInput): void {
@@ -66,10 +65,8 @@ async function remove(profile: { id: string; active: boolean }): Promise<void> {
     message.value = '配置已删除'
   } catch (error) { message.value = error instanceof Error ? error.message : '删除失败' }
 }
-async function importKey(id: string): Promise<void> { try { await store.importApiKey(id); message.value = '密钥状态已更新' } catch (error) { message.value = error instanceof Error ? error.message : '密钥导入失败' } }
 onMounted(async () => {
   await store.load(props.kind)
-  if (props.kind === 'vlm') llmProfiles.value = await window.terminalAgent.settings.models.list('llm')
 })
 </script>
 
@@ -84,7 +81,7 @@ onMounted(async () => {
           <article v-for="profile in profiles" :key="profile.id" class="profile-item" :class="{ active: profile.active }">
             <button type="button" class="profile-select" @click="edit(profile)"><strong>{{ profile.name }}</strong><span>{{ profile.provider }} · {{ profile.model }}</span><small>{{ profile.hasApiKey ? '已配置密钥' : '未配置密钥' }}</small></button>
             <span class="activation-state" :class="{ active: profile.active }">{{ profile.active ? '已激活' : '未激活' }}</span>
-            <div class="profile-actions"><button type="button" @click="edit(profile)">编辑</button><button type="button" :disabled="profile.active" @click="activate(profile.id)">{{ profile.active ? '已激活' : '激活' }}</button><button type="button" @click="importKey(profile.id)">导入密钥</button><select v-if="profile.active && profiles.length > 1" v-model="replacements[profile.id]" aria-label="删除时选择替代配置"><option value="">选择替代配置</option><template v-for="alternative in profiles" :key="alternative.id"><option v-if="alternative.id !== profile.id" :value="alternative.id">替代为 {{ alternative.name }}</option></template></select><button type="button" class="danger" @click="remove(profile)">删除</button></div>
+            <div class="profile-actions"><button type="button" @click="edit(profile)">编辑</button><button type="button" :disabled="profile.active" @click="activate(profile.id)">{{ profile.active ? '已激活' : '激活' }}</button><select v-if="profile.active && profiles.length > 1" v-model="replacements[profile.id]" aria-label="删除时选择替代配置"><option value="">选择替代配置</option><template v-for="alternative in profiles" :key="alternative.id"><option v-if="alternative.id !== profile.id" :value="alternative.id">替代为 {{ alternative.name }}</option></template></select><button type="button" class="danger" @click="remove(profile)">删除</button></div>
           </article>
         </nav>
       </section>
@@ -96,8 +93,7 @@ onMounted(async () => {
         <label class="span-2">接口地址<input v-model="form.endpoint" required type="url"></label>
         <label v-if="!isVlm">上下文长度<input v-model.number="form.contextLimit" required type="number" min="1024" max="1000000"></label>
         <label v-else>最大图像数<input v-model.number="form.maxImages" required type="number" min="1" max="128"></label>
-        <label v-if="isVlm">LLM 密钥引用<select v-model="form.apiKeyProfileId"><option :value="undefined">不引用（使用本配置密钥）</option><option v-for="profile in llmProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
-        <label>API Key<input type="password" :placeholder="keyPlaceholder" readonly aria-describedby="api-key-note" /></label><p id="api-key-note" class="key-note span-2">密钥只通过主进程导入，绝不回填到页面或 renderer DTO。</p>
+        <label>API Key<input type="password" :placeholder="keyPlaceholder" readonly aria-describedby="api-key-note" /></label><p id="api-key-note" class="key-note span-2">已保存的密钥不会回填到页面或 renderer DTO。</p>
         <div class="form-actions span-2"><button type="button" :disabled="busy" @click="test">测试连接</button><button type="submit" class="primary-button" :disabled="busy">保存{{ kind === 'llm' ? '大语言模型' : '视觉语言模型' }}配置</button><button type="button" @click="reset">取消</button></div>
         <p v-if="message" class="form-message span-2" role="status">{{ message }}</p><p v-if="store.state.error" class="error span-2" role="alert">{{ store.state.error }}</p>
       </form>

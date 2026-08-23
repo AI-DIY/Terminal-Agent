@@ -21,13 +21,18 @@ export const modelEndpointSchema = z.string().url().superRefine((value, context)
   }
 })
 
+export const modelApiKeySchema = z.string().trim().min(1).max(4_096).refine(
+  value => new TextEncoder().encode(value).byteLength <= 4_096,
+  'API key exceeds the maximum supported size',
+)
+
 export const modelSettingsInputSchema = z.object({
   endpoint: modelEndpointSchema.refine(
     value => new URL(value).pathname.endsWith('/chat/completions'),
     'Endpoint must target OpenAI Chat Completions',
   ),
   model: z.string().trim().min(1).max(128),
-  apiKey: z.string().trim().min(1).max(4096),
+  apiKey: modelApiKeySchema,
   contextLimit: z.number().int().min(1024).max(1_000_000),
 })
 
@@ -49,8 +54,10 @@ export type ModelProvider = z.infer<typeof modelProviderSchema>
 export const modelRoutingSchema = z.enum(['combined', 'vision-only'])
 export type ModelRouting = z.infer<typeof modelRoutingSchema>
 
+export const modelProfileIdSchema = z.string().trim().min(1).max(128)
+
 const modelProfileBaseSchema = z.object({
-  id: z.string().trim().min(1).max(128).optional(),
+  id: modelProfileIdSchema.optional(),
   name: z.string().trim().min(1).max(255),
   kind: modelProfileKindSchema,
   provider: modelProviderSchema,
@@ -58,8 +65,7 @@ const modelProfileBaseSchema = z.object({
   endpoint: modelEndpointSchema,
   contextLimit: z.number().int().min(1_024).max(1_000_000).optional(),
   maxImages: z.number().int().min(1).max(128).optional(),
-  apiKey: z.string().trim().min(1).max(4_096).optional(),
-  apiKeyProfileId: z.string().trim().min(1).max(128).optional(),
+  apiKey: modelApiKeySchema.optional(),
 }).strict()
 
 type ModelProfileValidationFields = {
@@ -69,7 +75,6 @@ type ModelProfileValidationFields = {
   contextLimit?: number
   maxImages?: number
   apiKey?: string
-  apiKeyProfileId?: string
 }
 
 function validateModelProfile(profile: ModelProfileValidationFields, context: z.RefinementCtx): void {
@@ -93,21 +98,10 @@ function validateModelProfile(profile: ModelProfileValidationFields, context: z.
   if (profile.provider === 'ollama' && !pathname.endsWith('/api/chat')) {
     context.addIssue({ code: 'custom', path: ['endpoint'], message: 'Ollama endpoint must target /api/chat' })
   }
-  if (profile.apiKey && profile.apiKeyProfileId) {
-    context.addIssue({ code: 'custom', path: ['apiKeyProfileId'], message: 'Choose an API key or a key profile reference' })
-  }
-  if (profile.kind === 'llm' && profile.apiKeyProfileId) {
-    context.addIssue({ code: 'custom', path: ['apiKeyProfileId'], message: 'LLM profiles cannot reference another API key' })
-  }
 }
 
 export const modelProfileInputSchema = modelProfileBaseSchema.superRefine(validateModelProfile)
 export type ModelProfileInput = z.infer<typeof modelProfileInputSchema>
 
-export const rendererModelProfileInputSchema = modelProfileBaseSchema.omit({ apiKey: true }).superRefine(validateModelProfile)
+export const rendererModelProfileInputSchema = modelProfileBaseSchema.superRefine(validateModelProfile)
 export type RendererModelProfileInput = z.infer<typeof rendererModelProfileInputSchema>
-
-export const rendererModelProfileUpdateSchema = modelProfileBaseSchema.omit({ apiKey: true }).extend({
-  id: z.string().trim().min(1).max(128),
-})
-export type RendererModelProfileUpdate = z.infer<typeof rendererModelProfileUpdateSchema>

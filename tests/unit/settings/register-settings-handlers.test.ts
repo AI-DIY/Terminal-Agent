@@ -64,24 +64,42 @@ describe('registerSettingsHandlers', () => {
     expect(tester.verify).not.toHaveBeenCalled()
   })
 
-  it('rejects API keys in the profile settings IPC request', async () => {
+  it('passes a transient API key to profile save and test without returning it', async () => {
     const profiles = {
-      list: vi.fn(), get: vi.fn(), save: vi.fn(), activate: vi.fn(), delete: vi.fn(),
-      prepareForConnectionTest: vi.fn(), getRouting: vi.fn(), setRouting: vi.fn(),
+      list: vi.fn(), get: vi.fn(), save: vi.fn().mockResolvedValue({ id: 'llm-1', hasApiKey: true }), activate: vi.fn(), delete: vi.fn(), clearApiKey: vi.fn(),
+      prepareForConnectionTest: vi.fn().mockResolvedValue({ endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5', contextLimit: 8_000, apiKey: 'secret' }), getRouting: vi.fn(), setRouting: vi.fn(),
     }
     const sender = {}
+    const tester = { verify: vi.fn().mockResolvedValue({ model: 'gpt-5', apiKey: 'response-secret' }) }
     registerSettingsHandlers(
       { loadForRenderer: vi.fn(), saveFromRenderer: vi.fn(), prepareForConnectionTest: vi.fn() },
-      { list: vi.fn(() => []), save: vi.fn() }, sender as never, { verify: vi.fn() }, profiles as never,
+      { list: vi.fn(() => []), save: vi.fn() }, sender as never, tester, profiles as never,
     )
 
     const profileInputWithKey = {
       name: 'Primary', kind: 'llm', provider: 'openai', model: 'gpt-5', endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 8_000, apiKey: 'secret',
     }
-    await expect(handler('settings:models:save')({ sender }, profileInputWithKey)).rejects.toThrow()
-    await expect(handler('settings:models:test')({ sender }, profileInputWithKey)).rejects.toThrow()
-    expect(profiles.save).not.toHaveBeenCalled()
-    expect(profiles.prepareForConnectionTest).not.toHaveBeenCalled()
+    await expect(handler('settings:models:save')({ sender }, profileInputWithKey)).resolves.toEqual({ id: 'llm-1', hasApiKey: true })
+    await expect(handler('settings:models:test')({ sender }, profileInputWithKey)).resolves.toEqual({ model: 'gpt-5' })
+    expect(profiles.save).toHaveBeenCalledWith(profileInputWithKey)
+    expect(profiles.prepareForConnectionTest).toHaveBeenCalledWith(profileInputWithKey)
+    expect(tester.verify).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'secret' }))
+  })
+
+  it('registers a strict profile clear-key handler using the shared profile ID schema', async () => {
+    const profiles = {
+      list: vi.fn(), get: vi.fn(), save: vi.fn(), activate: vi.fn(), delete: vi.fn(), clearApiKey: vi.fn().mockResolvedValue({ id: 'llm-1', hasApiKey: false, active: false }),
+      prepareForConnectionTest: vi.fn(), getRouting: vi.fn(), setRouting: vi.fn(),
+    }
+    const sender = {}
+    registerSettingsHandlers(
+      { loadForRenderer: vi.fn(), saveFromRenderer: vi.fn(), prepareForConnectionTest: vi.fn() },
+      { list: vi.fn(() => []), save: vi.fn() }, sender as never, undefined, profiles as never,
+    )
+
+    await expect(handler('settings:models:key:clear')({ sender }, { id: '  llm-1  ' })).resolves.toEqual({ id: 'llm-1', hasApiKey: false, active: false })
+    await expect(handler('settings:models:key:clear')({ sender }, { id: '', apiKey: 'secret' })).rejects.toThrow()
+    expect(profiles.clearApiKey).toHaveBeenCalledWith('llm-1')
   })
 
   it('requires explicit no-route authorization on the profile delete IPC', async () => {

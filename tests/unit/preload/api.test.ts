@@ -123,6 +123,53 @@ describe('legacy model preload API', () => {
   })
 })
 
+describe('model profile preload API', () => {
+  const profileInput = {
+    name: 'Primary', kind: 'llm' as const, provider: 'openai' as const, model: 'gpt-5',
+    endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 8_000,
+  }
+
+  it('parses temporary API keys before sending profile save and test requests', async () => {
+    const ipc = createIpc()
+    ipc.invoke.mockResolvedValue({ model: 'gpt-5' })
+    const api = createTerminalAgentApi(ipc)
+
+    await api.settings.models.save({ ...profileInput, apiKey: '  direct-key  ' })
+    await api.settings.models.test({ ...profileInput, apiKey: '  direct-key  ' })
+
+    expect(ipc.invoke).toHaveBeenNthCalledWith(1, 'settings:models:save', { ...profileInput, apiKey: 'direct-key' })
+    expect(ipc.invoke).toHaveBeenNthCalledWith(2, 'settings:models:test', { ...profileInput, apiKey: 'direct-key' })
+  })
+
+  it('does not expose an unexpected API key included in a profile test response', async () => {
+    const ipc = createIpc()
+    ipc.invoke.mockResolvedValue({ model: 'gpt-5', apiKey: 'response-secret' })
+    const api = createTerminalAgentApi(ipc)
+
+    await expect(api.settings.models.test({ ...profileInput, apiKey: 'request-secret' })).resolves.toEqual({ model: 'gpt-5' })
+  })
+
+  it('exposes a strict clear-key request without retaining a key-import API', async () => {
+    const ipc = createIpc()
+    const api = createTerminalAgentApi(ipc)
+
+    await api.settings.models.clearApiKey('  llm-1  ')
+
+    expect(ipc.invoke).toHaveBeenCalledWith('settings:models:key:clear', { id: 'llm-1' })
+    expect(Object.keys(api.settings.models)).not.toContain(['import', 'ApiKey'].join(''))
+    expect(() => api.settings.models.clearApiKey('')).toThrow()
+  })
+
+  it('rejects obsolete key-profile references before profile IPC', () => {
+    const ipc = createIpc()
+    const api = createTerminalAgentApi(ipc)
+
+    const obsoleteReferenceField = ['apiKey', 'ProfileId'].join('')
+    expect(() => api.settings.models.save({ ...profileInput, [obsoleteReferenceField]: 'shared-llm' } as never)).toThrow()
+    expect(ipc.invoke).not.toHaveBeenCalled()
+  })
+})
+
 describe('host memory preload API', () => {
   it('rejects synthetic bare credentials in inbound updates and outbound host DTOs', async () => {
     const values = [

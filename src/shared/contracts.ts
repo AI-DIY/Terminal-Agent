@@ -66,7 +66,6 @@ export type RendererModelProfile = {
   contextLimit?: number
   maxImages?: number
   hasApiKey: boolean
-  apiKeyProfileId?: string
   active: boolean
 }
 

@@ -16,7 +16,7 @@ function createApi() {
     delete: vi.fn().mockResolvedValue(undefined),
     getRouting: vi.fn().mockResolvedValue('combined' as const),
     setRouting: vi.fn().mockResolvedValue('combined' as const),
-    importApiKey: vi.fn().mockResolvedValue({ status: 'imported' as const, hasApiKey: true }),
+    clearApiKey: vi.fn().mockResolvedValue(profile({ hasApiKey: false, active: false })),
   }
 }
 
@@ -61,22 +61,23 @@ describe('model profile store', () => {
     expect(store.state.profiles[0]?.id).toBe('llm-2')
   })
 
-  it('delegates protected-key import by profile id only', async () => {
+  it('clears a protected key by profile id and reloads its kind', async () => {
     const api = createApi()
     const store = createModelProfilesStore(api)
-    await store.importApiKey('llm-1')
-    expect(api.importApiKey).toHaveBeenCalledWith('llm-1')
-    expect(JSON.stringify(api.importApiKey.mock.calls)).not.toContain('secret')
+    await store.load('llm')
+    await expect(store.clearApiKey('llm-1')).resolves.toMatchObject({ id: 'llm-1', hasApiKey: false })
+    expect(api.clearApiKey).toHaveBeenCalledWith('llm-1')
+    expect(api.list).toHaveBeenLastCalledWith('llm')
   })
 
-  it('delegates profile connectivity tests without adding a renderer API key', async () => {
+  it('relays an explicitly supplied temporary key without retaining it in reactive state', async () => {
     const api = createApi()
     const store = createModelProfilesStore(api)
     const input = { name: 'Primary', kind: 'llm' as const, provider: 'ollama' as const, model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 }
 
-    await expect(store.test(input)).resolves.toEqual({ model: 'qwen' })
-    expect(api.test).toHaveBeenCalledWith(input)
-    expect(JSON.stringify(api.test.mock.calls)).not.toMatch(/apiKey|secret|token/i)
+    await expect(store.test({ ...input, apiKey: 'temporary-secret' })).resolves.toEqual({ model: 'qwen' })
+    expect(api.test).toHaveBeenCalledWith({ ...input, apiKey: 'temporary-secret' })
+    expect(JSON.stringify(store.state)).not.toMatch(/apiKey|secret|token/i)
   })
 
   it('refreshes the activated and deleted profile kinds after typed operations', async () => {
@@ -136,21 +137,23 @@ describe('model profile store', () => {
     expect(api.list).toHaveBeenLastCalledWith('vlm')
   })
 
-  it('creates an edit draft with a visible key placeholder but no secret input', () => {
+  it('creates a non-secret edit draft without key-reference fields', () => {
     const draft = createProfileDraft(profile({ hasApiKey: true }))
-    expect(draft.apiKey).toBeUndefined()
+    expect(draft).not.toHaveProperty('apiKey')
+    expect(draft).not.toHaveProperty(['apiKey', 'ProfileId'].join(''))
     expect(draft.apiKeyPlaceholder).toBe('\u5df2\u914d\u7f6e\u5bc6\u94a5\uff0c\u4e0d\u4f1a\u56de\u586b')
     expect(JSON.stringify(draft)).not.toContain('secret')
   })
 
-  it('removes edit-only fields before reusing a draft as a strict renderer input', () => {
-    const input = profileDraftInput(createProfileDraft(profile({ hasApiKey: true })))
+  it('only attaches a trimmed temporary key when converting a draft to input', () => {
+    const input = profileDraftInput(createProfileDraft(profile({ hasApiKey: true })), '  temporary-secret  ')
 
     expect(input).toMatchObject({
       name: 'Primary', kind: 'llm', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000,
     })
     expect(input).not.toHaveProperty('id')
     expect(input).not.toHaveProperty('apiKeyPlaceholder')
-    expect(JSON.stringify(input)).not.toMatch(/apiKey|secret|token/i)
+    expect(input).toHaveProperty('apiKey', 'temporary-secret')
+    expect(input).not.toHaveProperty(['apiKey', 'ProfileId'].join(''))
   })
 })
