@@ -30,7 +30,7 @@ Terminal-Agent 是面向日常运维与企业堡垒机场景的 Windows SSH 工�
 
 ### 1. 安装 Terminal-Agent
 
-从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 下载并运行 `Terminal-Agent-Setup-1.0.8.exe`。安装完成后，先启动一次 Terminal-Agent。
+完成 `v1.0.8` 的本地构建或发布后，可使用生成的 `Terminal-Agent-Setup-1.0.8.exe` 安装包；发布后也可从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 获取。安装完成后，先启动一次 Terminal-Agent。
 
 工作台内选择“新建 SSH 连接”，可使用以下入口：
 
@@ -115,7 +115,7 @@ Assess/Access Client / 堡垒机
 
 ## Release 文件说明
 
-`v1.0.8` 发布包含以下文件：
+本地构建或发布 `v1.0.8` 后将生成以下文件：
 
 | 文件 | 用途 |
 | --- | --- |
@@ -124,7 +124,7 @@ Assess/Access Client / 堡垒机
 | `Terminal-Agent-Uninstall-Cleanup-1.0.8.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
 | `latest.yml` 与 `.blockmap` | 更新元数据；部署自动更新时使用。 |
 
-清理工具使用方法：解压 ZIP 后，以管理员权限运行 `清理 Terminal-Agent 卸载残留.cmd`。工具会先列出匹配项，并要求明确输入 `Y`；删除前会导出相应的 `.reg` 备份。
+生成清理工具后，解压 ZIP 并以管理员权限运行 `清理 Terminal-Agent 卸载残留.cmd`。工具会先列出匹配项，并要求明确输入 `Y`；删除前会导出相应的 `.reg` 备份。
 
 ## 本地开发与打包
 

@@ -8,9 +8,9 @@ Release date: 2026-08-23
 - Replaces file-based model-key input with direct API Key editing in the model connection form. A key can be tested before the configuration is saved and activated; protected storage retains it without returning the saved value to the UI.
 - Removes LLM key references. Existing VLM references are migrated to protected credentials owned by the corresponding VLM profile.
 
-## Windows release assets
+## Windows release assets after packaging
 
-- Includes `Terminal-Agent-Setup-1.0.8.exe`, the standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.8.zip`.
+- A local build or published release will generate `Terminal-Agent-Setup-1.0.8.exe`, the standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.8.zip`.
 
 ---
 

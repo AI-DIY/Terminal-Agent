@@ -649,7 +649,7 @@ describe('ModelProfileService', () => {
       .resolves.toMatchObject({ active: true, hasApiKey: false })
   })
 
-  it('preserves an explicit no-route choice across later profile saves and API-key imports', async () => {
+  it('preserves an explicit no-route choice across later profile saves and direct API-key saves', async () => {
     const { service, secrets, getDocument } = createService({
       version: 2,
       profiles: [
