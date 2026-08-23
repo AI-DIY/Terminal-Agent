@@ -94,11 +94,15 @@ test('opens real settings with ordered panels, host memory controls, and termina
 })
 
 test('runs the direct model key lifecycle through real Electron without exposing or retaining cleared keys', async () => {
-  const testModel = await startKeyedModelServer()
-  const userDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-model-key-editor-e2e-'))
+  let testModel: Awaited<ReturnType<typeof startKeyedModelServer>> | undefined
+  let userDataDir: string | undefined
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, join(process.cwd(), 'out/main/main.js')] })
+    const startedTestModel = await startKeyedModelServer()
+    testModel = startedTestModel
+    const temporaryUserDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-model-key-editor-e2e-'))
+    userDataDir = temporaryUserDataDir
+    app = await electron.launch({ args: [`--user-data-dir=${temporaryUserDataDir}`, join(process.cwd(), 'out/main/main.js')] })
     const page = await app.firstWindow()
     await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '大语言模型配置', exact: true }).click()
@@ -109,14 +113,14 @@ test('runs the direct model key lifecycle through real Electron without exposing
     await page.getByLabel('连接名称').fill('临时密钥测试模型')
     await page.getByLabel('接口类型').selectOption('openai')
     await page.getByLabel('模型', { exact: true }).fill('transient-e2e')
-    await page.getByLabel('接口地址').fill(`http://127.0.0.1:${testModel.port}/v1/chat/completions`)
-    testModel.expectAuthorization('temporary-e2e-key')
+    await page.getByLabel('接口地址').fill(`http://127.0.0.1:${startedTestModel.port}/v1/chat/completions`)
+    startedTestModel.expectAuthorization('temporary-e2e-key')
     await apiKey.fill('temporary-e2e-key')
     await page.getByRole('button', { name: '测试连接', exact: true }).click()
 
     await expect(page.getByRole('status')).toContainText('连接成功：transient-e2e')
     await expect(apiKey).toHaveValue('')
-    expect(testModel.authorizations).toEqual(['Bearer temporary-e2e-key'])
+    expect(startedTestModel.authorizations).toEqual(['Bearer temporary-e2e-key'])
     await expect(page.locator('.profile-item')).toHaveCount(0)
 
     await apiKey.fill('saved-e2e-key')
@@ -133,38 +137,69 @@ test('runs the direct model key lifecycle through real Electron without exposing
     await expect(apiKey).toHaveAttribute('placeholder', '已配置密钥，留空则保留')
     await expect(page.locator('body')).not.toContainText('saved-e2e-key')
 
-    testModel.expectAuthorization('saved-e2e-key')
+    startedTestModel.expectAuthorization('saved-e2e-key')
     await page.getByRole('button', { name: '测试连接', exact: true }).click()
     await expect(page.getByRole('status')).toContainText('连接成功：transient-e2e')
     await expect(apiKey).toHaveValue('')
-    expect(testModel.authorizations).toEqual(['Bearer temporary-e2e-key', 'Bearer saved-e2e-key'])
+    expect(startedTestModel.authorizations).toEqual(['Bearer temporary-e2e-key', 'Bearer saved-e2e-key'])
 
     await apiKey.fill('replacement-e2e-key')
     await page.getByRole('button', { name: '保存大语言模型配置', exact: true }).click()
     await expect(apiKey).toHaveValue('')
     await expect(page.locator('body')).not.toContainText('replacement-e2e-key')
-    testModel.expectAuthorization('replacement-e2e-key')
+    startedTestModel.expectAuthorization('replacement-e2e-key')
     await page.getByRole('button', { name: '测试连接', exact: true }).click()
     await expect(page.getByRole('status')).toContainText('连接成功：transient-e2e')
-    expect(testModel.authorizations).toEqual([
+    expect(startedTestModel.authorizations).toEqual([
       'Bearer temporary-e2e-key',
       'Bearer saved-e2e-key',
       'Bearer replacement-e2e-key',
     ])
 
-    page.once('dialog', dialog => dialog.accept())
+    const dismissedDialogPromise = new Promise<{ type: string; message: string }>((resolve, reject) => {
+      page.once('dialog', dialog => {
+        const result = { type: dialog.type(), message: dialog.message() }
+        void dialog.dismiss().then(() => resolve(result), reject)
+      })
+    })
     await clearSavedKey.click()
+    const dismissedDialog = await dismissedDialogPromise
+    expect(dismissedDialog.type).toBe('confirm')
+    expect(dismissedDialog.message).toBe('清除“临时密钥测试模型”已保存的 API Key？')
+    await expect(savedProfile).toContainText('已配置密钥')
+    await expect(savedProfile).toContainText('已激活')
+    await expect(clearSavedKey).toBeVisible()
+    startedTestModel.expectAuthorization('replacement-e2e-key')
+    await page.getByRole('button', { name: '测试连接', exact: true }).click()
+    await expect(page.getByRole('status')).toContainText('连接成功：transient-e2e')
+    expect(startedTestModel.authorizations).toEqual([
+      'Bearer temporary-e2e-key',
+      'Bearer saved-e2e-key',
+      'Bearer replacement-e2e-key',
+      'Bearer replacement-e2e-key',
+    ])
+
+    const acceptedDialogPromise = new Promise<{ type: string; message: string }>((resolve, reject) => {
+      page.once('dialog', dialog => {
+        const result = { type: dialog.type(), message: dialog.message() }
+        void dialog.accept().then(() => resolve(result), reject)
+      })
+    })
+    await clearSavedKey.click()
+    const acceptedDialog = await acceptedDialogPromise
+    expect(acceptedDialog.type).toBe('confirm')
+    expect(acceptedDialog.message).toBe('清除“临时密钥测试模型”已保存的 API Key？')
     await expect(savedProfile).toContainText('未配置密钥')
     await expect(savedProfile).toContainText('未激活')
     await expect(page.getByRole('button', { name: '清除已保存密钥', exact: true })).toHaveCount(0)
-    const requestCountAfterClear = testModel.requestCount
+    const requestCountAfterClear = startedTestModel.requestCount
     await page.getByRole('button', { name: '测试连接', exact: true }).click()
     await expect(page.getByRole('status')).toContainText('An API key is required for this model provider')
-    expect(testModel.requestCount).toBe(requestCountAfterClear)
+    expect(startedTestModel.requestCount).toBe(requestCountAfterClear)
   } finally {
     await app?.close()
-    await closeServer(testModel.server)
-    await rm(userDataDir, { recursive: true, force: true })
+    if (testModel) await closeServer(testModel.server)
+    if (userDataDir) await rm(userDataDir, { recursive: true, force: true })
   }
 })
 
