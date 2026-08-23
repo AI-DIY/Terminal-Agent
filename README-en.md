@@ -19,6 +19,7 @@ This is not a way for AI to bypass established operations controls. It is a cont
 ## Key Advantages
 
 - **Compatible with existing bastion entry points**: map only the release `putty.exe` to Assess/Access Client. No Electron runtime directory needs to be copied into the mapping location.
+- **Native Windows window controls**: Electron's hidden title bar removes the standalone top title strip while the native Windows minimize, maximize/restore, and close controls remain in the application header.
 - **Connections and tasks in one workbench**: CMDB bastion launches, named bastion targets, password SSH, and private-key SSH are available in one place; multiple Shells can be viewed side by side.
 - **Human-in-the-loop by default**: in Copilot mode, AI provides analysis, evidence steps, and a command candidate. The command is not sent until an operator confirms it.
 - **Explicit guardrails before risky actions**: first-run regex rules cover process termination, interactive editors, file removal, service state changes, power actions, and disk partitioning or formatting.
