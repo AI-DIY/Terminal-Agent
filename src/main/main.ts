@@ -62,6 +62,7 @@ import { createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../share
 import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
 
 let mainWindow: BrowserWindow | undefined
+let isRestoringMainWindow = false
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
 const keyMaterials = new KeyMaterialStore()
 const secretStore = new ElectronSecretStore()
@@ -278,11 +279,16 @@ if (isPrimaryInstance) {
     void accessClientLaunches.tryOpenFromArgv(process.argv)
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        void workbenchPreferences.load()
-          .then(preferences => createMainWindow(preferences.theme))
-          .catch(() => createMainWindow())
-      }
+      if (BrowserWindow.getAllWindows().length !== 0 || isRestoringMainWindow) return
+      isRestoringMainWindow = true
+      void workbenchPreferences.load()
+        .then(preferences => {
+          if (BrowserWindow.getAllWindows().length === 0) createMainWindow(preferences.theme)
+        })
+        .catch(() => {
+          if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+        })
+        .finally(() => { isRestoringMainWindow = false })
     })
   })
 

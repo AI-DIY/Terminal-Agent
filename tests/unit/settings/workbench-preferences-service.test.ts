@@ -185,9 +185,9 @@ describe('workbench preference IPC', () => {
     await ipc.handlers.get('settings:workbench:ready')?.({ sender })
     await expect(ipc.handlers.get('settings:workbench:get')?.({ sender })).resolves.toEqual(createDefaultWorkbenchPreferences())
     await expect(ipc.handlers.get('settings:workbench:save-layout')?.({ sender }, { leftWidth: 260 })).resolves.toMatchObject({ leftWidth: 260 })
-    await expect(ipc.handlers.get('settings:workbench:save-theme')?.({ sender }, 'graphite')).resolves.toMatchObject({ theme: 'graphite' })
+    await expect(ipc.handlers.get('settings:workbench:save-theme')?.({ sender }, 'pearl')).resolves.toMatchObject({ theme: 'graphite' })
     expect(service.saveLayout).toHaveBeenCalledWith({ leftWidth: 260 })
-    expect(service.saveTheme).toHaveBeenCalledWith('graphite')
+    expect(service.saveTheme).toHaveBeenCalledWith('pearl')
     expect(onRendererReady).toHaveBeenCalledOnce()
     expect(onThemeSaved).toHaveBeenCalledWith('graphite')
 
