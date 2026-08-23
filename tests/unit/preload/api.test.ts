@@ -128,10 +128,14 @@ describe('model profile preload API', () => {
     name: 'Primary', kind: 'llm' as const, provider: 'openai' as const, model: 'gpt-5',
     endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 8_000,
   }
+  const profileResponse = {
+    id: 'llm-1', name: 'Primary', kind: 'llm' as const, provider: 'openai' as const, model: 'gpt-5',
+    endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 8_000, hasApiKey: true, active: true,
+  }
 
   it('parses temporary API keys before sending profile save and test requests', async () => {
     const ipc = createIpc()
-    ipc.invoke.mockResolvedValue({ model: 'gpt-5' })
+    ipc.invoke.mockResolvedValue(profileResponse)
     const api = createTerminalAgentApi(ipc)
 
     await api.settings.models.save({ ...profileInput, apiKey: '  direct-key  ' })
@@ -149,8 +153,39 @@ describe('model profile preload API', () => {
     await expect(api.settings.models.test({ ...profileInput, apiKey: 'request-secret' })).resolves.toEqual({ model: 'gpt-5' })
   })
 
+  it('projects every profile response to public fields without mutating raw IPC data', async () => {
+    const ipc = createIpc()
+    const obsoleteReferenceField = ['apiKey', 'ProfileId'].join('')
+    const rawProfile = {
+      id: 'llm-1', name: 'Primary', kind: 'llm', provider: 'openai', model: 'gpt-5',
+      endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 8_000,
+      hasApiKey: true, active: true, apiKey: 'response-secret', [obsoleteReferenceField]: 'legacy-llm', unexpected: 'discard-me',
+    }
+    ipc.invoke.mockImplementation(async (channel: string) => channel === 'settings:models:list' ? [rawProfile] : rawProfile)
+    const api = createTerminalAgentApi(ipc)
+
+    const list = await api.settings.models.list('llm')
+    const found = await api.settings.models.get('llm-1')
+    const saved = await api.settings.models.save({ ...profileInput, apiKey: 'request-secret' })
+    const activated = await api.settings.models.activate('llm-1')
+    const cleared = await api.settings.models.clearApiKey('llm-1')
+
+    const expected = {
+      id: 'llm-1', name: 'Primary', kind: 'llm', provider: 'openai', model: 'gpt-5',
+      endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 8_000, hasApiKey: true, active: true,
+    }
+    expect(list).toEqual([expected])
+    expect(found).toEqual(expected)
+    expect(saved).toEqual(expected)
+    expect(activated).toEqual(expected)
+    expect(cleared).toEqual(expected)
+    expect(rawProfile).toMatchObject({ apiKey: 'response-secret', unexpected: 'discard-me' })
+    expect(rawProfile).toHaveProperty(obsoleteReferenceField, 'legacy-llm')
+  })
+
   it('exposes a strict clear-key request without retaining a key-import API', async () => {
     const ipc = createIpc()
+    ipc.invoke.mockResolvedValue(profileResponse)
     const api = createTerminalAgentApi(ipc)
 
     await api.settings.models.clearApiKey('  llm-1  ')

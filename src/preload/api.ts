@@ -1,5 +1,5 @@
 import type { ConnectedSession, TerminalClosedEvent, TerminalDataEvent } from '../main/ssh/session-service'
-import { chatRuntimeEventSchema, hostMemoryConsentTokenSchema, hostMemoryDisclosureSchema, hostMemoryInvalidationSchema, hostMemoryRecordSchema, hostMemorySettingsSchema } from '../shared/contracts'
+import { chatRuntimeEventSchema, hostMemoryConsentTokenSchema, hostMemoryDisclosureSchema, hostMemoryInvalidationSchema, hostMemoryRecordSchema, hostMemorySettingsSchema, rendererModelProfileSchema } from '../shared/contracts'
 import type {
   AgentDeltaEvent,
   AgentErrorEvent,
@@ -221,16 +221,22 @@ export function createTerminalAgentApi(ipcRenderer: {
       saveModel: (input: RendererModelSettingsInput) => ipcRenderer.invoke('settings:model:save', rendererModelSettingsInputSchema.parse(input)) as Promise<void>,
       testModel: (input: RendererModelSettingsInput) => ipcRenderer.invoke('settings:model:test', rendererModelSettingsInputSchema.parse(input)) as Promise<{ model: string }>,
       models: Object.freeze({
-        list: (kind?: ModelProfileKind) => ipcRenderer.invoke('settings:models:list', kind === undefined ? undefined : { kind }) as Promise<RendererModelProfile[]>,
-        get: (id: string) => ipcRenderer.invoke('settings:models:get', id) as Promise<RendererModelProfile | null>,
-        save: (input: RendererModelProfileInput) => ipcRenderer.invoke('settings:models:save', rendererModelProfileInputSchema.parse(input)) as Promise<RendererModelProfile>,
+        list: async (kind?: ModelProfileKind) => projectRendererModelProfiles(await ipcRenderer.invoke('settings:models:list', kind === undefined ? undefined : { kind })),
+        get: async (id: string) => projectRendererModelProfileOrNull(await ipcRenderer.invoke('settings:models:get', id)),
+        save: (input: RendererModelProfileInput) => {
+          const parsed = rendererModelProfileInputSchema.parse(input)
+          return ipcRenderer.invoke('settings:models:save', parsed).then(projectRendererModelProfile)
+        },
         test: async (input: RendererModelProfileInput) => {
           const result = await ipcRenderer.invoke('settings:models:test', rendererModelProfileInputSchema.parse(input)) as { model: string }
           return { model: result.model }
         },
-        activate: (id: string) => ipcRenderer.invoke('settings:models:activate', id) as Promise<RendererModelProfile>,
+        activate: async (id: string) => projectRendererModelProfile(await ipcRenderer.invoke('settings:models:activate', id)),
         delete: async (id: string, options?: { replacementId?: string | null; allowNoActive?: boolean }) => { await ipcRenderer.invoke('settings:models:delete', { id, ...options }) },
-        clearApiKey: (id: string) => ipcRenderer.invoke('settings:models:key:clear', { id: modelProfileIdSchema.parse(id) }) as Promise<RendererModelProfile>,
+        clearApiKey: (id: string) => {
+          const parsedId = modelProfileIdSchema.parse(id)
+          return ipcRenderer.invoke('settings:models:key:clear', { id: parsedId }).then(projectRendererModelProfile)
+        },
         getRouting: () => ipcRenderer.invoke('settings:models:routing:get') as Promise<ModelRouting>,
         setRouting: (routing: ModelRouting) => ipcRenderer.invoke('settings:models:routing:set', routing) as Promise<ModelRouting>,
       }),
@@ -276,6 +282,18 @@ export function createTerminalAgentApi(ipcRenderer: {
       launch: (request: BastionLaunchRequest) => ipcRenderer.invoke('access-client:bastion:launch', request) as Promise<BastionLaunchResult>,
     }),
   })
+}
+
+function projectRendererModelProfile(value: unknown): RendererModelProfile {
+  return rendererModelProfileSchema.parse(value)
+}
+
+function projectRendererModelProfiles(value: unknown): RendererModelProfile[] {
+  return rendererModelProfileSchema.array().parse(value)
+}
+
+function projectRendererModelProfileOrNull(value: unknown): RendererModelProfile | null {
+  return rendererModelProfileSchema.nullable().parse(value)
 }
 
 function subscribe<T>(

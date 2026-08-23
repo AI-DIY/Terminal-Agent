@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { containsSensitiveHostMemoryData, normalizeSafeHostMemoryConnectionIp, normalizeSafeHostMemoryConnectionLabel, normalizeSafeHostMemoryIdentity } from './host-memory-safety'
+import { modelProfileIdSchema } from './validation'
 
 export const WORKBENCH_LEFT_WIDTH_MIN = 210
 export const WORKBENCH_LEFT_WIDTH_MAX = 360
@@ -56,18 +57,19 @@ export function createDefaultWorkbenchPreferences(): WorkbenchPreferences {
 
 export type { ModelProfileKind, ModelProvider, ModelRouting, RendererModelProfileInput } from './validation'
 
-export type RendererModelProfile = {
-  id: string
-  name: string
-  kind: 'llm' | 'vlm'
-  provider: 'openai' | 'ollama' | 'llama-cpp'
-  model: string
-  endpoint: string
-  contextLimit?: number
-  maxImages?: number
-  hasApiKey: boolean
-  active: boolean
-}
+export const rendererModelProfileSchema = z.object({
+  id: modelProfileIdSchema,
+  name: z.string().trim().min(1).max(255),
+  kind: z.enum(['llm', 'vlm']),
+  provider: z.enum(['openai', 'ollama', 'llama-cpp']),
+  model: z.string().trim().min(1).max(255),
+  endpoint: z.string().url(),
+  contextLimit: z.number().int().min(1_024).max(1_000_000).optional(),
+  maxImages: z.number().int().min(1).max(128).optional(),
+  hasApiKey: z.boolean(),
+  active: z.boolean(),
+}).strip()
+export type RendererModelProfile = z.infer<typeof rendererModelProfileSchema>
 
 export const sessionModeSchema = z.enum(['copilot', 'autonomous'])
 export type SessionMode = z.infer<typeof sessionModeSchema>

@@ -119,8 +119,22 @@ export function createModelProfilesStore(api: ModelProfilesApi) {
 
   async function clearApiKey(id: string): Promise<RendererModelProfile> {
     const cleared = await api.clearApiKey(id)
+    reconcileProfile(cleared)
     await load(cleared.kind)
     return cleared
+  }
+
+  function reconcileProfile(profile: RendererModelProfile): void {
+    const profiles = state.profilesByKind[profile.kind]
+    const index = profiles.findIndex(candidate => candidate.id === profile.id)
+    if (index === -1) return
+
+    const nextProfiles = [...profiles]
+    nextProfiles[index] = profile
+    state.profilesByKind[profile.kind] = nextProfiles
+    if (state.kind === profile.kind) state.profiles = nextProfiles
+    if (profile.active) state.activeProfileIds[profile.kind] = profile.id
+    else if (state.activeProfileIds[profile.kind] === profile.id) state.activeProfileIds[profile.kind] = null
   }
 
   function profilesForKind(kind: ModelProfileKind): RendererModelProfile[] {

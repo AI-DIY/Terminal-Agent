@@ -70,6 +70,25 @@ describe('model profile store', () => {
     expect(api.list).toHaveBeenLastCalledWith('llm')
   })
 
+  it('keeps the cleared key state when the best-effort refresh fails', async () => {
+    const api = createApi()
+    const refreshError = new Error('refresh unavailable')
+    api.list
+      .mockResolvedValueOnce([profile({ hasApiKey: true, active: true })])
+      .mockRejectedValueOnce(refreshError)
+    api.clearApiKey.mockResolvedValue(profile({ hasApiKey: false, active: false }))
+    const store = createModelProfilesStore(api)
+    await store.load('llm')
+
+    await expect(store.clearApiKey('llm-1')).resolves.toMatchObject({ id: 'llm-1', hasApiKey: false, active: false })
+
+    expect(store.state.profilesByKind.llm).toEqual([profile({ hasApiKey: false, active: false })])
+    expect(store.state.profiles).toEqual([profile({ hasApiKey: false, active: false })])
+    expect(store.state.activeProfileIds.llm).toBeNull()
+    expect(store.state.error).toBe('refresh unavailable')
+    expect(store.state.routing).toBe('combined')
+  })
+
   it('relays an explicitly supplied temporary key without retaining it in reactive state', async () => {
     const api = createApi()
     const store = createModelProfilesStore(api)
