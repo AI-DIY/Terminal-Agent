@@ -306,15 +306,31 @@ export class ModelProfileService {
     if (!references?.length) return
 
     let next = document
+    const unresolvedReferences: typeof references = []
+    const diagnostics: string[] = []
+    const validTargets = new Map<string, PersistedModelProfile>()
+    const targetsWithKey = new Set<string>()
+    const targetsWithUnresolvedReferences = new Set<string>()
     for (const reference of references) {
-      const target = document.profiles.find(profile => profile.id === reference.targetProfileId && profile.kind === 'vlm')
-      if (!target) continue
+      const target = document.profiles.find(profile => profile.id === reference.targetProfileId)
+      if (!target || target.kind !== 'vlm') {
+        unresolvedReferences.push(reference)
+        diagnostics.push(`${reference.targetProfileId}: targetProfileId must reference a VLM profile`)
+        continue
+      }
+      const source = document.profiles.find(profile => profile.id === reference.sourceProfileId)
+      if (!source || source.kind !== 'llm') {
+        unresolvedReferences.push(reference)
+        diagnostics.push(`${reference.sourceProfileId}: sourceProfileId must reference an LLM profile`)
+        targetsWithUnresolvedReferences.add(target.id)
+        continue
+      }
+      validTargets.set(target.id, target)
 
       const targetKey = await this.secrets.load(secretKey(target.id))
       let targetHasKey = Boolean(targetKey)
       if (!targetKey) {
-        const source = document.profiles.find(profile => profile.id === reference.sourceProfileId && profile.kind === 'llm')
-        const sourceKey = source ? await this.secrets.load(secretKey(source.id)) : null
+        const sourceKey = await this.secrets.load(secretKey(source.id))
         if (sourceKey) {
           let validatedSourceKey: string | null = null
           try {
@@ -328,15 +344,22 @@ export class ModelProfileService {
           }
         }
       }
+      if (targetHasKey) targetsWithKey.add(target.id)
+    }
 
-      if (!targetHasKey && target.provider !== 'ollama' && next.activeVlmId === target.id) {
+    for (const target of validTargets.values()) {
+      if (!targetsWithKey.has(target.id) && !targetsWithUnresolvedReferences.has(target.id) && target.provider !== 'ollama' && next.activeVlmId === target.id) {
         next = { ...next, activeVlmId: null, autoActivateVlm: false }
       }
     }
 
     const migrations = { ...next.migrations }
-    delete migrations.apiKeyReferences
+    if (unresolvedReferences.length > 0) migrations.apiKeyReferences = unresolvedReferences
+    else delete migrations.apiKeyReferences
     await this.repository.save({ ...next, migrations })
+    if (diagnostics.length > 0) {
+      throw new Error(`Cannot complete API key reference migration: ${diagnostics.join('; ')}`)
+    }
   }
 
   private async completeLegacyKeyMigration(document: ModelProfileDocument): Promise<void> {

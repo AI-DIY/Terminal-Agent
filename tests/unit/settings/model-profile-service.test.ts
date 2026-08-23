@@ -167,6 +167,88 @@ describe('ModelProfileService', () => {
     expect(getDocument().migrations).not.toHaveProperty('apiKeyReferences')
   })
 
+  it('processes valid pending references but retains malformed entries with a diagnostic error', async () => {
+    const document = referencedVlmDocument()
+    const malformedReference = { sourceProfileId: 'shared-llm', targetProfileId: 'shared-llm' }
+    document.migrations.apiKeyReferences = [
+      ...document.migrations.apiKeyReferences ?? [],
+      malformedReference,
+    ]
+    const { service, repository, secrets, getDocument } = createService(document)
+    const protectedKeys = new Map([['model-profile.shared-llm.apiKey', 'shared-secret']])
+    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
+    secrets.save.mockImplementation(async (key: string, value: string) => { protectedKeys.set(key, value) })
+
+    await expect(service.list()).rejects.toThrow('targetProfileId must reference a VLM profile')
+
+    expect(protectedKeys.get('model-profile.vision.apiKey')).toBe('shared-secret')
+    expect(getDocument().migrations.apiKeyReferences).toEqual([malformedReference])
+    expect(repository.save).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['a missing source', []],
+    ['a VLM source', [{ id: 'source-vlm', kind: 'vlm' as const, name: 'Source', provider: 'openai' as const, model: 'source-vision', endpoint, maxImages: 4 }]],
+  ])('retains pending metadata with %s and reports a diagnostic error', async (_label, sourceProfiles) => {
+    const reference = { sourceProfileId: 'source-vlm', targetProfileId: 'vision' }
+    const { service, repository, secrets, getDocument } = createService({
+      version: 2,
+      profiles: [
+        ...sourceProfiles,
+        { id: 'vision', kind: 'vlm', name: 'Vision', provider: 'openai', model: 'gpt-vision', endpoint, maxImages: 4 },
+      ],
+      activeLlmId: null, activeVlmId: 'vision', routing: 'combined',
+      migrations: { apiKeyReferences: [reference] },
+    })
+
+    await expect(service.list()).rejects.toThrow('sourceProfileId must reference an LLM profile')
+
+    expect(getDocument().migrations.apiKeyReferences).toEqual([reference])
+    expect(getDocument().activeVlmId).toBe('vision')
+    expect(secrets.save).not.toHaveBeenCalled()
+    expect(repository.save).toHaveBeenCalledTimes(1)
+  })
+
+  it('completes duplicate valid pending references without rewriting the target key', async () => {
+    const document = referencedVlmDocument()
+    const reference = { sourceProfileId: 'shared-llm', targetProfileId: 'vision' }
+    document.migrations.apiKeyReferences = [reference, reference]
+    const { service, secrets, getDocument } = createService(document)
+    const protectedKeys = new Map([['model-profile.shared-llm.apiKey', 'shared-secret']])
+    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
+    secrets.save.mockImplementation(async (key: string, value: string) => { protectedKeys.set(key, value) })
+
+    await expect(service.list('vlm')).resolves.toEqual([
+      expect.objectContaining({ id: 'vision', active: true, hasApiKey: true }),
+    ])
+
+    expect(secrets.save).toHaveBeenCalledTimes(1)
+    expect(getDocument().migrations).not.toHaveProperty('apiKeyReferences')
+  })
+
+  it('keeps a VLM active when a later valid reference supplies its key', async () => {
+    const document = referencedVlmDocument()
+    document.profiles.splice(1, 0, {
+      id: 'empty-llm', kind: 'llm', name: 'Empty LLM', provider: 'openai', model: 'gpt-5-mini', endpoint, contextLimit: 8_000,
+    })
+    document.migrations.apiKeyReferences = [
+      { sourceProfileId: 'empty-llm', targetProfileId: 'vision' },
+      { sourceProfileId: 'shared-llm', targetProfileId: 'vision' },
+    ]
+    const { service, secrets, getDocument } = createService(document)
+    const protectedKeys = new Map([['model-profile.shared-llm.apiKey', 'shared-secret']])
+    secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
+    secrets.save.mockImplementation(async (key: string, value: string) => { protectedKeys.set(key, value) })
+
+    await expect(service.list('vlm')).resolves.toEqual([
+      expect.objectContaining({ id: 'vision', active: true, hasApiKey: true }),
+    ])
+
+    expect(secrets.save).toHaveBeenCalledTimes(1)
+    expect(getDocument()).toMatchObject({ activeVlmId: 'vision' })
+    expect(getDocument().migrations).not.toHaveProperty('apiKeyReferences')
+  })
+
   it('clears an active OpenAI profile key and disables automatic activation', async () => {
     const { service, secrets, getDocument } = createService({
       version: 2,

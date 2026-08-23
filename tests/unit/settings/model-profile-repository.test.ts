@@ -106,4 +106,72 @@ describe('ModelProfileRepository', () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+
+  it.each([
+    [
+      'an LLM target',
+      [
+        {
+          id: 'source-llm', kind: 'llm', name: 'Source', provider: 'openai',
+          model: 'gpt-5', endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 8_000,
+        },
+        {
+          id: 'target-llm', kind: 'llm', name: 'Target', provider: 'openai',
+          model: 'gpt-5-mini', endpoint: 'https://api.openai.com/v1/chat/completions', contextLimit: 8_000,
+          apiKeyProfileId: 'source-llm',
+        },
+      ],
+      'apiKeyProfileId is only valid on VLM profiles',
+    ],
+    [
+      'a missing source profile',
+      [{
+        id: 'target-vlm', kind: 'vlm', name: 'Target', provider: 'openai',
+        model: 'gpt-vision', endpoint: 'https://api.openai.com/v1/chat/completions', maxImages: 4,
+        apiKeyProfileId: 'missing-source',
+      }],
+      'apiKeyProfileId must reference an existing LLM profile',
+    ],
+    [
+      'a VLM source profile',
+      [
+        {
+          id: 'source-vlm', kind: 'vlm', name: 'Source', provider: 'openai',
+          model: 'source-vision', endpoint: 'https://api.openai.com/v1/chat/completions', maxImages: 4,
+        },
+        {
+          id: 'target-vlm', kind: 'vlm', name: 'Target', provider: 'openai',
+          model: 'target-vision', endpoint: 'https://api.openai.com/v1/chat/completions', maxImages: 4,
+          apiKeyProfileId: 'source-vlm',
+        },
+      ],
+      'apiKeyProfileId must reference an existing LLM profile',
+    ],
+  ])('rejects version 1 API-key references with %s', async (_label, profiles, expectedIssue) => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-invalid-model-key-reference-'))
+    try {
+      const path = join(directory, 'model-profiles.json')
+      await writeFile(path, JSON.stringify({
+        version: 1,
+        profiles,
+        activeLlmId: null,
+        activeVlmId: null,
+        routing: 'combined',
+        migrations: {},
+      }), 'utf8')
+
+      let caught: unknown
+      try {
+        await new ModelProfileRepository(path).load()
+      } catch (error) {
+        caught = error
+      }
+
+      expect(caught).toBeInstanceOf(Error)
+      const issues = ((caught as Error & { cause?: { issues?: Array<{ message: string }> } }).cause?.issues ?? [])
+      expect(issues.map(issue => issue.message)).toContain(expectedIssue)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 })

@@ -81,6 +81,36 @@ function validateModelProfileDocument(
   }
 }
 
+function validateVersion1ModelProfileDocument(
+  document: {
+    profiles: Array<{ id: string; kind: 'llm' | 'vlm'; apiKeyProfileId?: string }>
+    activeLlmId: string | null
+    activeVlmId: string | null
+  },
+  context: z.RefinementCtx,
+): void {
+  validateModelProfileDocument(document, context)
+  const profilesById = new Map(document.profiles.map(profile => [profile.id, profile]))
+
+  document.profiles.forEach((profile, index) => {
+    if (!profile.apiKeyProfileId) return
+    if (profile.kind !== 'vlm') {
+      context.addIssue({
+        code: 'custom',
+        path: ['profiles', index, 'apiKeyProfileId'],
+        message: 'apiKeyProfileId is only valid on VLM profiles',
+      })
+    }
+    if (profilesById.get(profile.apiKeyProfileId)?.kind !== 'llm') {
+      context.addIssue({
+        code: 'custom',
+        path: ['profiles', index, 'apiKeyProfileId'],
+        message: 'apiKeyProfileId must reference an existing LLM profile',
+      })
+    }
+  })
+}
+
 export const modelProfileDocumentSchema = z.object({
   version: z.literal(2),
   profiles: z.array(persistedModelProfileSchema).max(256),
@@ -100,7 +130,7 @@ const version1ModelProfileDocumentSchema = z.object({
     legacyModelSettings: z.literal(1).optional(),
     legacyModelProfileId: z.string().trim().min(1).max(128).optional(),
   }).strict(),
-}).strict().superRefine(validateModelProfileDocument)
+}).strict().superRefine(validateVersion1ModelProfileDocument)
 
 export type ModelProfileDocument = z.infer<typeof modelProfileDocumentSchema>
 export type ModelProfileRepositoryOptions = Pick<AtomicJsonStoreOptions, 'fileSystem' | 'createId' | 'now'>
