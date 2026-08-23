@@ -4,23 +4,27 @@
 const { existsSync } = require('node:fs')
 const { join, resolve } = require('node:path')
 
-function inspectReleaseIntegrationArtifacts({ projectRoot = resolve(__dirname, '..'), existsSync: fileExists = existsSync } = {}) {
+function inspectReleaseIntegrationArtifacts({ projectRoot = resolve(__dirname, '..'), platform = process.platform, existsSync: fileExists = existsSync } = {}) {
   const releaseDirectory = join(projectRoot, 'release', 'win-unpacked')
   const runtimePath = join(releaseDirectory, 'Terminal-Agent-runtime.exe')
   const bridgePath = join(releaseDirectory, 'putty.exe')
+  if (platform !== 'win32') return { ready: true, skipped: true, runtimePath, bridgePath, missingPaths: [] }
+
   const missingPaths = [runtimePath, bridgePath].filter(path => !fileExists(path))
 
-  return { ready: missingPaths.length === 0, runtimePath, bridgePath, missingPaths }
+  return { ready: missingPaths.length === 0, skipped: false, runtimePath, bridgePath, missingPaths }
 }
 
 function formatReleaseIntegrationArtifactDiagnostic(inspection) {
-  return [
+  const missingPaths = new Set(inspection.missingPaths)
+  const details = [
     'Windows release integration artifacts are unavailable.',
-    `Expected unpacked runtime at ${inspection.runtimePath}.`,
-    `Expected unpacked bridge at ${inspection.bridgePath}.`,
+    ...(missingPaths.has(inspection.runtimePath) ? [`Expected unpacked runtime at ${inspection.runtimePath}.`] : []),
+    ...(missingPaths.has(inspection.bridgePath) ? [`Expected unpacked bridge at ${inspection.bridgePath}.`] : []),
     'Run npm run make:win:unpacked before npm run test:integration.',
     'This command does not package automatically.',
-  ].join('\n')
+  ]
+  return details.join('\n')
 }
 
 function assertReleaseIntegrationArtifacts(options) {

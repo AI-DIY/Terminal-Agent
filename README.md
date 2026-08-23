@@ -30,7 +30,7 @@ Terminal-Agent 是面向日常运维与企业堡垒机场景的 Windows SSH 工�
 
 ### 1. 安装 Terminal-Agent
 
-完成 `v1.0.8` 的本地构建或发布后，可使用生成的 `Terminal-Agent-Setup-1.0.8.exe` 安装包；发布后也可从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 获取。安装完成后，先启动一次 Terminal-Agent。
+在 Windows 环境完成 `npm run make:win` 打包或发布 `v1.0.8` 后，可使用生成的 `Terminal-Agent-Setup-1.0.8.exe` 安装包；发布后也可从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 获取。安装完成后，先启动一次 Terminal-Agent。
 
 工作台内选择“新建 SSH 连接”，可使用以下入口：
 
@@ -115,7 +115,7 @@ Assess/Access Client / 堡垒机
 
 ## Release 文件说明
 
-本地构建或发布 `v1.0.8` 后将生成以下文件：
+在 Windows 环境完成 `npm run make:win` 打包或发布 `v1.0.8` 后将生成以下文件：
 
 | 文件 | 用途 |
 | --- | --- |

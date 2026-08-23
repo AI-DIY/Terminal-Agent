@@ -78,6 +78,7 @@ describe('V18 production visual contract', () => {
 
   it('uses the approved split list and editor for model connections', () => {
     const profiles = rendererSource('components/settings/ModelProfileManager.vue')
+    const removedVlmKeyReferenceField = ['apiKey', 'ProfileId'].join('')
 
     expect(profiles).toContain('profile-list-head')
     expect(profiles).toContain('profile-editor')
@@ -103,6 +104,7 @@ describe('V18 production visual contract', () => {
     expect(profiles).toContain('clearTransientKey()')
     expect(profiles).toContain('.api-key-input-row')
     expect(profiles).toContain('.icon-button')
+    expect(profiles).not.toContain(removedVlmKeyReferenceField)
   })
 
   it('uses the approved host-memory switch and scope grid', () => {

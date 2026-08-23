@@ -10,7 +10,7 @@ Release date: 2026-08-23
 
 ## Windows release assets after packaging
 
-- A local build or published release will generate `Terminal-Agent-Setup-1.0.8.exe`, the standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.8.zip`.
+- A Windows package made with `npm run make:win`, or a published release, will generate `Terminal-Agent-Setup-1.0.8.exe`, the standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.8.zip`.
 
 ---
 

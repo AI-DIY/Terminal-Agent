@@ -7,6 +7,9 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+const removedImportButton = ['导入', '密钥'].join('')
+const removedVlmReference = ['LLM 密钥', '引用'].join('')
+
 test('opens real settings with ordered panels, host memory controls, and terminal return', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-settings-e2e-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
@@ -60,11 +63,13 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await expect(page.getByText('密钥仅在保存或测试时发送给主进程；已保存密钥不会回填。', { exact: true })).toBeVisible()
     await expect(page.locator('.profile-editor').getByRole('button')).toHaveCount(4)
     await expect(page.locator('.profile-editor').locator('select')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: removedImportButton, exact: true })).toHaveCount(0)
 
     await panels.nth(2).click()
     await expect(page.getByLabel('API Key', { exact: true })).toBeEditable()
     await expect(page.locator('.profile-editor').getByRole('button')).toHaveCount(4)
     await expect(page.locator('.profile-editor').locator('select')).toHaveCount(1)
+    await expect(page.getByText(removedVlmReference, { exact: true })).toHaveCount(0)
 
     await panels.nth(1).click()
     const draftName = '保留的未保存模型草稿'

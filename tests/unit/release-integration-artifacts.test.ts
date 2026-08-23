@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 type ReleaseArtifactInspection = {
   ready: boolean
+  skipped: boolean
   runtimePath: string
   bridgePath: string
   missingPaths: readonly string[]
@@ -12,6 +13,7 @@ type ReleaseArtifactInspection = {
 type ReleaseArtifactGuard = {
   inspectReleaseIntegrationArtifacts(input: {
     projectRoot: string
+    platform?: NodeJS.Platform
     existsSync?: (path: string) => boolean
   }): ReleaseArtifactInspection
   formatReleaseIntegrationArtifactDiagnostic(inspection: ReleaseArtifactInspection): string
@@ -30,10 +32,11 @@ describe('release integration artifact guard', () => {
     const bridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
     const inspection = releaseArtifactGuard().inspectReleaseIntegrationArtifacts({
       projectRoot,
+      platform: 'win32',
       existsSync: path => path === runtimePath || path === bridgePath,
     })
 
-    expect(inspection).toEqual({ ready: true, runtimePath, bridgePath, missingPaths: [] })
+    expect(inspection).toEqual({ ready: true, skipped: false, runtimePath, bridgePath, missingPaths: [] })
   })
 
   it('reports every missing packaged prerequisite with the task 9 build instruction', () => {
@@ -41,13 +44,56 @@ describe('release integration artifact guard', () => {
     const runtimePath = join(projectRoot, 'release', 'win-unpacked', 'Terminal-Agent-runtime.exe')
     const bridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
     const guard = releaseArtifactGuard()
-    const inspection = guard.inspectReleaseIntegrationArtifacts({ projectRoot, existsSync: () => false })
+    const inspection = guard.inspectReleaseIntegrationArtifacts({ projectRoot, platform: 'win32', existsSync: () => false })
     const diagnostic = guard.formatReleaseIntegrationArtifactDiagnostic(inspection)
 
-    expect(inspection).toEqual({ ready: false, runtimePath, bridgePath, missingPaths: [runtimePath, bridgePath] })
+    expect(inspection).toEqual({ ready: false, skipped: false, runtimePath, bridgePath, missingPaths: [runtimePath, bridgePath] })
     expect(diagnostic).toContain(runtimePath)
     expect(diagnostic).toContain(bridgePath)
     expect(diagnostic).toContain('npm run make:win:unpacked')
     expect(diagnostic).toContain('does not package automatically')
+  })
+
+  it('reports only the missing unpacked runtime', () => {
+    const projectRoot = 'project'
+    const runtimePath = join(projectRoot, 'release', 'win-unpacked', 'Terminal-Agent-runtime.exe')
+    const bridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const guard = releaseArtifactGuard()
+    const inspection = guard.inspectReleaseIntegrationArtifacts({ projectRoot, platform: 'win32', existsSync: path => path === bridgePath })
+    const diagnostic = guard.formatReleaseIntegrationArtifactDiagnostic(inspection)
+
+    expect(inspection.missingPaths).toEqual([runtimePath])
+    expect(diagnostic).toContain(runtimePath)
+    expect(diagnostic).not.toContain(bridgePath)
+  })
+
+  it('reports only the missing unpacked bridge', () => {
+    const projectRoot = 'project'
+    const runtimePath = join(projectRoot, 'release', 'win-unpacked', 'Terminal-Agent-runtime.exe')
+    const bridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const guard = releaseArtifactGuard()
+    const inspection = guard.inspectReleaseIntegrationArtifacts({ projectRoot, platform: 'win32', existsSync: path => path === runtimePath })
+    const diagnostic = guard.formatReleaseIntegrationArtifactDiagnostic(inspection)
+
+    expect(inspection.missingPaths).toEqual([bridgePath])
+    expect(diagnostic).toContain(bridgePath)
+    expect(diagnostic).not.toContain(runtimePath)
+  })
+
+  it.each(['linux', 'darwin'] as const)('skips Windows release artifact checks on %s', platform => {
+    let fileChecks = 0
+    const inspection = releaseArtifactGuard().inspectReleaseIntegrationArtifacts({
+      projectRoot: 'project',
+      platform,
+      existsSync: () => {
+        fileChecks += 1
+        return false
+      },
+    })
+
+    expect(inspection.ready).toBe(true)
+    expect(inspection.skipped).toBe(true)
+    expect(inspection.missingPaths).toEqual([])
+    expect(fileChecks).toBe(0)
   })
 })

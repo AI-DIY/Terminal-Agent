@@ -30,7 +30,7 @@ This is not a way for AI to bypass established operations controls. It is a cont
 
 ### 1. Install Terminal-Agent
 
-After `v1.0.8` has been built locally or published, use the generated `Terminal-Agent-Setup-1.0.8.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
+After completing Windows packaging with `npm run make:win` or publishing `v1.0.8`, use the generated `Terminal-Agent-Setup-1.0.8.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
 
 Inside the workbench, choose **New SSH connection** and select one of these entry points:
 
@@ -115,7 +115,7 @@ Autonomous mode skips per-candidate human review. It is not appropriate for unva
 
 ## Release Assets
 
-A local build or published `v1.0.8` Release will generate:
+A Windows package made with `npm run make:win` or a published `v1.0.8` Release will generate:
 
 | File | Purpose |
 | --- | --- |
