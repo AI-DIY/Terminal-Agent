@@ -603,7 +603,7 @@ test('layout controls persist while hidden terminals remain mounted and online',
   }
 })
 
-test('persists both themes with titlebar-safe controls and screenshots in real Electron', async ({ launchApp }, testInfo) => {
+test('captures WebContents layouts across persisted themes with native-control safe-area checks', async ({ launchApp }, testInfo) => {
   test.setTimeout(90_000)
   let app: ElectronApplication | undefined
 
@@ -631,11 +631,12 @@ test('persists both themes with titlebar-safe controls and screenshots in real E
         await expect(page.getByRole('status')).toContainText('外观已保存')
         await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({ theme: theme.id })
 
-        const settingsScreenshot = await page.screenshot({ path: testInfo.outputPath(`settings-${theme.id}-${viewport.width}x${viewport.height}.png`) })
+        // These PNGs capture renderer WebContents only. Task 9 verifies packaged Windows frame controls separately.
+        const settingsScreenshot = await page.screenshot({ path: testInfo.outputPath(`webcontents-settings-${theme.id}-${viewport.width}x${viewport.height}.png`) })
         assertViewportPng(settingsScreenshot, viewport)
-        expect(await titlebarGeometry(page, '.settings-top', '.back-button', 16)).toMatchObject({
+        expect(await webContentsSafeAreaGeometry(page, '.settings-top', 16)).toMatchObject({
           controlsInsetAtLeastMinimum: true,
-          controlClearsNativeButtons: true,
+          rightmostHeaderContentClearsNativeControlSafeArea: true,
           noHorizontalOverflow: true,
         })
 
@@ -650,11 +651,11 @@ test('persists both themes with titlebar-safe controls and screenshots in real E
         await page.reload()
         await expect(page.locator('.workbench-shell')).toHaveClass(new RegExp(`theme-${theme.id}`))
         await expect(globalChatInput).toBeEnabled()
-        const workbenchScreenshot = await page.screenshot({ path: testInfo.outputPath(`workbench-${theme.id}-${viewport.width}x${viewport.height}.png`) })
+        const workbenchScreenshot = await page.screenshot({ path: testInfo.outputPath(`webcontents-workbench-${theme.id}-${viewport.width}x${viewport.height}.png`) })
         assertViewportPng(workbenchScreenshot, viewport)
-        expect(await titlebarGeometry(page, '.app-header', '.app-header-actions', 14)).toMatchObject({
+        expect(await webContentsSafeAreaGeometry(page, '.app-header', 14)).toMatchObject({
           controlsInsetAtLeastMinimum: true,
-          controlClearsNativeButtons: true,
+          rightmostHeaderContentClearsNativeControlSafeArea: true,
           noHorizontalOverflow: true,
         })
       }
@@ -1577,32 +1578,35 @@ async function within<T>(timeoutMs: number, message: string, operation: Promise<
   }
 }
 
-async function titlebarGeometry(
+async function webContentsSafeAreaGeometry(
   page: Awaited<ReturnType<ElectronApplication['firstWindow']>>,
   headerSelector: string,
-  controlSelector: string,
   edgePadding: number,
 ): Promise<{
   controlsInset: number
   controlsInsetAtLeastMinimum: boolean
-  controlClearsNativeButtons: boolean
+  rightmostHeaderContentClearsNativeControlSafeArea: boolean
   noHorizontalOverflow: boolean
 }> {
-  return page.evaluate(({ headerSelector, controlSelector, edgePadding }) => {
+  return page.evaluate(({ headerSelector, edgePadding }) => {
     const header = document.querySelector(headerSelector)
-    const control = document.querySelector(controlSelector)
-    if (!(header instanceof HTMLElement) || !(control instanceof HTMLElement)) {
-      throw new Error(`Missing titlebar geometry target: ${headerSelector} / ${controlSelector}`)
-    }
+    if (!(header instanceof HTMLElement)) throw new Error(`Missing WebContents header: ${headerSelector}`)
     const controlsInset = Number.parseFloat(getComputedStyle(header).paddingRight) - edgePadding
     const nativeControlsSafeX = window.innerWidth - controlsInset
+    const rightmostVisibleContent = Math.max(...[...header.children]
+      .filter(child => {
+        const style = getComputedStyle(child)
+        const bounds = child.getBoundingClientRect()
+        return style.display !== 'none' && style.visibility !== 'hidden' && bounds.width > 0 && bounds.height > 0
+      })
+      .map(child => child.getBoundingClientRect().right))
     return {
       controlsInset,
       controlsInsetAtLeastMinimum: controlsInset >= 138,
-      controlClearsNativeButtons: control.getBoundingClientRect().right <= nativeControlsSafeX + 0.5,
+      rightmostHeaderContentClearsNativeControlSafeArea: rightmostVisibleContent <= nativeControlsSafeX + 0.5,
       noHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
     }
-  }, { headerSelector, controlSelector, edgePadding })
+  }, { headerSelector, edgePadding })
 }
 
 function assertViewportPng(image: Buffer, viewport: { width: number; height: number }): void {

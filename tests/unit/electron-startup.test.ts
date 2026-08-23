@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('electron startup wiring', () => {
-  it('removes the redundant native application menu while retaining the native frame', () => {
+  // This is a BrowserWindow option contract; task 9 verifies packaged Windows frame interactions visually.
+  it('configures a hidden title bar overlay without disabling the native frame', () => {
     const source = readFileSync(new URL('../../src/main/main.ts', import.meta.url), 'utf8')
 
     expect(source).toContain("import { app, BrowserWindow, Menu } from 'electron'")

@@ -10,6 +10,7 @@ import { join } from 'node:path'
 test('opens real settings with ordered panels, host memory controls, and terminal return', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-settings-e2e-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  let hasPrimaryFailure = false
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, join(process.cwd(), 'out/main/main.js')] })
     const page = await app.firstWindow()
@@ -87,9 +88,15 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await expect(page.getByLabel('模型', { exact: true })).toHaveValue('preserved-draft-model')
     await expect(page.getByLabel('接口地址')).toHaveValue(draftEndpoint)
     await expect(page.getByLabel('上下文长度')).toHaveValue('32768')
+  } catch (error) {
+    hasPrimaryFailure = true
+    throw error
   } finally {
-    await app?.close()
-    await rm(userDataDir, { recursive: true, force: true })
+    const cleanupFailures = await closeE2eResources(
+      async () => { await app?.close() },
+      async () => { await rm(userDataDir, { recursive: true, force: true }) },
+    )
+    throwCleanupFailures(hasPrimaryFailure, cleanupFailures)
   }
 })
 
@@ -97,6 +104,7 @@ test('runs the direct model key lifecycle through real Electron without exposing
   let testModel: Awaited<ReturnType<typeof startKeyedModelServer>> | undefined
   let userDataDir: string | undefined
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  let hasPrimaryFailure = false
   try {
     const startedTestModel = await startKeyedModelServer()
     testModel = startedTestModel
@@ -196,12 +204,33 @@ test('runs the direct model key lifecycle through real Electron without exposing
     await page.getByRole('button', { name: '测试连接', exact: true }).click()
     await expect(page.getByRole('status')).toContainText('An API key is required for this model provider')
     expect(startedTestModel.requestCount).toBe(requestCountAfterClear)
+  } catch (error) {
+    hasPrimaryFailure = true
+    throw error
   } finally {
-    await app?.close()
-    if (testModel) await closeServer(testModel.server)
-    if (userDataDir) await rm(userDataDir, { recursive: true, force: true })
+    const cleanupFailures = await closeE2eResources(
+      async () => { await app?.close() },
+      async () => { if (testModel) await closeServer(testModel.server) },
+      async () => { if (userDataDir) await rm(userDataDir, { recursive: true, force: true }) },
+    )
+    throwCleanupFailures(hasPrimaryFailure, cleanupFailures)
   }
 })
+
+async function closeE2eResources(...close: Array<() => Promise<void>>): Promise<unknown[]> {
+  const failures: unknown[] = []
+  for (const resource of close) {
+    try { await resource() }
+    catch (error) { failures.push(error) }
+  }
+  return failures
+}
+
+function throwCleanupFailures(hasPrimaryFailure: boolean, failures: unknown[]): void {
+  if (hasPrimaryFailure || failures.length === 0) return
+  if (failures.length === 1) throw failures[0]
+  throw new AggregateError(failures, 'E2E resource cleanup failed')
+}
 
 function closeServer(server: { close(callback: (error?: Error) => void): void }): Promise<void> {
   return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
