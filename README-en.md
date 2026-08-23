@@ -29,7 +29,7 @@ This is not a way for AI to bypass established operations controls. It is a cont
 
 ### 1. Install Terminal-Agent
 
-Download and run `Terminal-Agent-Setup-1.0.7.exe` from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases). Start Terminal-Agent once after installation.
+Download and run `Terminal-Agent-Setup-1.0.8.exe` from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases). Start Terminal-Agent once after installation.
 
 Inside the workbench, choose **New SSH connection** and select one of these entry points:
 
@@ -63,10 +63,10 @@ Each bridge launch appends a `putty-bridge.log` file beside `putty.exe`. It cont
 
 1. Open **Settings** from the workbench header.
 2. Under **LLM profiles**, create an available Ollama, OpenAI-compatible, or llama.cpp profile.
-3. Import the API key, select **Test connection**, then activate the profile.
+3. Enter the API key directly in the model connection form, select **Test connection**, then save and activate the profile.
 4. For image-based work, configure a VLM profile and the routing mode under **Model selection**.
 
-Model keys are written only by the main process to Windows-protected storage. The UI shows configuration state but never reveals the key.
+Model keys are sent to the main process only while testing or saving, then stored through Windows-protected storage. The UI shows configuration state but never backfills a saved key. File-based key input and LLM-to-VLM key sharing have been removed; an existing VLM key reference is migrated to a protected key owned by that profile.
 
 ### 4. Use Task-Oriented AI Copilot for Shell Work
 
@@ -114,13 +114,13 @@ Autonomous mode skips per-candidate human review. It is not appropriate for unva
 
 ## Release Assets
 
-The `v1.0.7` Release contains:
+The `v1.0.8` Release contains:
 
 | File | Purpose |
 | --- | --- |
-| `Terminal-Agent-Setup-1.0.7.exe` | Windows x64 installer. |
+| `Terminal-Agent-Setup-1.0.8.exe` | Windows x64 installer. |
 | `putty.exe` | Single-file bridge for Assess/Access Client or bastion mapping. |
-| `Terminal-Agent-Uninstall-Cleanup-1.0.7.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
+| `Terminal-Agent-Uninstall-Cleanup-1.0.8.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
 | `latest.yml` and `.blockmap` | Update metadata for deployments that use auto-update. |
 
 To use the cleanup tool, extract the ZIP and run `清理 Terminal-Agent 卸载残留.cmd` as an administrator. It lists matching entries, requires an explicit `Y`, and exports `.reg` backups before deletion.

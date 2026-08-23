@@ -1,3 +1,19 @@
+# Terminal-Agent v1.0.8
+
+Release date: 2026-08-23
+
+## CETA follow-up refinements
+
+- Removes the standalone top title strip with Electron's hidden title bar while retaining the native Windows minimize, maximize/restore, and close controls.
+- Replaces file-based model-key input with direct API Key editing in the model connection form. A key can be tested before the configuration is saved and activated; protected storage retains it without returning the saved value to the UI.
+- Removes LLM key references. Existing VLM references are migrated to protected credentials owned by the corresponding VLM profile.
+
+## Windows release assets
+
+- Includes `Terminal-Agent-Setup-1.0.8.exe`, the standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.8.zip`.
+
+---
+
 # Terminal-Agent v1.0.7
 
 Release date: 2026-08-22

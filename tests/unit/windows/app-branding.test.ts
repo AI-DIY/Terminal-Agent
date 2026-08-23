@@ -14,7 +14,7 @@ describe('Terminal-Agent branding', () => {
     const appHeaderActionsRule = /\.app-header-actions\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
     const appHeaderActionsChildrenRule = /\.app-header-actions\s+:deep\(\*\)\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
 
-    expect(packageJson.version).toBe('1.0.7')
+    expect(packageJson.version).toBe('1.0.8')
     expect(packageJson.build.win.icon).toBe('build-resources/ta-icon.ico')
     expect(existsSync(icon)).toBe(true)
     expect(readFileSync(icon).subarray(0, 4)).toEqual(Buffer.from([0, 0, 1, 0]))

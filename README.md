@@ -29,7 +29,7 @@ Terminal-Agent 是面向日常运维与企业堡垒机场景的 Windows SSH 工�
 
 ### 1. 安装 Terminal-Agent
 
-从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 下载并运行 `Terminal-Agent-Setup-1.0.7.exe`。安装完成后，先启动一次 Terminal-Agent。
+从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 下载并运行 `Terminal-Agent-Setup-1.0.8.exe`。安装完成后，先启动一次 Terminal-Agent。
 
 工作台内选择“新建 SSH 连接”，可使用以下入口：
 
@@ -63,10 +63,10 @@ Assess/Access Client / 堡垒机
 
 1. 在工作台右上角打开“设置”。
 2. 在“大语言模型配置”新建可用的 Ollama、OpenAI 兼容或 llama.cpp 模型配置。
-3. 导入 API Key，选择“测试连接”，然后激活该模型。
+3. 在模型连接表单中直接输入 API Key，选择“测试连接”验证连接后，保存并激活该模型。
 4. 如需图像任务，可在“视觉语言模型配置”和“模型选择”中配置路由。
 
-模型密钥仅通过主进程写入 Windows 受保护存储；页面只显示是否已配置，不会回显密钥。
+模型密钥仅在测试或保存时发送给主进程，并由 Windows 受保护存储保存；页面只显示是否已配置，不会回填已保存的密钥。模型密钥不再从文件读取，也不再在大语言模型与视觉语言模型之间共用；旧版视觉语言模型的密钥指向会迁移为该配置自有的受保护密钥。
 
 ### 4. 使用任务式 AI 辅助驾驶 Shell
 
@@ -114,13 +114,13 @@ Assess/Access Client / 堡垒机
 
 ## Release 文件说明
 
-`v1.0.7` Release 包含以下文件：
+`v1.0.8` 发布包含以下文件：
 
 | 文件 | 用途 |
 | --- | --- |
-| `Terminal-Agent-Setup-1.0.7.exe` | Windows x64 安装包。 |
+| `Terminal-Agent-Setup-1.0.8.exe` | Windows x64 安装包。 |
 | `putty.exe` | 提供给 Assess/Access Client 或堡垒机映射的单文件桥接程序。 |
-| `Terminal-Agent-Uninstall-Cleanup-1.0.7.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
+| `Terminal-Agent-Uninstall-Cleanup-1.0.8.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
 | `latest.yml` 与 `.blockmap` | 更新元数据；部署自动更新时使用。 |
 
 清理工具使用方法：解压 ZIP 后，以管理员权限运行 `清理 Terminal-Agent 卸载残留.cmd`。工具会先列出匹配项，并要求明确输入 `Y`；删除前会导出相应的 `.reg` 备份。
