@@ -670,12 +670,41 @@ describe('ModelProfileService', () => {
       profiles: [{ id: 'active', kind: 'llm', name: 'active', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 }],
       activeLlmId: 'active', activeVlmId: null, routing: 'combined', migrations: {},
     })
-    secrets.remove.mockRejectedValueOnce(new Error('secret store unavailable'))
+    const removeError = new Error('secret store unavailable')
+    secrets.remove.mockRejectedValueOnce(removeError)
 
-    await expect(service.delete('active', { allowNoActive: true })).rejects.toThrow('secret store unavailable')
+    await expect(service.delete('active', { allowNoActive: true })).rejects.toBe(removeError)
 
     expect(getDocument().activeLlmId).toBe('active')
     expect(getDocument().profiles).toEqual([expect.objectContaining({ id: 'active' })])
+    expect(repository.save).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports both protected-key cleanup and profile restoration failures when deleting', async () => {
+    const { service, repository, secrets, getDocument } = createService({
+      version: 2,
+      profiles: [{ id: 'active', kind: 'llm', name: 'active', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000 }],
+      activeLlmId: 'active', activeVlmId: null, routing: 'combined', migrations: {},
+    })
+    const removeError = new Error('secret store unavailable')
+    const restoreError = new Error('document restore unavailable')
+    const defaultSave = repository.save.getMockImplementation() as (next: ModelProfileDocument) => Promise<void>
+    repository.save
+      .mockImplementationOnce(defaultSave)
+      .mockRejectedValueOnce(restoreError)
+    secrets.remove.mockRejectedValueOnce(removeError)
+
+    let caught: unknown
+    try {
+      await service.delete('active', { allowNoActive: true })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError)
+    expect((caught as AggregateError).errors).toEqual([removeError, restoreError])
+    expect((caught as Error).message).toContain('state may be inconsistent')
+    expect(getDocument()).toMatchObject({ activeLlmId: null, autoActivateLlm: false, profiles: [] })
     expect(repository.save).toHaveBeenCalledTimes(2)
   })
 

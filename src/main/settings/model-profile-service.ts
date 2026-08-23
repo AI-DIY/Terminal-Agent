@@ -152,9 +152,17 @@ export class ModelProfileService {
       await this.repository.save(next)
       try {
         await this.secrets.remove(secretKey(profile.id))
-      } catch (error) {
-        await this.repository.save(document).catch(() => undefined)
-        throw error
+      } catch (removeError) {
+        try {
+          await this.repository.save(document)
+        } catch (restoreError) {
+          throw stateUncertainError(
+            'Failed to remove the deleted profile API key and restore the model profile; model profile state may be inconsistent',
+            removeError,
+            restoreError,
+          )
+        }
+        throw removeError
       }
     })
   }
