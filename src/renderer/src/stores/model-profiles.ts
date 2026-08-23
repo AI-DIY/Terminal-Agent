@@ -13,13 +13,9 @@ export type ModelProfilesApi = {
 }
 
 export type ProfileDraft = Omit<RendererModelProfileInput, 'apiKey'>
-type EditableProfileDraft = ProfileDraft & {
-  id?: string
-  apiKeyPlaceholder: string
-}
 
-export function createProfileDraft(profile?: RendererModelProfile): EditableProfileDraft {
-  const kind = profile?.kind ?? 'llm'
+export function createProfileDraft(profile?: RendererModelProfile, defaultKind: ModelProfileKind = 'llm'): ProfileDraft {
+  const kind = profile?.kind ?? defaultKind
   return {
     ...(profile ? {
       id: profile.id,
@@ -39,14 +35,12 @@ export function createProfileDraft(profile?: RendererModelProfile): EditableProf
       contextLimit: kind === 'llm' ? 12000 : undefined,
       maxImages: kind === 'vlm' ? 4 : undefined,
     }),
-    apiKeyPlaceholder: profile?.hasApiKey ? '已配置密钥，不会回填' : '未配置密钥。',
   }
 }
 
-export function profileDraftInput(draft: EditableProfileDraft, apiKey = ''): RendererModelProfileInput {
-  const input = { ...draft } as RendererModelProfileInput & { id?: string; apiKeyPlaceholder?: string }
+export function profileDraftInput(draft: ProfileDraft, apiKey = ''): RendererModelProfileInput {
+  const input = { ...draft } as RendererModelProfileInput
   delete input.id
-  delete input.apiKeyPlaceholder
   const value = apiKey.trim()
   return value ? { ...input, apiKey: value } : input
 }

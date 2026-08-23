@@ -156,12 +156,22 @@ describe('model profile store', () => {
     expect(api.list).toHaveBeenLastCalledWith('vlm')
   })
 
-  it('creates a non-secret edit draft without key-reference fields', () => {
+  it('builds a transient profile input without retaining the key in the draft', () => {
     const draft = createProfileDraft(profile({ hasApiKey: true }))
+
     expect(draft).not.toHaveProperty('apiKey')
     expect(draft).not.toHaveProperty(['apiKey', 'ProfileId'].join(''))
-    expect(draft.apiKeyPlaceholder).toBe('\u5df2\u914d\u7f6e\u5bc6\u94a5\uff0c\u4e0d\u4f1a\u56de\u586b')
     expect(JSON.stringify(draft)).not.toContain('secret')
+    expect(profileDraftInput(draft, ' replacement-key ')).toMatchObject({ apiKey: 'replacement-key' })
+    expect(profileDraftInput(draft, '')).not.toHaveProperty('apiKey')
+  })
+
+  it('creates an empty draft for the requested model kind', () => {
+    const draft = createProfileDraft(undefined, 'vlm')
+
+    expect(draft).toMatchObject({ kind: 'vlm', contextLimit: undefined, maxImages: 4 })
+    expect(draft).not.toHaveProperty('apiKey')
+    expect(draft).not.toHaveProperty('apiKeyPlaceholder')
   })
 
   it('only attaches a trimmed temporary key when converting a draft to input', () => {
@@ -171,7 +181,6 @@ describe('model profile store', () => {
       name: 'Primary', kind: 'llm', provider: 'ollama', model: 'qwen', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 8_000,
     })
     expect(input).not.toHaveProperty('id')
-    expect(input).not.toHaveProperty('apiKeyPlaceholder')
     expect(input).toHaveProperty('apiKey', 'temporary-secret')
     expect(input).not.toHaveProperty(['apiKey', 'ProfileId'].join(''))
   })

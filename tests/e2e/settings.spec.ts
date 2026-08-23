@@ -46,8 +46,19 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await expect(processCommand.getByText('当前不执行', { exact: true })).toBeVisible()
 
     await panels.nth(1).click()
-    await expect(page.getByPlaceholder('未配置密钥。请使用导入密钥。')).toHaveCount(1)
-    await expect(page.getByText('密钥只通过主进程导入，绝不回填到页面或 renderer DTO。', { exact: true })).toBeVisible()
+    const apiKeyInput = page.getByLabel('API Key', { exact: true })
+    await expect(apiKeyInput).toBeEditable()
+    await expect(apiKeyInput).toHaveAttribute('type', 'password')
+    await page.getByRole('button', { name: '显示 API Key', exact: true }).click()
+    await expect(apiKeyInput).toHaveAttribute('type', 'text')
+    await page.getByRole('button', { name: '隐藏 API Key', exact: true }).click()
+    await expect(apiKeyInput).toHaveAttribute('type', 'password')
+    await expect(page.getByText('密钥仅在保存或测试时发送给主进程；已保存密钥不会回填。', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '导入密钥', exact: true })).toHaveCount(0)
+
+    await panels.nth(2).click()
+    await expect(page.getByLabel('API Key', { exact: true })).toBeEditable()
+    await expect(page.getByText('LLM 密钥引用', { exact: true })).toHaveCount(0)
 
     await page.getByRole('button', { name: '返回工作台', exact: true }).click()
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
