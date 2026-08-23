@@ -4,7 +4,31 @@
 const { createHash } = require('node:crypto')
 const { createReadStream } = require('node:fs')
 const { copyFile, mkdir, stat, writeFile } = require('node:fs/promises')
-const { join, resolve } = require('node:path')
+const { isAbsolute, join, relative, resolve, sep } = require('node:path')
+
+const RELEASE_VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$/
+
+function releaseVersion(version) {
+  if (typeof version !== 'string' || !RELEASE_VERSION_PATTERN.test(version)) {
+    throw new Error('A valid release version is required.')
+  }
+
+  return version
+}
+
+function installerNameFor(version) {
+  return `Terminal-Agent-Setup-${releaseVersion(version)}.exe`
+}
+
+function releaseAssetPath(releaseDirectory, filename) {
+  const candidate = resolve(releaseDirectory, filename)
+  const pathFromRelease = relative(releaseDirectory, candidate)
+  if (pathFromRelease === '..' || pathFromRelease.startsWith(`..${sep}`) || isAbsolute(pathFromRelease)) {
+    throw new Error(`Release asset must remain within ${releaseDirectory}.`)
+  }
+
+  return candidate
+}
 
 async function requireNonEmptyFile(path, label) {
   let details
@@ -28,7 +52,8 @@ async function sha512File(path) {
   return hash.digest('base64')
 }
 
-function latestYml({ version, installerName, sha512, size, releaseDate }) {
+function latestYml({ version, sha512, size, releaseDate }) {
+  const installerName = installerNameFor(version)
   return [
     `version: ${version}`,
     'files:',
@@ -47,15 +72,19 @@ async function finalizeWindowsReleaseArtifacts({
   version = process.env.npm_package_version,
   releaseDate,
 } = {}) {
-  if (!version) throw new Error('A Windows release version is required.')
+  const validatedVersion = releaseVersion(version)
 
-  const releaseDirectory = join(projectRoot, 'release')
-  const installerName = `Terminal-Agent-Setup-${version}.exe`
-  const installerPath = join(releaseDirectory, installerName)
-  const packagedBridgePath = join(releaseDirectory, 'win-unpacked', 'putty.exe')
-  const bridgePath = join(releaseDirectory, 'putty.exe')
-  const latestYmlPath = join(releaseDirectory, 'latest.yml')
+  const releaseDirectory = resolve(projectRoot, 'release')
+  const installerName = installerNameFor(validatedVersion)
+  const installerPath = releaseAssetPath(releaseDirectory, installerName)
+  const blockmapPath = releaseAssetPath(releaseDirectory, `${installerName}.blockmap`)
+  const cleanupArchivePath = releaseAssetPath(releaseDirectory, `Terminal-Agent-Uninstall-Cleanup-${validatedVersion}.zip`)
+  const packagedBridgePath = releaseAssetPath(releaseDirectory, join('win-unpacked', 'putty.exe'))
+  const bridgePath = releaseAssetPath(releaseDirectory, 'putty.exe')
+  const latestYmlPath = releaseAssetPath(releaseDirectory, 'latest.yml')
   const installer = await requireNonEmptyFile(installerPath, 'Windows installer')
+  await requireNonEmptyFile(blockmapPath, 'installer blockmap')
+  await requireNonEmptyFile(cleanupArchivePath, 'uninstall cleanup archive')
   await requireNonEmptyFile(packagedBridgePath, 'packaged bridge')
 
   await mkdir(releaseDirectory, { recursive: true })
@@ -69,8 +98,7 @@ async function finalizeWindowsReleaseArtifacts({
 
   const sha512 = await sha512File(installerPath)
   await writeFile(latestYmlPath, latestYml({
-    version,
-    installerName,
+    version: validatedVersion,
     sha512,
     size: installer.size,
     releaseDate: publishedAt,

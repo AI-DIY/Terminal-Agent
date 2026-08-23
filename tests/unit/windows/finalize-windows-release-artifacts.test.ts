@@ -18,6 +18,12 @@ type WindowsReleaseArtifactFinalizer = {
     version: string
     releaseDate?: Date
   }): Promise<FinalizedWindowsReleaseArtifacts>
+  latestYml(input: {
+    version: string
+    sha512: string
+    size: number
+    releaseDate: Date
+  }): string
 }
 
 const require = createRequire(import.meta.url)
@@ -33,6 +39,8 @@ describe('Windows release artifact finalizer', () => {
     const releaseDate = new Date('2026-08-23T17:30:40.000Z')
     const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
     const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
     const bridgeContents = Buffer.from('packaged bridge')
     const installerContents = Buffer.from('installer payload')
 
@@ -40,6 +48,8 @@ describe('Windows release artifact finalizer', () => {
       await mkdir(dirname(packagedBridgePath), { recursive: true })
       await writeFile(packagedBridgePath, bridgeContents)
       await writeFile(installerPath, installerContents)
+      await writeFile(blockmapPath, 'blockmap payload')
+      await writeFile(cleanupArchivePath, 'cleanup archive payload')
 
       const result = await finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version, releaseDate })
       const expectedSha512 = createHash('sha512').update(installerContents).digest('base64')
@@ -62,6 +72,194 @@ describe('Windows release artifact finalizer', () => {
         `releaseDate: ${releaseDate.toISOString()}`,
         '',
       ].join('\n'))
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a release version that could escape a release path or inject YAML', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const releaseDate = new Date('2026-08-23T17:30:40.000Z')
+
+    try {
+      await expect(finalizer().finalizeWindowsReleaseArtifacts({
+        projectRoot,
+        version: '1.0.8/../../outside',
+        releaseDate,
+      })).rejects.toThrow('valid release version')
+      expect(() => finalizer().latestYml({
+        version: '1.0.8\ninjected: true',
+        sha512: 'sha512',
+        size: 1,
+        releaseDate,
+      })).toThrow('valid release version')
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('requires a non-empty installer blockmap before publishing release metadata', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await writeFile(packagedBridgePath, 'packaged bridge')
+      await writeFile(installerPath, 'installer payload')
+      await writeFile(cleanupArchivePath, 'cleanup archive payload')
+
+      await expect(finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version }))
+        .rejects.toThrow('installer blockmap')
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('requires a non-empty installer before publishing release metadata', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await writeFile(packagedBridgePath, 'packaged bridge')
+      await writeFile(blockmapPath, 'blockmap payload')
+      await writeFile(cleanupArchivePath, 'cleanup archive payload')
+
+      await expect(finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version }))
+        .rejects.toThrow('Windows installer')
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a zero-byte installer blockmap before publishing release metadata', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await writeFile(packagedBridgePath, 'packaged bridge')
+      await writeFile(installerPath, 'installer payload')
+      await writeFile(blockmapPath, '')
+      await writeFile(cleanupArchivePath, 'cleanup archive payload')
+
+      await expect(finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version }))
+        .rejects.toThrow('non-empty installer blockmap')
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('requires a non-empty uninstall cleanup archive before publishing release metadata', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await writeFile(packagedBridgePath, 'packaged bridge')
+      await writeFile(installerPath, 'installer payload')
+      await writeFile(blockmapPath, 'blockmap payload')
+      await writeFile(cleanupArchivePath, '')
+
+      await expect(finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version }))
+        .rejects.toThrow('non-empty uninstall cleanup archive')
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('requires a non-empty packaged bridge before publishing release metadata', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await writeFile(packagedBridgePath, '')
+      await writeFile(installerPath, 'installer payload')
+      await writeFile(blockmapPath, 'blockmap payload')
+      await writeFile(cleanupArchivePath, 'cleanup archive payload')
+
+      await expect(finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version }))
+        .rejects.toThrow('non-empty packaged bridge')
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a cleanup archive path that is a directory', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await writeFile(packagedBridgePath, 'packaged bridge')
+      await writeFile(installerPath, 'installer payload')
+      await writeFile(blockmapPath, 'blockmap payload')
+      await mkdir(cleanupArchivePath)
+
+      await expect(finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version }))
+        .rejects.toThrow('non-empty uninstall cleanup archive')
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('overwrites root release metadata with the current packaged bridge and installer', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const releaseDate = new Date('2026-08-23T17:30:40.000Z')
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await writeFile(packagedBridgePath, 'first bridge')
+      await writeFile(installerPath, 'first installer')
+      await writeFile(blockmapPath, 'blockmap payload')
+      await writeFile(cleanupArchivePath, 'cleanup archive payload')
+      await finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version, releaseDate })
+
+      const currentBridge = Buffer.from('current bridge')
+      const currentInstaller = Buffer.from('current installer')
+      await writeFile(packagedBridgePath, currentBridge)
+      await writeFile(installerPath, currentInstaller)
+      const result = await finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version, releaseDate })
+      const currentSha512 = createHash('sha512').update(currentInstaller).digest('base64')
+
+      expect(await readFile(result.bridgePath)).toEqual(currentBridge)
+      await expect(readFile(result.latestYmlPath, 'utf8')).resolves.toContain(`sha512: ${currentSha512}`)
     }
     finally {
       await rm(projectRoot, { recursive: true, force: true })
