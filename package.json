@@ -8,6 +8,7 @@
     "build": "electron-vite build && vue-tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "pretest:integration": "node scripts/release-integration-artifacts.cjs",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "pretest:e2e": "node scripts/e2e-electron-runtime.cjs && npm run build",
     "test:e2e": "playwright test",

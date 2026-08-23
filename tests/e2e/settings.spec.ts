@@ -58,11 +58,13 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await page.getByRole('button', { name: '隐藏 API Key', exact: true }).click()
     await expect(apiKeyInput).toHaveAttribute('type', 'password')
     await expect(page.getByText('密钥仅在保存或测试时发送给主进程；已保存密钥不会回填。', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: /导入(?:)密钥/u })).toHaveCount(0)
+    await expect(page.locator('.profile-editor').getByRole('button')).toHaveCount(4)
+    await expect(page.locator('.profile-editor').locator('select')).toHaveCount(1)
 
     await panels.nth(2).click()
     await expect(page.getByLabel('API Key', { exact: true })).toBeEditable()
-    await expect(page.getByText(/LLM(?:) 密钥引用/u)).toHaveCount(0)
+    await expect(page.locator('.profile-editor').getByRole('button')).toHaveCount(4)
+    await expect(page.locator('.profile-editor').locator('select')).toHaveCount(1)
 
     await panels.nth(1).click()
     const draftName = '保留的未保存模型草稿'

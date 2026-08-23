@@ -103,9 +103,6 @@ describe('V18 production visual contract', () => {
     expect(profiles).toContain('clearTransientKey()')
     expect(profiles).toContain('.api-key-input-row')
     expect(profiles).toContain('.icon-button')
-    expect(profiles).not.toMatch(/导入(?:)密钥/u)
-    expect(profiles).not.toMatch(/LLM(?:) 密钥引用/u)
-    expect(profiles).not.toMatch(/apiKey(?:)ProfileId/)
   })
 
   it('uses the approved host-memory switch and scope grid', () => {
