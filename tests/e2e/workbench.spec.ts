@@ -539,6 +539,10 @@ test('layout controls persist while hidden terminals remain mounted and online',
         return element
       }
       const bounds = (selector: string): DOMRect => element(selector).getBoundingClientRect()
+      const appActions = bounds('.app-header-actions')
+      const headerStyle = getComputedStyle(element('.app-header'))
+      // padding-right is the browser-resolved pixel value; the custom property may remain a max(...) expression.
+      const controlsInset = Number.parseFloat(headerStyle.paddingRight) - 14
       const diagnostics = (selector: string) => {
         const target = element(selector)
         const box = target.getBoundingClientRect()
@@ -567,6 +571,8 @@ test('layout controls persist while hidden terminals remain mounted and online',
       return {
         toolbarHeight: shellToolbar.height,
         appHeaderHeight: bounds('.app-header').height,
+        controlsInset,
+        appActionsClearControls: appActions.right <= window.innerWidth - controlsInset + 0.5,
         hostbarToolsOverflowPx: Math.max(0, hostbarTools.right - shellToolbar.right),
         chatPanelFitsViewport: chatPanel.left >= 0 && chatPanel.right <= window.innerWidth,
         modeGroupFits: withinPanel(modeGroup),
@@ -581,6 +587,8 @@ test('layout controls persist while hidden terminals remain mounted and online',
     })
     expect(narrowGeometry.toolbarHeight).toBeLessThanOrEqual(43)
     expect(narrowGeometry.appHeaderHeight).toBe(48)
+    expect(narrowGeometry.controlsInset).toBeGreaterThanOrEqual(138)
+    expect(narrowGeometry.appActionsClearControls).toBe(true)
     expect(narrowGeometry.hostbarTools.left).toBeGreaterThanOrEqual(narrowGeometry.shellToolbar.left)
     expect(narrowGeometry.hostbarToolsOverflowPx, JSON.stringify(narrowGeometry, null, 2)).toBeLessThan(0.5)
     expect(narrowGeometry.sessionTabs.scrollWidth).toBeGreaterThan(narrowGeometry.sessionTabs.clientWidth)

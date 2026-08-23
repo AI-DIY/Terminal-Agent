@@ -111,6 +111,7 @@ onBeforeUnmount(widthSaver.flush)
   position: relative;
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
+  --window-controls-inset: max(138px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px))));
   width: 100vw;
   min-width: 0;
   height: 100vh;
@@ -128,12 +129,13 @@ onBeforeUnmount(widthSaver.flush)
   color-scheme: dark;
   box-shadow: none;
 }
-.app-header { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); }
+.app-header { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 calc(14px + var(--window-controls-inset)) 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); -webkit-app-region: drag; }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 176px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; font-weight: 700; }.brand-mark { display: grid; place-items: center; box-sizing: border-box; width: 28px; height: 28px; border: 1px solid #535e6a; border-radius: 0; background: #1d242c; color: #fff; font-size: 10px; font-weight: 800; }
 .current-chat { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .current-chat b { color: var(--text-strong); font-size: 11px; font-weight: 680; }
 .current-chat span { margin-left: 9px; color: var(--faint); }
-.app-header-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.app-header-actions { display: flex; align-items: center; gap: 6px; min-width: 0; -webkit-app-region: no-drag; }
+.app-header-actions :deep(*) { -webkit-app-region: no-drag; }
 .workspace { display: grid; grid-template-columns: var(--left-width) 3px minmax(450px, 1fr) 3px var(--right-width); min-width: 0; min-height: 0; overflow: hidden; }
 .side-region, .shell-region, .side-content, .shell-content { min-width: 0; min-height: 0; }
 .side-region { position: relative; overflow: hidden; background: var(--panel); }
