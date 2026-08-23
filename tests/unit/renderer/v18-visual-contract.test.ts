@@ -87,6 +87,8 @@ describe('V18 production visual contract', () => {
     expect(profiles).toContain("const apiKey = ref('')")
     expect(profiles).toContain('const showApiKey = ref(false)')
     expect(profiles).toContain('v-model="apiKey"')
+    expect(profiles).toContain('for="model-profile-api-key"')
+    expect(profiles).toContain('id="model-profile-api-key"')
     expect(profiles).toContain("showApiKey ? 'text' : 'password'")
     expect(profiles).toContain('EyeOff')
     expect(profiles).toContain('Eye')

@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test'
 import { _electron as electron } from '@playwright/test'
+import { once } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -60,11 +63,89 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await expect(page.getByLabel('API Key', { exact: true })).toBeEditable()
     await expect(page.getByText('LLM 密钥引用', { exact: true })).toHaveCount(0)
 
+    await panels.nth(1).click()
+    const apiKeyBeforeLeavingSettings = page.getByLabel('API Key', { exact: true })
+    await apiKeyBeforeLeavingSettings.fill('session-only-key')
+
     await page.getByRole('button', { name: '返回工作台', exact: true }).click()
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
     await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(0)
+
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    const apiKeyAfterReopeningSettings = page.getByLabel('API Key', { exact: true })
+    await expect(apiKeyAfterReopeningSettings).toHaveValue('')
+    await expect(apiKeyAfterReopeningSettings).toHaveAttribute('type', 'password')
   } finally {
     await app?.close()
     await rm(userDataDir, { recursive: true, force: true })
   }
 })
+
+test('tests a transient model key without creating a profile and only clears saved keys', async () => {
+  const testModel = await startKeyedModelServer()
+  const userDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-model-key-editor-e2e-'))
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  try {
+    app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, join(process.cwd(), 'out/main/main.js')] })
+    const page = await app.firstWindow()
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '大语言模型配置', exact: true }).click()
+
+    const apiKey = page.getByLabel('API Key', { exact: true })
+    await expect(apiKey).toBeEditable()
+    await expect(page.getByRole('button', { name: '清除已保存密钥', exact: true })).toHaveCount(0)
+    await page.getByLabel('连接名称').fill('临时密钥测试模型')
+    await page.getByLabel('接口类型').selectOption('openai')
+    await page.getByLabel('模型', { exact: true }).fill('transient-e2e')
+    await page.getByLabel('接口地址').fill(`http://127.0.0.1:${testModel.port}/v1/chat/completions`)
+    await apiKey.fill('temporary-e2e-key')
+    await page.getByRole('button', { name: '测试连接', exact: true }).click()
+
+    await expect(page.getByRole('status')).toContainText('连接成功：transient-e2e')
+    await expect(apiKey).toHaveValue('')
+    expect(testModel.authorizations).toEqual(['Bearer temporary-e2e-key'])
+    await expect(page.locator('.profile-item')).toHaveCount(0)
+
+    await apiKey.fill('saved-e2e-key')
+    await page.getByRole('button', { name: '保存大语言模型配置', exact: true }).click()
+    const savedProfile = page.locator('.profile-item').filter({ hasText: '临时密钥测试模型' })
+    await expect(savedProfile).toContainText('已配置密钥')
+    await expect(apiKey).toHaveValue('')
+    const clearSavedKey = page.getByRole('button', { name: '清除已保存密钥', exact: true })
+    await expect(clearSavedKey).toBeVisible()
+
+    page.once('dialog', dialog => dialog.accept())
+    await clearSavedKey.click()
+    await expect(savedProfile).toContainText('未配置密钥')
+    await expect(page.getByRole('button', { name: '清除已保存密钥', exact: true })).toHaveCount(0)
+  } finally {
+    await app?.close()
+    await closeServer(testModel.server)
+    await rm(userDataDir, { recursive: true, force: true })
+  }
+})
+
+function closeServer(server: { close(callback: (error?: Error) => void): void }): Promise<void> {
+  return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+}
+
+async function startKeyedModelServer(): Promise<{ server: HttpServer; port: number; authorizations: string[] }> {
+  const authorizations: string[] = []
+  const server = createHttpServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
+      response.statusCode = 404
+      response.end()
+      return
+    }
+    authorizations.push(request.headers.authorization ?? '')
+    request.resume()
+    request.on('end', () => {
+      response.statusCode = 200
+      response.setHeader('Content-Type', 'application/json')
+      response.end('{}')
+    })
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  return { server, port: (server.address() as AddressInfo).port, authorizations }
+}

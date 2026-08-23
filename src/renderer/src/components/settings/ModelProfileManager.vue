@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Eye, EyeOff, Plus, Trash2 } from '@lucide/vue'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type { ModelProfileKind, RendererModelProfileInput } from '../../../../shared/validation'
 import type { RendererModelProfile } from '../../../../shared/contracts'
 import { createProfileDraft, getModelProfilesStore, profileDraftInput, type ProfileDraft } from '../../stores/model-profiles'
@@ -36,7 +36,7 @@ function requestSignature(): string {
 }
 
 function clearTransientKey(): void {
-  if (apiKey.value || showApiKey.value) apiKeyRevision.value += 1
+  apiKeyRevision.value += 1
   apiKey.value = ''
   showApiKey.value = false
 }
@@ -56,6 +56,10 @@ function edit(profile: RendererModelProfile): void {
   clearTransientKey()
   setForm(createProfileDraft(profile))
 }
+function resetForSettingsClose(): void {
+  reset()
+}
+defineExpose({ resetForSettingsClose })
 async function save(): Promise<void> {
   busy.value = true
   message.value = ''
@@ -116,6 +120,7 @@ async function remove(profile: { id: string; active: boolean }): Promise<void> {
 onMounted(async () => {
   await store.load(props.kind)
 })
+onBeforeUnmount(clearTransientKey)
 </script>
 
 <template>
@@ -141,7 +146,7 @@ onMounted(async () => {
         <label class="span-2">接口地址<input v-model="form.endpoint" required type="url"></label>
         <label v-if="!isVlm">上下文长度<input v-model.number="form.contextLimit" required type="number" min="1024" max="1000000"></label>
         <label v-else>最大图像数<input v-model.number="form.maxImages" required type="number" min="1" max="128"></label>
-        <label class="api-key-field span-2"><span>API Key</span><span class="api-key-input-row"><input v-model="apiKey" :type="showApiKey ? 'text' : 'password'" :placeholder="keyPlaceholder" autocomplete="new-password" maxlength="4096" :disabled="busy" aria-describedby="api-key-note" @input="apiKeyRevision += 1"><button type="button" class="icon-button" :disabled="busy" :aria-label="showApiKey ? '隐藏 API Key' : '显示 API Key'" :title="showApiKey ? '隐藏 API Key' : '显示 API Key'" @click="showApiKey = !showApiKey"><EyeOff v-if="showApiKey" :size="15" aria-hidden="true" /><Eye v-else :size="15" aria-hidden="true" /></button><button v-if="currentProfile?.hasApiKey" type="button" class="icon-button danger" :disabled="busy" aria-label="清除已保存密钥" title="清除已保存密钥" @click="clearSavedKey"><Trash2 :size="15" aria-hidden="true" /></button></span></label><p id="api-key-note" class="key-note span-2">密钥仅在保存或测试时发送给主进程；已保存密钥不会回填。</p>
+        <div class="api-key-field span-2"><label for="model-profile-api-key">API Key</label><span class="api-key-input-row"><input id="model-profile-api-key" v-model="apiKey" :type="showApiKey ? 'text' : 'password'" :placeholder="keyPlaceholder" autocomplete="new-password" maxlength="4096" :disabled="busy" aria-describedby="api-key-note" @input="apiKeyRevision += 1"><button type="button" class="icon-button" :disabled="busy" :aria-label="showApiKey ? '隐藏 API Key' : '显示 API Key'" :title="showApiKey ? '隐藏 API Key' : '显示 API Key'" @click="showApiKey = !showApiKey"><EyeOff v-if="showApiKey" :size="15" aria-hidden="true" /><Eye v-else :size="15" aria-hidden="true" /></button><button v-if="currentProfile?.hasApiKey" type="button" class="icon-button danger" :disabled="busy" aria-label="清除已保存密钥" title="清除已保存密钥" @click="clearSavedKey"><Trash2 :size="15" aria-hidden="true" /></button></span></div><p id="api-key-note" class="key-note span-2">密钥仅在保存或测试时发送给主进程；已保存密钥不会回填。</p>
         <div class="form-actions span-2"><button type="button" :disabled="busy" @click="test">测试连接</button><button type="submit" class="primary-button" :disabled="busy">保存{{ kind === 'llm' ? '大语言模型' : '视觉语言模型' }}配置</button><button type="button" :disabled="busy" @click="reset">取消</button></div>
         <p v-if="message" class="form-message span-2" role="status">{{ message }}</p><p v-if="store.state.error" class="error span-2" role="alert">{{ store.state.error }}</p>
       </form>
@@ -155,7 +160,7 @@ onMounted(async () => {
 .profile-layout { display: grid; grid-template-columns: minmax(260px,.9fr) minmax(380px,1.35fr); min-width: 0; }.profile-list-pane { min-width: 0; padding-right: 18px; }.profile-list-head,.editor-head,.profile-actions,.form-actions { display: flex; align-items: center; gap: 8px; }.profile-list-head { justify-content: space-between; min-height: 33px; margin-bottom: 9px; }.profile-list-head > strong { color: var(--text-strong); font-size: 11px; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; }button:hover:not(:disabled) { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }button:disabled { opacity: .55; }.primary-button { border-color: var(--accent); background: var(--accent); color: #fff; font-weight: 650; }.primary-button:hover:not(:disabled) { background: color-mix(in srgb,var(--accent) 88%,#000); color: #fff; }.danger { color: var(--red); }
 .profile-list { display: grid; align-content: start; gap: 7px; }.list-empty { padding: 18px 0; color: var(--muted); font-size: 11px; text-align: center; }.profile-item { position: relative; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 7px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }.profile-item.active { border-color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }.profile-select { display: grid; gap: 3px; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; }.profile-select:hover { border: 0; background: transparent; }.profile-select strong { overflow: hidden; color: var(--text-strong); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.profile-select span,.profile-select small { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.activation-state { align-self: start; color: var(--muted); font-size: 9px; }.activation-state.active { color: var(--green); }.profile-actions { grid-column: 1 / -1; justify-content: flex-end; flex-wrap: wrap; }.profile-actions select { height: 28px; max-width: 150px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--text); font-size: 10px; }
-.profile-editor { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-content: start; gap: 10px 16px; min-width: 0; padding-left: 18px; border-left: 1px solid var(--line); }.editor-head { grid-column: 1 / -1; min-height: 33px; }.editor-head h3 { color: var(--text-strong); font-size: 12px; }.editor-head span { color: var(--muted); font-size: 9px; }.profile-editor label { display: grid; gap: 5px; min-width: 0; color: var(--text-strong); font-size: 10px; font-weight: 650; }.profile-editor input,.profile-editor select { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; outline: 0; background: var(--surface-soft); color: var(--text); font: 11px Inter,"Segoe UI",sans-serif; }.profile-editor input:focus,.profile-editor select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }.span-2 { grid-column: 1 / -1; }.api-key-field { gap: 5px; }.api-key-input-row { display: flex; align-items: center; gap: 6px; min-width: 0; }.api-key-input-row input { flex: 1 1 auto; min-width: 0; }.icon-button { flex: 0 0 30px; width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 0; }.key-note { min-width: 0; color: var(--green); font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }.form-actions { flex-wrap: wrap; }.form-actions button { min-height: 32px; font-size: 11px; }.form-message { color: var(--accent); font-size: 10px; }.error { color: var(--red); font-size: 10px; }
+.profile-editor { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-content: start; gap: 10px 16px; min-width: 0; padding-left: 18px; border-left: 1px solid var(--line); }.editor-head { grid-column: 1 / -1; min-height: 33px; }.editor-head h3 { color: var(--text-strong); font-size: 12px; }.editor-head span { color: var(--muted); font-size: 9px; }.profile-editor label,.api-key-field { display: grid; gap: 5px; min-width: 0; color: var(--text-strong); font-size: 10px; font-weight: 650; }.profile-editor input,.profile-editor select { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; outline: 0; background: var(--surface-soft); color: var(--text); font: 11px Inter,"Segoe UI",sans-serif; }.profile-editor input:focus,.profile-editor select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }.span-2 { grid-column: 1 / -1; }.api-key-input-row { display: flex; align-items: center; gap: 6px; min-width: 0; }.api-key-input-row input { flex: 1 1 auto; min-width: 0; }.icon-button { flex: 0 0 30px; width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 0; }.key-note { min-width: 0; color: var(--green); font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }.form-actions { flex-wrap: wrap; }.form-actions button { min-height: 32px; font-size: 11px; }.form-message { color: var(--accent); font-size: 10px; }.error { color: var(--red); font-size: 10px; }
 @media (max-width: 900px) { .profile-layout { grid-template-columns: 1fr; gap: 18px; }.profile-list-pane { padding-right: 0; }.profile-editor { padding-left: 0; padding-top: 18px; border-top: 1px solid var(--line); border-left: 0; } }
 @media (max-width: 600px) { .profile-editor { grid-template-columns: 1fr; }.span-2,.editor-head { grid-column: 1; } }
 </style>

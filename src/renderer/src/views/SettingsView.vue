@@ -8,22 +8,28 @@ import AppearanceSettings from '../components/settings/AppearanceSettings.vue'
 import HostMemorySettings from '../components/settings/HostMemorySettings.vue'
 import { SETTINGS_TABS, type SettingsTabId } from './settings-tabs'
 
-defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: [] }>()
 const tab = ref<SettingsTabId>('routing')
 const tabIcons = { routing: BrainCircuit, llm: Bot, vlm: Eye, fence: Braces, memory: Database, appearance: Palette }
+const modelProfileManager = ref<{ resetForSettingsClose(): void } | null>(null)
+
+function closeSettings(): void {
+  modelProfileManager.value?.resetForSettingsClose()
+  emit('close')
+}
 </script>
 
 <template>
   <main class="settings">
-    <header class="settings-top"><button type="button" class="back-button" @click="$emit('close')"><ArrowLeft :size="15" aria-hidden="true" /><span>返回工作台</span></button><h1>设置</h1></header>
+    <header class="settings-top"><button type="button" class="back-button" @click="closeSettings"><ArrowLeft :size="15" aria-hidden="true" /><span>返回工作台</span></button><h1>设置</h1></header>
     <div class="settings-layout">
       <nav class="settings-nav" aria-label="设置面板">
         <button v-for="item in SETTINGS_TABS" :key="item.id" type="button" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id"><component :is="tabIcons[item.id]" :size="15" aria-hidden="true" /><span>{{ item.label }}</span></button>
       </nav>
       <section class="settings-content">
         <ModelRoutingSettings v-if="tab === 'routing'" />
-        <ModelProfileManager v-else-if="tab === 'llm'" kind="llm" />
-        <ModelProfileManager v-else-if="tab === 'vlm'" kind="vlm" />
+        <ModelProfileManager v-else-if="tab === 'llm'" ref="modelProfileManager" kind="llm" />
+        <ModelProfileManager v-else-if="tab === 'vlm'" ref="modelProfileManager" kind="vlm" />
         <RegexFenceRules v-else-if="tab === 'fence'" />
         <HostMemorySettings v-else-if="tab === 'memory'" />
         <AppearanceSettings v-else />
