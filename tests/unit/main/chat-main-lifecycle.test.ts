@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   windows: [] as Array<{
     webContents: { send: ReturnType<typeof vi.fn> }
     options: { show?: boolean }
+    setTitleBarOverlay: ReturnType<typeof vi.fn>
     shown: boolean
     emitClosed(): void
     emitReadyToShow(): void
@@ -27,6 +28,7 @@ vi.mock('electron', () => {
     private readonly listeners = new Map<string, Array<() => void>>()
     loadURL = vi.fn().mockResolvedValue(undefined)
     loadFile = vi.fn().mockResolvedValue(undefined)
+    setTitleBarOverlay = vi.fn()
     shown = false
     readonly options: { show?: boolean }
 
@@ -120,7 +122,7 @@ describe('main chat lifecycle', () => {
     expect(state.chatServiceConstructor).toHaveBeenCalledOnce()
     expect(state.registerChatHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.anything(), expect.anything())
     expect(state.workbenchPreferencesConstructor).toHaveBeenCalledWith(join('D:\\terminal-agent-user-data', 'workbench-preferences.json'))
-    expect(state.registerWorkbenchSettingsHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.any(Function))
+    expect(state.registerWorkbenchSettingsHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.any(Function), expect.any(Function))
     expect(state.setApplicationMenu).toHaveBeenCalledWith(null)
     expect(window.options).toMatchObject({ show: false })
     expect(window.shown).toBe(false)
@@ -131,6 +133,11 @@ describe('main chat lifecycle', () => {
     expect(rendererReady).toBeTypeOf('function')
     rendererReady?.()
     expect(window.shown).toBe(true)
+
+    const onThemeSaved = state.registerWorkbenchSettingsHandlers.mock.calls[0]?.[3] as ((theme: 'pearl' | 'graphite') => void) | undefined
+    expect(onThemeSaved).toBeTypeOf('function')
+    onThemeSaved?.('graphite')
+    expect(window.setTitleBarOverlay).toHaveBeenCalledWith({ color: '#25292e', symbolColor: '#f0f3f6', height: 48 })
 
     window.emitClosed()
     expect(state.disposeChatHandlers).toHaveBeenCalledOnce()

@@ -69,6 +69,11 @@ vi.mock('../../../src/main/settings/register-host-memory-handlers', () => ({ reg
 vi.mock('../../../src/main/chat/register-chat-handlers', () => ({ registerChatHandlers: vi.fn(() => vi.fn()) }))
 vi.mock('../../../src/main/shell-history/register-shell-history-handlers', () => ({ registerShellHistoryHandlers: vi.fn(() => vi.fn()) }))
 vi.mock('../../../src/main/settings/register-workbench-settings-handlers', () => ({ registerWorkbenchSettingsHandlers: vi.fn(() => vi.fn()) }))
+vi.mock('../../../src/main/settings/workbench-preferences-service', () => ({
+  WorkbenchPreferencesService: class WorkbenchPreferencesService {
+    load() { return Promise.resolve({ theme: 'pearl' }) }
+  },
+}))
 
 await import('../../../src/main/main')
 

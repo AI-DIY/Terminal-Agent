@@ -24,6 +24,7 @@ export function registerWorkbenchSettingsHandlers(
   service: WorkbenchSettingsSource,
   trustedSender: WebContents,
   onRendererReady: () => void,
+  onThemeSaved: (theme: WorkbenchTheme) => void = () => undefined,
 ): () => void {
   ipcMain.handle('settings:workbench:ready', event => {
     assertTrustedSender(event, trustedSender)
@@ -37,9 +38,11 @@ export function registerWorkbenchSettingsHandlers(
     assertTrustedSender(event, trustedSender)
     return service.saveLayout(workbenchLayoutPatchSchema.parse(input))
   })
-  ipcMain.handle('settings:workbench:save-theme', (event, input: unknown) => {
+  ipcMain.handle('settings:workbench:save-theme', async (event, input: unknown) => {
     assertTrustedSender(event, trustedSender)
-    return service.saveTheme(workbenchThemeSchema.parse(input))
+    const preferences = await service.saveTheme(workbenchThemeSchema.parse(input))
+    onThemeSaved(preferences.theme)
+    return preferences
   })
 
   return () => {

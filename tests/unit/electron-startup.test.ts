@@ -8,6 +8,9 @@ describe('electron startup wiring', () => {
     expect(source).toContain("import { app, BrowserWindow, Menu } from 'electron'")
     expect(source).toContain('Menu.setApplicationMenu(null)')
     expect(source).toContain('autoHideMenuBar: true')
+    expect(source).toContain("titleBarStyle: 'hidden'")
+    expect(source).toContain('titleBarOverlay: titleBarOverlayForTheme(initialTheme)')
+    expect(source).toContain('setTitleBarOverlay(titleBarOverlayForTheme(theme))')
     expect(source).not.toContain('frame: false')
   })
 

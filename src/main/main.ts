@@ -58,6 +58,8 @@ import { ShellHistoryService } from './shell-history/shell-history-service'
 import { registerShellHistoryHandlers } from './shell-history/register-shell-history-handlers'
 import { registerShellHistoryLifecycle } from './shell-history/register-shell-history-lifecycle'
 import { registerGracefulApplicationShutdown } from './application-shutdown'
+import { createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../shared/contracts'
+import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
 
 let mainWindow: BrowserWindow | undefined
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
@@ -166,13 +168,15 @@ const bastionLaunches = new BastionLaunchService(
 )
 sessions.onClosed(event => bastionLaunches.closeSession(event.sessionId))
 
-export function createMainWindow(): BrowserWindow {
+export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWorkbenchPreferences().theme): BrowserWindow {
   Menu.setApplicationMenu(null)
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     show: false,
     autoHideMenuBar: true,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: titleBarOverlayForTheme(initialTheme),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -241,6 +245,7 @@ export function createMainWindow(): BrowserWindow {
     () => {
       if (mainWindow === rendererWindow) rendererWindow.show()
     },
+    theme => rendererWindow.setTitleBarOverlay(titleBarOverlayForTheme(theme)),
   )
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL
@@ -265,15 +270,18 @@ if (isPrimaryInstance) {
       writeInstallPath: writeWindowsInstallPath,
     })
     void regexRules.load().catch(() => undefined)
+    const initialPreferences = await workbenchPreferences.load().catch(createDefaultWorkbenchPreferences)
     await recoverChatStreamsBeforeCreatingMainWindow(
       () => chats.recoverInterruptedStreams(),
-      createMainWindow,
+      () => createMainWindow(initialPreferences.theme),
     )
     void accessClientLaunches.tryOpenFromArgv(process.argv)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow()
+        void workbenchPreferences.load()
+          .then(preferences => createMainWindow(preferences.theme))
+          .catch(() => createMainWindow())
       }
     })
   })

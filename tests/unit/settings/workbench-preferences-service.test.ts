@@ -179,7 +179,8 @@ describe('workbench preference IPC', () => {
       saveTheme: vi.fn().mockResolvedValue({ ...createDefaultWorkbenchPreferences(), theme: 'graphite' }),
     }
     const onRendererReady = vi.fn()
-    const dispose = registerWorkbenchSettingsHandlers(service, sender as never, onRendererReady)
+    const onThemeSaved = vi.fn()
+    const dispose = registerWorkbenchSettingsHandlers(service, sender as never, onRendererReady, onThemeSaved)
 
     await ipc.handlers.get('settings:workbench:ready')?.({ sender })
     await expect(ipc.handlers.get('settings:workbench:get')?.({ sender })).resolves.toEqual(createDefaultWorkbenchPreferences())
@@ -188,11 +189,13 @@ describe('workbench preference IPC', () => {
     expect(service.saveLayout).toHaveBeenCalledWith({ leftWidth: 260 })
     expect(service.saveTheme).toHaveBeenCalledWith('graphite')
     expect(onRendererReady).toHaveBeenCalledOnce()
+    expect(onThemeSaved).toHaveBeenCalledWith('graphite')
 
     expect(() => ipc.handlers.get('settings:workbench:ready')?.({ sender: { id: 2 } })).toThrow('Untrusted renderer')
     expect(() => ipc.handlers.get('settings:workbench:get')?.({ sender: { id: 2 } })).toThrow('Untrusted renderer')
     expect(() => ipc.handlers.get('settings:workbench:save-layout')?.({ sender }, { leftWidth: 9_000 })).toThrow()
-    expect(() => ipc.handlers.get('settings:workbench:save-theme')?.({ sender }, 'dark')).toThrow()
+    await expect(ipc.handlers.get('settings:workbench:save-theme')?.({ sender }, 'dark')).rejects.toThrow()
+    expect(onThemeSaved).toHaveBeenCalledOnce()
 
     dispose()
     expect(ipc.removeHandler).toHaveBeenCalledTimes(4)
