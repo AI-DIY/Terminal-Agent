@@ -93,7 +93,7 @@ test('opens real settings with ordered panels, host memory controls, and termina
   }
 })
 
-test('tests a transient model key without creating a profile and only clears saved keys', async () => {
+test('runs the direct model key lifecycle through real Electron without exposing or retaining cleared keys', async () => {
   const testModel = await startKeyedModelServer()
   const userDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-model-key-editor-e2e-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
@@ -110,6 +110,7 @@ test('tests a transient model key without creating a profile and only clears sav
     await page.getByLabel('接口类型').selectOption('openai')
     await page.getByLabel('模型', { exact: true }).fill('transient-e2e')
     await page.getByLabel('接口地址').fill(`http://127.0.0.1:${testModel.port}/v1/chat/completions`)
+    testModel.expectAuthorization('temporary-e2e-key')
     await apiKey.fill('temporary-e2e-key')
     await page.getByRole('button', { name: '测试连接', exact: true }).click()
 
@@ -122,14 +123,44 @@ test('tests a transient model key without creating a profile and only clears sav
     await page.getByRole('button', { name: '保存大语言模型配置', exact: true }).click()
     const savedProfile = page.locator('.profile-item').filter({ hasText: '临时密钥测试模型' })
     await expect(savedProfile).toContainText('已配置密钥')
+    await expect(savedProfile).toContainText('已激活')
     await expect(apiKey).toHaveValue('')
     const clearSavedKey = page.getByRole('button', { name: '清除已保存密钥', exact: true })
     await expect(clearSavedKey).toBeVisible()
 
+    await savedProfile.getByRole('button', { name: '编辑', exact: true }).click()
+    await expect(apiKey).toHaveValue('')
+    await expect(apiKey).toHaveAttribute('placeholder', '已配置密钥，留空则保留')
+    await expect(page.locator('body')).not.toContainText('saved-e2e-key')
+
+    testModel.expectAuthorization('saved-e2e-key')
+    await page.getByRole('button', { name: '测试连接', exact: true }).click()
+    await expect(page.getByRole('status')).toContainText('连接成功：transient-e2e')
+    await expect(apiKey).toHaveValue('')
+    expect(testModel.authorizations).toEqual(['Bearer temporary-e2e-key', 'Bearer saved-e2e-key'])
+
+    await apiKey.fill('replacement-e2e-key')
+    await page.getByRole('button', { name: '保存大语言模型配置', exact: true }).click()
+    await expect(apiKey).toHaveValue('')
+    await expect(page.locator('body')).not.toContainText('replacement-e2e-key')
+    testModel.expectAuthorization('replacement-e2e-key')
+    await page.getByRole('button', { name: '测试连接', exact: true }).click()
+    await expect(page.getByRole('status')).toContainText('连接成功：transient-e2e')
+    expect(testModel.authorizations).toEqual([
+      'Bearer temporary-e2e-key',
+      'Bearer saved-e2e-key',
+      'Bearer replacement-e2e-key',
+    ])
+
     page.once('dialog', dialog => dialog.accept())
     await clearSavedKey.click()
     await expect(savedProfile).toContainText('未配置密钥')
+    await expect(savedProfile).toContainText('未激活')
     await expect(page.getByRole('button', { name: '清除已保存密钥', exact: true })).toHaveCount(0)
+    const requestCountAfterClear = testModel.requestCount
+    await page.getByRole('button', { name: '测试连接', exact: true }).click()
+    await expect(page.getByRole('status')).toContainText('An API key is required for this model provider')
+    expect(testModel.requestCount).toBe(requestCountAfterClear)
   } finally {
     await app?.close()
     await closeServer(testModel.server)
@@ -141,23 +172,49 @@ function closeServer(server: { close(callback: (error?: Error) => void): void })
   return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
 }
 
-async function startKeyedModelServer(): Promise<{ server: HttpServer; port: number; authorizations: string[] }> {
+async function startKeyedModelServer(): Promise<{
+  server: HttpServer
+  port: number
+  authorizations: string[]
+  requestCount: number
+  expectAuthorization(apiKey: string): void
+}> {
   const authorizations: string[] = []
+  let expectedAuthorization: string | undefined
   const server = createHttpServer((request, response) => {
     if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
       response.statusCode = 404
       response.end()
       return
     }
-    authorizations.push(request.headers.authorization ?? '')
+    const authorization = request.headers.authorization ?? ''
+    authorizations.push(authorization)
     request.resume()
     request.on('end', () => {
+      if (authorization !== expectedAuthorization) {
+        response.statusCode = 401
+        response.setHeader('Content-Type', 'application/json')
+        response.end(JSON.stringify({ error: { message: 'invalid API key', type: 'authentication_error' } }))
+        return
+      }
       response.statusCode = 200
       response.setHeader('Content-Type', 'application/json')
-      response.end('{}')
+      response.end(JSON.stringify({
+        id: 'model-key-lifecycle-e2e',
+        object: 'chat.completion',
+        created: 0,
+        model: 'transient-e2e',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'pong' }, finish_reason: 'stop' }],
+      }))
     })
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
-  return { server, port: (server.address() as AddressInfo).port, authorizations }
+  return {
+    server,
+    port: (server.address() as AddressInfo).port,
+    authorizations,
+    get requestCount() { return authorizations.length },
+    expectAuthorization(apiKey: string) { expectedAuthorization = `Bearer ${apiKey}` },
+  }
 }

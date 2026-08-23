@@ -603,6 +603,67 @@ test('layout controls persist while hidden terminals remain mounted and online',
   }
 })
 
+test('persists both themes with titlebar-safe controls and screenshots in real Electron', async ({ launchApp }, testInfo) => {
+  test.setTimeout(90_000)
+  let app: ElectronApplication | undefined
+
+  try {
+    app = (await launchApp()).app
+    const page = await app.firstWindow()
+    await createNamedChat(page, '标题栏布局 E2E')
+    const globalChatInput = page.getByLabel('聊天输入', { exact: true })
+
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }] as const) {
+      await page.setViewportSize(viewport)
+      for (const theme of [
+        { id: 'pearl', control: '珍珠白' },
+        { id: 'graphite', control: '石墨黑' },
+      ] as const) {
+        const continuingDraft = `切换设置后继续保留的聊天草稿 ${theme.id} ${viewport.width}`
+        await globalChatInput.fill(continuingDraft)
+        const settingsButton = page.getByRole('button', { name: '设置', exact: true })
+        const settingsButtonBox = await settingsButton.boundingBox()
+        if (!settingsButtonBox) throw new Error('Expected the workbench settings action to be visible')
+        await page.mouse.click(settingsButtonBox.x + settingsButtonBox.width / 2, settingsButtonBox.y + settingsButtonBox.height / 2)
+        await expect(page.locator('.settings')).toBeVisible()
+        await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '外观', exact: true }).click()
+        await page.getByRole('group', { name: '工作台主题', exact: true }).getByRole('button', { name: theme.control }).click()
+        await expect(page.getByRole('status')).toContainText('外观已保存')
+        await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({ theme: theme.id })
+
+        const settingsScreenshot = await page.screenshot({ path: testInfo.outputPath(`settings-${theme.id}-${viewport.width}x${viewport.height}.png`) })
+        assertViewportPng(settingsScreenshot, viewport)
+        expect(await titlebarGeometry(page, '.settings-top', '.back-button', 16)).toMatchObject({
+          controlsInsetAtLeastMinimum: true,
+          controlClearsNativeButtons: true,
+          noHorizontalOverflow: true,
+        })
+
+        const backButton = page.getByRole('button', { name: '返回工作台', exact: true })
+        const backButtonBox = await backButton.boundingBox()
+        if (!backButtonBox) throw new Error('Expected the settings back action to be visible')
+        await page.mouse.click(backButtonBox.x + backButtonBox.width / 2, backButtonBox.y + backButtonBox.height / 2)
+        await expect(page.locator('.workbench-shell')).toBeVisible()
+        await expect(page.locator('.workbench-shell')).toHaveClass(new RegExp(`theme-${theme.id}`))
+        await expect(globalChatInput).toHaveValue(continuingDraft)
+
+        await page.reload()
+        await expect(page.locator('.workbench-shell')).toHaveClass(new RegExp(`theme-${theme.id}`))
+        await expect(globalChatInput).toBeEnabled()
+        const workbenchScreenshot = await page.screenshot({ path: testInfo.outputPath(`workbench-${theme.id}-${viewport.width}x${viewport.height}.png`) })
+        assertViewportPng(workbenchScreenshot, viewport)
+        expect(await titlebarGeometry(page, '.app-header', '.app-header-actions', 14)).toMatchObject({
+          controlsInsetAtLeastMinimum: true,
+          controlClearsNativeButtons: true,
+          noHorizontalOverflow: true,
+        })
+      }
+    }
+  } finally {
+    await app?.close()
+  }
+})
+
 test('collapse rails and separator keyboard bounds persist after reload', async ({ launchApp }) => {
   let app: ElectronApplication | undefined
 
@@ -1514,6 +1575,41 @@ async function within<T>(timeoutMs: number, message: string, operation: Promise<
   } finally {
     if (timeout) clearTimeout(timeout)
   }
+}
+
+async function titlebarGeometry(
+  page: Awaited<ReturnType<ElectronApplication['firstWindow']>>,
+  headerSelector: string,
+  controlSelector: string,
+  edgePadding: number,
+): Promise<{
+  controlsInset: number
+  controlsInsetAtLeastMinimum: boolean
+  controlClearsNativeButtons: boolean
+  noHorizontalOverflow: boolean
+}> {
+  return page.evaluate(({ headerSelector, controlSelector, edgePadding }) => {
+    const header = document.querySelector(headerSelector)
+    const control = document.querySelector(controlSelector)
+    if (!(header instanceof HTMLElement) || !(control instanceof HTMLElement)) {
+      throw new Error(`Missing titlebar geometry target: ${headerSelector} / ${controlSelector}`)
+    }
+    const controlsInset = Number.parseFloat(getComputedStyle(header).paddingRight) - edgePadding
+    const nativeControlsSafeX = window.innerWidth - controlsInset
+    return {
+      controlsInset,
+      controlsInsetAtLeastMinimum: controlsInset >= 138,
+      controlClearsNativeButtons: control.getBoundingClientRect().right <= nativeControlsSafeX + 0.5,
+      noHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+    }
+  }, { headerSelector, controlSelector, edgePadding })
+}
+
+function assertViewportPng(image: Buffer, viewport: { width: number; height: number }): void {
+  expect(image.length).toBeGreaterThan(24)
+  expect(image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))).toBe(true)
+  expect(image.readUInt32BE(16)).toBe(viewport.width)
+  expect(image.readUInt32BE(20)).toBe(viewport.height)
 }
 
 function closeServer(server: { close(callback: (error?: Error) => void): void }): Promise<void> {
