@@ -15,7 +15,7 @@
     "build:launcher": "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force build/launcher | Out-Null; & x86_64-w64-mingw32-g++.exe -std=c++17 -O2 -s -static -municode scripts/windows/terminal-agent-launcher.cpp -o build/launcher/putty.exe -lshell32 -ladvapi32\"",
     "make:uninstall-cleanup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/package-uninstall-cleanup.ps1",
     "make:win:unpacked": "npm run build && npm run build:launcher && electron-builder --win dir --x64",
-    "make:win": "npm run make:win:unpacked && electron-builder --win nsis --x64 && npm run make:uninstall-cleanup"
+    "make:win": "npm run make:win:unpacked && electron-builder --win nsis --x64 && npm run make:uninstall-cleanup && node scripts/windows/finalize-windows-release-artifacts.cjs"
   },
   "keywords": [],
   "author": "",

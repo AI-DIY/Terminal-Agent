@@ -10,5 +10,6 @@ describe('release integration verification command', () => {
 
     expect(packageJson.scripts['test:integration']).toBe('vitest run --config vitest.integration.config.ts')
     expect(packageJson.scripts['pretest:integration']).toBe('node scripts/release-integration-artifacts.cjs')
+    expect(packageJson.scripts['make:win']).toContain('node scripts/windows/finalize-windows-release-artifacts.cjs')
   })
 })
