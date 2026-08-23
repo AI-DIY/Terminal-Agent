@@ -1,117 +1,117 @@
-# CETA Follow-up Polish Design
+# CETA 本轮微调产品设计
 
-## Context
+## 背景
 
-The follow-up CETA review requests three focused corrections while preserving the current product layout and all existing SSH, Shell, AI workspace, model routing, and protected-storage behavior:
+本轮 CETA 修改意见要求在保留现有产品布局、SSH、Shell、AI 工作区、模型路由和受保护存储行为的前提下，完成三项针对性调整：
 
-1. remove the duplicated Terminal-Agent icon/title treatment at the top of the Windows window;
-2. replace file-based API key import with direct editing in the model connection form;
-3. remove the VLM-to-LLM API key reference feature.
+1. 消除 Windows 窗口顶部重复出现的 Terminal-Agent 图标和标题；
+2. 将基于文件的 API Key 导入改为在模型连接表单中直接编辑；
+3. 移除视觉语言模型引用大语言模型 API Key 的功能。
 
-The implementation will be developed on `codex/ceta-current-polish` and released as version `1.0.8`. It will not redesign the workbench or model architecture.
+本次实现使用 `codex/ceta-current-polish` 分支，发布版本为 `1.0.8`。不重新设计工作台或模型架构。
 
-## Selected Approach
+## 选定方案
 
-Use Electron's hidden title bar with a native title-bar overlay. The standalone Windows title-bar row and its duplicate icon disappear, while the native minimize, maximize/restore, and close controls remain in the upper-right corner. The existing application header becomes the only branded top row.
+窗口采用 Electron 隐藏标题栏配合原生标题栏覆盖层。单独占一行的 Windows 标题栏及其重复图标被隐藏，但最小化、最大化/还原和关闭按钮仍保留在右上角，并继续使用 Windows 原生行为。现有应用栏成为唯一包含产品品牌的顶部区域。
 
-API keys become transient editable form values. The renderer necessarily holds the value while the user types and sends it through the context-isolated preload API, but the main process remains the only persistence owner. It validates the value and stores it through the existing Windows protected secret store. No plaintext key is written to a profile document, returned in a renderer DTO, or restored into an edit form.
+API Key 改为表单中的临时可编辑值。用户输入期间，密钥必然短暂存在于渲染进程内存中，并通过启用上下文隔离的 preload API 发送；但主进程仍是唯一的持久化责任方。主进程负责验证密钥，并通过现有 Windows 受保护存储保存。明文密钥不会写入模型配置文档、不会通过渲染进程 DTO 返回，也不会在重新编辑配置时回填。
 
-The alternatives were rejected for these reasons:
+未选择另外两种方案，原因如下：
 
-- retaining the native title bar and removing only the in-app mark would still repeat the product name and leave the application header visually unbalanced;
-- a completely frameless window with custom controls would require reimplementing native window state, snapping, system behavior, and accessibility, which is disproportionate to this polish request.
+- 保留原生标题栏、只删除应用内图标，仍会重复显示产品名称，并导致应用栏左侧视觉失衡；
+- 使用完全无边框窗口并自绘窗口按钮，需要重新实现窗口状态、贴靠布局、系统行为和无障碍支持，不符合本次“不要大动干戈”的微调范围。
 
-## Window Chrome and Layout
+## 窗口标题栏与布局
 
-The main `BrowserWindow` uses `titleBarStyle: 'hidden'` with `titleBarOverlay`; it does not use `frame: false`. Electron and Windows continue to own the minimize, maximize/restore, and close buttons, including their native hover behavior, accessibility, system snapping, and maximized state.
+主窗口 `BrowserWindow` 使用 `titleBarStyle: 'hidden'` 和 `titleBarOverlay`，不使用 `frame: false`。最小化、最大化/还原和关闭按钮仍由 Electron 与 Windows 提供，包括原生悬停效果、无障碍行为、系统贴靠和最大化状态。
 
-The overlay height matches the workbench application header. The application header and Settings header reserve a stable right inset for the window controls at supported desktop and constrained sizes. Product-owned buttons, inputs, links, menus, splitters, and other interactive elements are explicitly non-draggable. The remaining blank header surface and brand area are draggable. The layout must not place Settings, current-task text, or any other action under the native controls.
+标题栏覆盖层高度与工作台应用栏一致。应用栏和设置页顶部栏都为右侧窗口控制按钮预留稳定空间，并适配支持的桌面尺寸和受限窗口尺寸。应用自身的按钮、输入框、链接、菜单、分隔条以及其他交互元素明确设置为不可拖动；其余顶部栏空白区域和品牌区域可以拖动窗口。设置按钮、当前任务文字及其他操作不得进入原生窗口按钮区域。
 
-The overlay palette follows the saved pearl or graphite theme. Initial window creation uses the persisted theme, and saving a new appearance updates the overlay color and symbol color through the main process without recreating the window. The header background and overlay background must read as one continuous row.
+标题栏覆盖层配色跟随已保存的珍珠白或石墨黑主题。窗口首次创建时读取持久化主题；用户保存新主题后，主进程直接更新覆盖层背景色和按钮符号颜色，不重新创建窗口。应用栏背景和覆盖层背景在视觉上必须保持为同一连续区域。
 
-The existing `TA + Terminal-Agent` in-app brand remains the sole brand mark. Workbench columns, sidebar dimensions, Shell sizing, navigation, and content hierarchy do not otherwise change.
+应用内现有的 `TA + Terminal-Agent` 保留为唯一品牌标识。除此之外，不改变工作台列结构、侧栏尺寸、Shell 高度、导航方式和内容层级。
 
-## Direct API Key Editing
+## API Key 在线编辑
 
-Both LLM and VLM connection editors use the same credential behavior:
+大语言模型和视觉语言模型连接编辑器使用相同的密钥交互规则：
 
-- new profiles expose an editable password input;
-- existing profiles return only `hasApiKey`, never the key itself;
-- an existing key produces the placeholder `已配置密钥，留空则保留`;
-- leaving the field empty omits the key from save and test requests, preserving or resolving the stored key;
-- entering a value replaces the stored key on save;
-- the visibility icon toggles only the current transient field value;
-- after save or test completes, the component clears the transient value;
-- a separate clear action removes the protected key after confirmation.
+- 新建配置时显示可编辑的密码输入框；
+- 编辑已有配置时只返回 `hasApiKey` 状态，不返回密钥本身；
+- 已配置密钥时，输入框提示为“已配置密钥，留空则保留”；
+- 输入框留空时，保存和测试请求不携带密钥，从而保留或使用已有受保护密钥；
+- 输入新值并保存时，替换已有受保护密钥；
+- 显示/隐藏图标只切换当前临时输入值的可见性；
+- 保存或测试结束后，组件立即清空临时输入值；
+- 已有密钥提供单独的清除操作，并在执行前要求确认。
 
-Connection testing accepts an unsaved transient key. For an existing profile with an empty field, testing resolves its stored key in the main process. For a new non-Ollama profile without a key, the existing actionable validation error remains. Testing never persists a transient key; saving does.
+连接测试可以使用尚未保存的临时密钥。对于已有配置，如果输入框为空，主进程使用已保存密钥进行测试。对于没有密钥的新建非 Ollama 配置，继续返回现有的可操作验证错误。测试操作绝不持久化临时密钥，只有保存操作会持久化。
 
-Clearing a key from an active non-Ollama profile also deactivates that route and records the existing explicit no-route choice, because an active profile must not remain apparently usable without its required credential. Ollama profiles may remain active without a key. The UI refreshes the profile status after clearing.
+清除处于激活状态的非 Ollama 配置密钥时，同时取消该模型路由的激活状态，并记录现有的“明确不选择路由”状态，避免界面继续将缺少必需密钥的配置显示为可用。Ollama 配置可以在没有密钥的情况下保持激活。清除完成后，界面刷新配置的密钥和激活状态。
 
-The preload and IPC boundary validates a maximum 4096-byte credential and accepts it only on model save or connection-test requests. Error messages and provider failures continue to redact credentials. Central renderer stores never retain the plaintext key; it lives in component-local state only for the active request.
+preload 与 IPC 边界只在模型保存或连接测试请求中接收密钥，并验证其最大长度为 4096 字节。错误信息和模型提供方失败信息继续执行密钥脱敏。渲染进程的共享状态仓库不保存明文密钥；明文只存在于当前编辑组件的局部状态和正在执行的请求中。
 
-The file picker, `导入密钥` buttons and copy, file-import service, and `settings:models:key:import` channel are removed.
+删除文件选择器、“导入密钥”按钮及文案、文件导入服务和 `settings:models:key:import` 通道。
 
-## Removing API Key References
+## 移除 API Key 引用
 
-`apiKeyProfileId` is removed from current public input types, renderer DTOs, profile validation, current persisted profile records, delete guards, credential resolution, and the model editor. Every LLM and VLM profile owns at most one protected credential under its existing profile-specific secret key.
+从当前公开输入类型、渲染进程 DTO、模型配置验证、当前持久化配置、删除保护、密钥解析和模型编辑器中移除 `apiKeyProfileId`。每个大语言模型或视觉语言模型配置最多拥有一个以自身配置 ID 存储的受保护密钥。
 
-Existing version-1 profile documents remain compatible. Repository migration creates a version-2 document, removes `apiKeyProfileId` from profile records, and records only the pending source-to-target copy pairs in migration metadata. The service then processes those pairs serially:
+现有版本 1 模型配置文档继续兼容。仓库迁移会生成版本 2 文档，从模型配置记录中删除 `apiKeyProfileId`，并仅在迁移元数据中记录待处理的源配置到目标配置复制关系。服务按顺序处理这些关系：
 
-1. if the VLM already has its own key, keep it;
-2. otherwise load and validate the referenced LLM key;
-3. when valid, save a copy under the VLM profile's protected key;
-4. when missing or invalid, leave the VLM profile present but report `hasApiKey: false`;
-5. if such a non-Ollama VLM was active but has no resulting key, clear the active VLM route;
-6. durably clear the pending migration metadata after all copies have been handled.
+1. 如果视觉语言模型已有自己的密钥，则保留该密钥；
+2. 否则读取并验证被引用的大语言模型密钥；
+3. 密钥有效时，将其复制到视觉语言模型自己的受保护存储项；
+4. 密钥缺失或无效时，保留视觉语言模型配置，但将其显示为未配置密钥；
+5. 如果该非 Ollama 视觉语言模型原本处于激活状态，但迁移后仍无密钥，则清除视觉语言模型激活路由；
+6. 全部复制关系处理完成后，持久化清除待处理迁移元数据。
 
-The ordering is crash-safe and idempotent: protected target keys are saved before migration metadata is cleared, so a restart can repeat without losing credentials. The source LLM credential is not removed because its owning LLM profile still uses it.
+迁移顺序支持崩溃恢复并具有幂等性：先保存目标配置的受保护密钥，再清除迁移元数据；如果中途退出，重启后可以安全重复。被引用的大语言模型密钥不会被删除，因为其所属的大语言模型配置仍需要使用该密钥。
 
-New version-2 documents cannot contain a key reference. Deleting an LLM no longer checks for VLM dependants after migration.
+新建的版本 2 文档不能包含密钥引用。迁移完成后，删除大语言模型不再检查依赖其密钥的视觉语言模型。
 
-## Component Boundaries
+## 组件边界
 
-- `src/main/main.ts`: native hidden-title-bar overlay creation, initial theme palette, and window wiring.
-- workbench appearance settings handler/service boundary: update the overlay palette after a theme save.
-- `WorkbenchShell.vue` and `SettingsView.vue`: drag regions, non-drag controls, and stable window-control insets.
-- `ModelProfileManager.vue`: component-local credential input, visibility toggle, replace/clear actions, and removal of import/reference UI.
-- renderer model profile store and preload API: forward transient save/test credentials without retaining them, and expose clear-key behavior.
-- shared validation/contracts: accept transient credential input while keeping output DTOs secret-free; remove current reference fields.
-- settings IPC handlers: replace import IPC with validated save/test and clear behavior from a trusted renderer.
-- model profile repository/service: version-2 reference migration, profile-owned secret resolution, clearing, and rollback behavior.
-- obsolete file-import service: removed with its tests and main-process construction.
+- `src/main/main.ts`：创建隐藏标题栏和原生覆盖层、设置初始主题配色并完成窗口接线；
+- 工作台外观设置处理器和服务边界：保存主题后更新标题栏覆盖层配色；
+- `WorkbenchShell.vue` 和 `SettingsView.vue`：配置可拖动区域、不可拖动控件以及稳定的窗口按钮避让空间；
+- `ModelProfileManager.vue`：维护组件局部密钥输入、显示/隐藏、替换与清除操作，并移除导入和引用界面；
+- 渲染进程模型配置仓库和 preload API：转发临时保存/测试密钥但不保存明文，并公开清除密钥操作；
+- 共享验证与契约：允许请求携带临时密钥，同时保证输出 DTO 不含密钥，并删除当前引用字段；
+- 设置 IPC 处理器：移除导入 IPC，由受信渲染进程调用经过验证的保存、测试和清除行为；
+- 模型配置仓库和服务：完成版本 2 引用迁移、配置自有密钥解析、密钥清除和失败回滚；
+- 已废弃的文件导入服务：连同对应测试和主进程实例化代码一起删除。
 
-## Error Handling and Security
+## 错误处理与安全
 
-- A failed key validation does not modify the profile document or protected secret.
-- A failed profile save restores the prior protected key.
-- A failed clear operation restores the prior document or secret so profile state and credential state do not diverge.
-- A failed reference migration remains retryable until the pending metadata can be durably cleared.
-- Provider errors, logs, renderer DTOs, persisted JSON, and test artifacts must not contain entered credentials.
-- The renderer sender check, context isolation, sandbox, and disabled Node integration remain unchanged.
-- Window chrome changes must not obstruct native controls, application actions, keyboard navigation, or pointer interaction.
+- 密钥验证失败时，不修改模型配置文档或受保护密钥；
+- 模型配置保存失败时，恢复之前的受保护密钥；
+- 密钥清除失败时，恢复之前的配置文档或密钥，避免配置状态与密钥状态不一致；
+- 引用迁移执行失败时，在迁移元数据被可靠清除前保持可重试状态；
+- 模型提供方错误、日志、渲染进程 DTO、持久化 JSON 和测试产物不得包含用户输入的密钥；
+- 保留渲染进程来源校验、上下文隔离、沙箱以及禁用 Node 集成的现有设置；
+- 窗口标题栏修改不得遮挡原生窗口按钮、应用操作、键盘导航或指针交互。
 
-## Testing and Verification
+## 测试与验证
 
-Implementation follows test-driven development.
+实现过程遵循测试驱动开发。
 
-1. Add failing unit contracts for hidden-title-bar overlay options, preserved native controls, drag/no-drag regions, right-side control insets, and theme palette updates.
-2. Add failing UI/store/preload/IPC tests for direct key entry, password visibility, empty-value preservation, unsaved-key testing, replacement, clearing, and absence of import/reference behavior.
-3. Add failing repository/service migration tests for successful reference copying, pre-existing VLM keys, missing/invalid source keys, active-route correction, idempotent retry, and secret-free DTOs/documents.
-4. Implement the minimum production changes required by those tests.
-5. Run focused suites, then `npm test`, `npm run lint`, `npm run build`, `npm run test:e2e`, and `npm run test:integration`.
-6. Exercise a fake local provider through the real Electron UI to prove direct entry, test-without-save, save, edit-without-echo, replacement, and clear behavior.
-7. Capture and inspect workbench and Settings screenshots at desktop and constrained sizes in pearl and graphite themes. Verify one brand mark, visible native window controls, correct drag regions, no overlap, and no clipped credential controls.
-8. Update release metadata to `1.0.8`, build the Windows installer and cleanup archive, smoke-test the packaged executable, and record the installer path, size, and SHA-256 checksum.
+1. 先添加失败的单元测试，约束隐藏标题栏覆盖参数、原生窗口按钮保留、可拖动/不可拖动区域、右侧按钮避让空间和主题配色更新；
+2. 添加失败的界面、状态仓库、preload 和 IPC 测试，覆盖直接输入、密码可见性、空值保留、使用未保存密钥测试、替换、清除以及导入/引用功能消失；
+3. 添加失败的仓库和服务迁移测试，覆盖引用复制成功、视觉语言模型已有独立密钥、源密钥缺失或无效、激活路由修正、幂等重试以及 DTO/文档不含密钥；
+4. 实现满足这些测试所需的最小生产代码修改；
+5. 依次运行聚焦测试、`npm test`、`npm run lint`、`npm run build`、`npm run test:e2e` 和 `npm run test:integration`；
+6. 通过真实 Electron 界面连接本地模拟模型服务，验证直接输入、测试但不保存、保存、重新编辑不回显、替换和清除；
+7. 在珍珠白和石墨黑主题下，以桌面尺寸和受限窗口尺寸截取并检查工作台与设置页，确认只有一组品牌标识、原生窗口按钮可见、拖动区域正确、无控件重叠且密钥控件不被裁切；
+8. 将发布元数据更新为 `1.0.8`，构建 Windows 安装包和卸载清理压缩包，冒烟测试打包后的可执行程序，并记录安装包路径、大小和 SHA-256 校验值。
 
-## Acceptance Criteria
+## 验收标准
 
-- Only one Terminal-Agent icon/title treatment is visible in the application chrome.
-- Native minimize, maximize/restore, and close buttons remain visible and functional.
-- The workbench and Settings layouts remain balanced and unobstructed at supported window sizes.
-- LLM and VLM API keys can be entered and replaced directly in their connection forms.
-- Stored credentials are never returned to or displayed by the renderer.
-- File-based key import and all API key reference UI/runtime behavior are absent.
-- Existing referenced VLM credentials migrate to profile-owned protected storage when available, without deleting the source LLM credential.
-- Existing model profiles, activation choices, routing, SSH behavior, Shell history, and AI workspace behavior remain available.
-- All automated and visual verification passes, and a testable `1.0.8` Windows installer is produced.
+- 应用窗口顶部只显示一组 Terminal-Agent 图标和标题；
+- 原生最小化、最大化/还原和关闭按钮保持可见且功能正常；
+- 工作台和设置页在支持的窗口尺寸下布局平衡，没有控件被窗口按钮遮挡；
+- 大语言模型和视觉语言模型 API Key 均可在连接表单中直接输入和替换；
+- 已保存密钥不会返回渲染进程，也不会显示在界面中；
+- 基于文件的密钥导入和全部 API Key 引用界面及运行时行为均被移除；
+- 现有视觉语言模型引用的密钥在可用时迁移到自身受保护存储，且不会删除源大语言模型密钥；
+- 现有模型配置、激活选择、模型路由、SSH、Shell 历史和 AI 工作区行为继续可用；
+- 全部自动化验证和视觉验证通过，并生成可供测试的 `1.0.8` Windows 安装包。
