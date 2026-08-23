@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   windows: [] as Array<{
     webContents: { send: ReturnType<typeof vi.fn> }
     options: { show?: boolean }
+    isDestroyed: ReturnType<typeof vi.fn>
     setTitleBarOverlay: ReturnType<typeof vi.fn>
     shown: boolean
     emitClosed(): void
@@ -18,6 +19,8 @@ const state = vi.hoisted(() => ({
   workbenchPreferencesConstructor: vi.fn(),
   registerWorkbenchSettingsHandlers: vi.fn(),
   disposeWorkbenchSettingsHandlers: vi.fn(),
+  ipcHandlers: new Map<string, (event: { sender: unknown }, input?: unknown) => unknown>(),
+  workbenchSaveTheme: vi.fn(),
   setApplicationMenu: vi.fn(),
 }))
 
@@ -28,6 +31,8 @@ vi.mock('electron', () => {
     private readonly listeners = new Map<string, Array<() => void>>()
     loadURL = vi.fn().mockResolvedValue(undefined)
     loadFile = vi.fn().mockResolvedValue(undefined)
+    private destroyed = false
+    isDestroyed = vi.fn(() => this.destroyed)
     setTitleBarOverlay = vi.fn()
     shown = false
     readonly options: { show?: boolean }
@@ -44,7 +49,10 @@ vi.mock('electron', () => {
       listeners.push(listener)
       this.listeners.set(event, listeners)
     }
-    emitClosed() { for (const listener of this.listeners.get('closed') ?? []) listener() }
+    emitClosed() {
+      this.destroyed = true
+      for (const listener of this.listeners.get('closed') ?? []) listener()
+    }
     emitReadyToShow() { for (const listener of this.listeners.get('ready-to-show') ?? []) listener() }
   }
 
@@ -63,7 +71,12 @@ vi.mock('electron', () => {
       decryptString: vi.fn(), encryptString: vi.fn(), isEncryptionAvailable: vi.fn(() => true),
     },
     dialog: { showOpenDialog: vi.fn() },
-    ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+    ipcMain: {
+      handle: vi.fn((channel: string, handler: (event: { sender: unknown }, input?: unknown) => unknown) => {
+        state.ipcHandlers.set(channel, handler)
+      }),
+      removeHandler: vi.fn((channel: string) => { state.ipcHandlers.delete(channel) }),
+    },
   }
 })
 
@@ -82,9 +95,23 @@ vi.mock('../../../src/main/chat/register-chat-handlers', () => ({ registerChatHa
 vi.mock('../../../src/main/settings/workbench-preferences-service', () => ({
   WorkbenchPreferencesService: class WorkbenchPreferencesService {
     constructor(readonly path: string) { state.workbenchPreferencesConstructor(path) }
+    saveTheme(theme: 'pearl' | 'graphite') { return state.workbenchSaveTheme(theme) }
   },
 }))
-vi.mock('../../../src/main/settings/register-workbench-settings-handlers', () => ({ registerWorkbenchSettingsHandlers: state.registerWorkbenchSettingsHandlers }))
+vi.mock('../../../src/main/settings/register-workbench-settings-handlers', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../src/main/settings/register-workbench-settings-handlers')>()
+  return {
+    ...actual,
+    registerWorkbenchSettingsHandlers: (...args: Parameters<typeof actual.registerWorkbenchSettingsHandlers>) => {
+      state.registerWorkbenchSettingsHandlers(...args)
+      const dispose = actual.registerWorkbenchSettingsHandlers(...args)
+      return () => {
+        state.disposeWorkbenchSettingsHandlers()
+        dispose()
+      }
+    },
+  }
+})
 vi.mock('../../../src/main/access-client/single-instance', () => ({ configureAccessClientSingleInstance: vi.fn(() => false) }))
 vi.mock('../../../src/main/observation/register-session-observation', () => ({ registerSessionObservation: vi.fn(() => vi.fn()) }))
 vi.mock('../../../src/main/ipc/register-handlers', () => ({ registerSessionHandlers: vi.fn(() => vi.fn()) }))
@@ -97,7 +124,6 @@ vi.mock('../../../src/main/agent/register-agent-handlers', () => ({ registerAgen
 vi.mock('../../../src/main/settings/register-settings-handlers', () => ({ registerSettingsHandlers: vi.fn(() => vi.fn()) }))
 
 state.registerChatHandlers.mockReturnValue(state.disposeChatHandlers)
-state.registerWorkbenchSettingsHandlers.mockReturnValue(state.disposeWorkbenchSettingsHandlers)
 const { createMainWindow } = await import('../../../src/main/main')
 
 describe('main chat lifecycle', () => {
@@ -142,6 +168,22 @@ describe('main chat lifecycle', () => {
     window.emitClosed()
     expect(state.disposeChatHandlers).toHaveBeenCalledOnce()
     expect(state.disposeWorkbenchSettingsHandlers).toHaveBeenCalledOnce()
+  })
+
+  it('finishes an in-flight theme save without touching a destroyed native title bar', async () => {
+    const saved = deferred<{ theme: 'graphite' }>()
+    state.workbenchSaveTheme.mockImplementationOnce(() => saved.promise)
+    const window = createMainWindow() as unknown as (typeof state.windows)[number]
+    const saveTheme = state.ipcHandlers.get('settings:workbench:save-theme')
+    const saving = saveTheme?.({ sender: window.webContents }, 'pearl')
+
+    expect(state.workbenchSaveTheme).toHaveBeenCalledWith('pearl')
+    window.emitClosed()
+    saved.resolve({ theme: 'graphite' })
+
+    await expect(saving).resolves.toEqual({ theme: 'graphite' })
+    expect(window.setTitleBarOverlay).not.toHaveBeenCalled()
+    expect(window.isDestroyed).toHaveBeenCalledOnce()
   })
 })
 

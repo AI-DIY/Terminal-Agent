@@ -246,7 +246,9 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
     () => {
       if (mainWindow === rendererWindow) rendererWindow.show()
     },
-    theme => rendererWindow.setTitleBarOverlay(titleBarOverlayForTheme(theme)),
+    theme => {
+      if (!rendererWindow.isDestroyed()) rendererWindow.setTitleBarOverlay(titleBarOverlayForTheme(theme))
+    },
   )
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL
