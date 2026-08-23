@@ -192,11 +192,40 @@ describe('ModelProfileService', () => {
       profiles: [{ id: 'active', kind: 'llm', name: 'Active', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
       activeLlmId: 'active', activeVlmId: null, routing: 'combined', migrations: {},
     })
-    secrets.remove.mockRejectedValueOnce(new Error('secret store unavailable'))
+    const removeError = new Error('secret store unavailable')
+    secrets.remove.mockRejectedValueOnce(removeError)
 
-    await expect(service.clearApiKey('active')).rejects.toThrow('secret store unavailable')
+    await expect(service.clearApiKey('active')).rejects.toBe(removeError)
 
     expect(getDocument()).toMatchObject({ activeLlmId: 'active' })
+    expect(repository.save).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports both key removal and document restoration failures when clearing an active key', async () => {
+    const { service, repository, secrets, getDocument } = createService({
+      version: 2,
+      profiles: [{ id: 'active', kind: 'llm', name: 'Active', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
+      activeLlmId: 'active', activeVlmId: null, routing: 'combined', migrations: {},
+    })
+    const removeError = new Error('secret store unavailable')
+    const restoreError = new Error('document restore unavailable')
+    const defaultSave = repository.save.getMockImplementation() as (next: ModelProfileDocument) => Promise<void>
+    repository.save
+      .mockImplementationOnce(defaultSave)
+      .mockRejectedValueOnce(restoreError)
+    secrets.remove.mockRejectedValueOnce(removeError)
+
+    let caught: unknown
+    try {
+      await service.clearApiKey('active')
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError)
+    expect((caught as AggregateError).errors).toEqual([removeError, restoreError])
+    expect((caught as Error).message).toContain('state may be inconsistent')
+    expect(getDocument()).toMatchObject({ activeLlmId: null, autoActivateLlm: false })
     expect(repository.save).toHaveBeenCalledTimes(2)
   })
 
@@ -218,14 +247,36 @@ describe('ModelProfileService', () => {
     const protectedKeys = new Map<string, string>()
     secrets.save.mockImplementation(async (key: string, value: string) => { protectedKeys.set(key, value) })
     secrets.remove.mockImplementation(async (key: string) => { protectedKeys.delete(key) })
-    repository.save.mockRejectedValueOnce(new Error('disk unavailable'))
+    const persistenceError = new Error('disk unavailable')
+    repository.save.mockRejectedValueOnce(persistenceError)
 
     await expect(service.save({
       kind: 'llm', name: 'new', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000, apiKey: 'new-secret',
-    })).rejects.toThrow('disk unavailable')
+    })).rejects.toBe(persistenceError)
 
     expect([...protectedKeys.keys()]).toEqual([])
     expect(getDocument().profiles).toEqual([])
+  })
+
+  it('reports both profile persistence and new-key cleanup failures', async () => {
+    const { service, repository, secrets } = createService()
+    const persistenceError = new Error('disk unavailable')
+    const rollbackError = new Error('secret cleanup unavailable')
+    repository.save.mockRejectedValueOnce(persistenceError)
+    secrets.remove.mockRejectedValueOnce(rollbackError)
+
+    let caught: unknown
+    try {
+      await service.save({
+        kind: 'llm', name: 'new', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000, apiKey: 'new-secret',
+      })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError)
+    expect((caught as AggregateError).errors).toEqual([persistenceError, rollbackError])
+    expect((caught as Error).message).toContain('state may be inconsistent')
   })
 
   it('restores an existing direct key when saving its profile update fails', async () => {
@@ -238,12 +289,39 @@ describe('ModelProfileService', () => {
     secrets.load.mockImplementation(async (key: string) => protectedKeys.get(key) ?? null)
     secrets.save.mockImplementation(async (key: string, value: string) => { protectedKeys.set(key, value) })
     secrets.remove.mockImplementation(async (key: string) => { protectedKeys.delete(key) })
-    repository.save.mockRejectedValueOnce(new Error('disk unavailable'))
+    const persistenceError = new Error('disk unavailable')
+    repository.save.mockRejectedValueOnce(persistenceError)
 
-    await expect(service.saveApiKey('existing', 'new-secret')).rejects.toThrow('disk unavailable')
+    await expect(service.saveApiKey('existing', 'new-secret')).rejects.toBe(persistenceError)
 
     expect(protectedKeys.get('model-profile.existing.apiKey')).toBe('old-secret')
     expect(getDocument().activeLlmId).toBeNull()
+  })
+
+  it('reports both activation persistence and previous-key restoration failures', async () => {
+    const { service, repository, secrets } = createService({
+      version: 2,
+      profiles: [{ id: 'existing', kind: 'llm', name: 'existing', provider: 'openai', model: 'gpt-5', endpoint, contextLimit: 8_000 }],
+      activeLlmId: null, activeVlmId: null, routing: 'combined', migrations: {},
+    })
+    const persistenceError = new Error('disk unavailable')
+    const rollbackError = new Error('secret restore unavailable')
+    secrets.load.mockResolvedValue('old-secret')
+    secrets.save
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(rollbackError)
+    repository.save.mockRejectedValueOnce(persistenceError)
+
+    let caught: unknown
+    try {
+      await service.saveApiKey('existing', 'new-secret')
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError)
+    expect((caught as AggregateError).errors).toEqual([persistenceError, rollbackError])
+    expect((caught as Error).message).toContain('state may be inconsistent')
   })
 
   it('serializes routed reads behind an in-flight profile save', async () => {

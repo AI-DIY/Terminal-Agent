@@ -88,9 +88,19 @@ export class ModelProfileService {
 
       try {
         await this.repository.save(next)
-      } catch (error) {
-        if (apiKey) await this.restoreSecret(secretKey(id), previousApiKey)
-        throw error
+      } catch (persistenceError) {
+        if (apiKey) {
+          try {
+            await this.restoreSecret(secretKey(id), previousApiKey)
+          } catch (rollbackError) {
+            throw stateUncertainError(
+              'Failed to persist the model profile and restore its API key; protected credential state may be inconsistent',
+              persistenceError,
+              rollbackError,
+            )
+          }
+        }
+        throw persistenceError
       }
       return this.toRendererProfile(profile, next, apiKey)
     })
@@ -364,9 +374,17 @@ export class ModelProfileService {
           : document
       try {
         if (next !== document) await this.repository.save(next)
-      } catch (error) {
-        await this.restoreSecret(secretKey(id), previousApiKey)
-        throw error
+      } catch (persistenceError) {
+        try {
+          await this.restoreSecret(secretKey(id), previousApiKey)
+        } catch (rollbackError) {
+          throw stateUncertainError(
+            'Failed to persist API-key activation and restore the previous API key; protected credential state may be inconsistent',
+            persistenceError,
+            rollbackError,
+          )
+        }
+        throw persistenceError
       }
       return this.toRendererProfile(profile, next, value)
     })
@@ -391,9 +409,19 @@ export class ModelProfileService {
       if (next !== document) await this.repository.save(next)
       try {
         await this.secrets.remove(secretKey(profile.id))
-      } catch (error) {
-        if (next !== document) await this.repository.save(document).catch(() => undefined)
-        throw error
+      } catch (removeError) {
+        if (next !== document) {
+          try {
+            await this.repository.save(document)
+          } catch (restoreError) {
+            throw stateUncertainError(
+              'Failed to remove the model API key and restore active profile state; model routing state may be inconsistent',
+              removeError,
+              restoreError,
+            )
+          }
+        }
+        throw removeError
       }
       return this.toRendererProfile(profile, next, null)
     })
@@ -438,12 +466,8 @@ export class ModelProfileService {
   }
 
   private async restoreSecret(key: string, previousValue: string | null): Promise<void> {
-    try {
-      if (previousValue === null) await this.secrets.remove(key)
-      else await this.secrets.save(key, previousValue)
-    } catch {
-      // Preserve the original persistence error when protected-storage rollback is unavailable.
-    }
+    if (previousValue === null) await this.secrets.remove(key)
+    else await this.secrets.save(key, previousValue)
   }
 
   private async mutate<T>(operation: () => Promise<T>): Promise<T> {
@@ -455,4 +479,8 @@ export class ModelProfileService {
 
 function secretKey(id: string): string {
   return `model-profile.${id}.apiKey`
+}
+
+function stateUncertainError(message: string, primaryError: unknown, compensationError: unknown): AggregateError {
+  return new AggregateError([primaryError, compensationError], message)
 }
