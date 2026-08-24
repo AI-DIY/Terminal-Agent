@@ -1646,10 +1646,9 @@ npm test
 npm run lint
 npm run build
 npm run test:e2e
-npm run test:integration
 ```
 
-预期：全部退出 0。任何失败都必须先使用 `superpowers:systematic-debugging` 确定根因，修复后重新运行失败命令和可能受影响的后续命令。
+预期：四个命令均退出 0。`test:integration` 必须在任务 9 生成 `release/win-unpacked` 中的运行时和桥接程序后执行；不得将缺少打包产物时的失败当作集成验证结果。任何失败都必须先使用 `superpowers:systematic-debugging` 确定根因，修复后重新运行失败命令和可能受影响的后续命令。
 
 - [ ] **步骤 5：执行敏感信息和移除功能审计**
 
@@ -1697,13 +1696,23 @@ npm run make:win
 - [ ] **步骤 3：检查发布产物和校验值**
 
 ```powershell
-Get-Item release/Terminal-Agent-Setup-1.0.8.exe,release/Terminal-Agent-Setup-1.0.8.exe.blockmap,release/Terminal-Agent-Uninstall-Cleanup-1.0.8.zip,release/putty.exe | Select-Object FullName,Length,LastWriteTime
+Get-Item release/win-unpacked/Terminal-Agent-runtime.exe,release/win-unpacked/putty.exe,release/Terminal-Agent-Setup-1.0.8.exe,release/Terminal-Agent-Setup-1.0.8.exe.blockmap,release/Terminal-Agent-Uninstall-Cleanup-1.0.8.zip,release/putty.exe | Select-Object FullName,Length,LastWriteTime
 Get-FileHash release/Terminal-Agent-Setup-1.0.8.exe -Algorithm SHA256
 ```
 
 预期：所有文件非空；记录安装包绝对路径、字节数、生成时间和 SHA-256。
 
-- [ ] **步骤 4：冒烟测试打包后的窗口和原生按钮**
+- [ ] **步骤 4：在打包产物上运行 Windows 集成测试**
+
+运行：
+
+```powershell
+npm run test:integration
+```
+
+预期：退出码为 0，所有 Windows 发布启动器测试均以 `release/win-unpacked/Terminal-Agent-runtime.exe` 和 `release/win-unpacked/putty.exe` 为输入执行。该结果才可作为打包产物的集成验证证据；本步骤不会替代下一步对真实 Windows 窗口按钮的人工验收。
+
+- [ ] **步骤 5：冒烟测试打包后的窗口和原生按钮**
 
 使用临时用户数据目录启动：
 
@@ -1713,7 +1722,7 @@ release\win-unpacked\Terminal-Agent-runtime.exe --user-data-dir="$env:TEMP\termi
 
 通过 Windows 屏幕截图检查真实窗口，而不仅是 WebContents：顶部独立标题栏不再出现，右上角原生最小化、最大化/还原和关闭按钮可见。依次实际点击最小化、还原、最大化/还原；最后从应用内进入设置并返回工作台，再正常关闭程序。
 
-- [ ] **步骤 5：执行最终完成审计**
+- [ ] **步骤 6：执行最终完成审计**
 
 ```powershell
 git status --short --branch
