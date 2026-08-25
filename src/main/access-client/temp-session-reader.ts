@@ -88,6 +88,7 @@ function encodingForLineCodePage(lineCodePage: string | undefined): string | und
     case '65001':
       return 'utf-8'
     case '936':
+    case 'cp936':
     case 'gbk':
     case 'gb2312':
     case 'gb18030':

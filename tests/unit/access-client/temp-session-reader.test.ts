@@ -10,7 +10,7 @@ describe('readTempSession', () => {
         'PortNumber=22',
         'UserName=test-user',
         'Protocol=ssh',
-        'LineCodePage=936',
+        'LineCodePage=CP936',
         'WinTitle=AI',
       ].join('\n'), 'ascii'),
       Buffer.from('d6d0cca8', 'hex'),
