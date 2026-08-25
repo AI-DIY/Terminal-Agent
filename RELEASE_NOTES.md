@@ -1,3 +1,18 @@
+# Terminal-Agent v1.0.11
+
+Release date: 2026-08-25
+
+## AccessClient and model-profile refinements
+
+- Decodes Access Client temporary-profile titles using the declared `LineCodePage`, including `CP936`, GBK, GB2312, and GB18030, so titles such as `AI中台_10.54.98.34` display correctly.
+- Positions the content of both LLM and VLM connection rows at the actual left edge of their cards, rather than retaining inherited centered button content.
+
+## Windows release assets after packaging
+
+- A Windows package made with `npm run make:win`, or a published release, will generate `Terminal-Agent-Setup-1.0.11.exe`, the standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.11.zip`.
+
+---
+
 # Terminal-Agent v1.0.10
 
 Release date: 2026-08-25

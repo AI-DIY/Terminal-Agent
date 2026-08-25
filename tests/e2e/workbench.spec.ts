@@ -1563,6 +1563,38 @@ test('opens an AccessClient temporary SSH session with its title and initial ter
   }
 })
 
+test('displays a CP936 AccessClient temporary session title without garbling', async ({ launchApp }) => {
+  const sshServer = await startSshServer()
+  const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-access-client-cp936-'))
+  const profilePath = join(directory, 'session.conf')
+  let app: ElectronApplication | undefined
+
+  try {
+    await writeFile(profilePath, Buffer.concat([
+      Buffer.from([
+        'HostName=127.0.0.1',
+        `PortNumber=${sshServer.port}`,
+        'UserName=ops',
+        'Protocol=ssh',
+        'LineCodePage=CP936',
+        'WinTitle=AI',
+      ].join('\n'), 'ascii'),
+      Buffer.from('d6d0cca8', 'hex'),
+      Buffer.from('_10.54.98.34\nTermWidth=120\nTermHeight=40', 'ascii'),
+    ]))
+    app = (await launchApp(['--', '-load', `tmp:${profilePath}`, '-pw', 'secret'])).app
+    const page = await app.firstWindow()
+
+    await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: '选择终端会话 AI中台_10.54.98.34' })).toBeVisible()
+    await expect.poll(() => sshServer.ptySizes).toContainEqual({ columns: 120, rows: 40 })
+  } finally {
+    await app?.close()
+    await closeServer(sshServer.server)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('adds a visible terminal session when AccessClient starts a second Electron instance', async ({ launchApp }) => {
   const rawServer = createServer()
   rawServer.listen(0, '127.0.0.1')
