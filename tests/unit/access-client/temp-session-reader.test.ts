@@ -3,6 +3,43 @@ import { readTempSession } from '../../../src/main/access-client/temp-session-re
 import { AccessClientLaunchFailure } from '../../../src/main/access-client/launch-failure'
 
 describe('readTempSession', () => {
+  it('decodes a CP936 temporary profile title using its declared line code page', async () => {
+    const temporaryProfile = Buffer.concat([
+      Buffer.from([
+        'HostName=10.54.98.34',
+        'PortNumber=22',
+        'UserName=test-user',
+        'Protocol=ssh',
+        'LineCodePage=936',
+        'WinTitle=AI',
+      ].join('\n'), 'ascii'),
+      Buffer.from('d6d0cca8', 'hex'),
+      Buffer.from('_10.54.98.34\n', 'ascii'),
+    ])
+
+    await expect(readTempSession('C:\\temp\\access-client-cp936.conf', async () => temporaryProfile)).resolves.toMatchObject({
+      title: 'AI中台_10.54.98.34',
+    })
+  })
+
+  it('rejects malformed bytes for a declared CP936 temporary profile', async () => {
+    const temporaryProfile = Buffer.concat([
+      Buffer.from([
+        'HostName=10.54.98.34',
+        'PortNumber=22',
+        'UserName=test-user',
+        'Protocol=ssh',
+        'LineCodePage=GBK',
+        'WinTitle=',
+      ].join('\n'), 'ascii'),
+      Buffer.from([0xff]),
+      Buffer.from('\n', 'ascii'),
+    ])
+
+    await expect(readTempSession('C:\\temp\\access-client-malformed-gbk.conf', async () => temporaryProfile))
+      .rejects.toMatchObject({ code: 'temporary-profile-invalid' } satisfies Partial<AccessClientLaunchFailure>)
+  })
+
   it('defaults an AccessClient direct-mode temporary profile without Protocol to SSH', async () => {
     await expect(readTempSession('C:\\temp\\access-client.conf', async () => Buffer.from([
       'NoRemoteWinTitle=0',

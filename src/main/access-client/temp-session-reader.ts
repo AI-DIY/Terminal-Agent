@@ -1,4 +1,5 @@
 import { readFile as readFileFromDisk } from 'node:fs/promises'
+import { TextDecoder } from 'node:util'
 import { parsePort } from './argv-parser'
 import { AccessClientLaunchFailure } from './launch-failure'
 
@@ -25,12 +26,18 @@ export async function readTempSession(path: string, readFile: FileReader = readF
     throw new AccessClientLaunchFailure('temporary-profile-unreadable')
   }
 
-  const values = new Map<string, string>()
-  for (const line of content.toString('utf8').split(/\r?\n/)) {
-    const separator = line.indexOf('=')
-    if (separator <= 0) continue
-    const key = line.slice(0, separator)
-    if (allowedKeys.has(key)) values.set(key, line.slice(separator + 1))
+  const bytePreservingValues = parseTemporaryProfile(content.toString('latin1'))
+  const declaredLineCodePage = bytePreservingValues.get('LineCodePage')?.trim()
+  const encoding = encodingForLineCodePage(declaredLineCodePage)
+  let values: Map<string, string>
+  if (encoding) {
+    try {
+      values = parseTemporaryProfile(new TextDecoder(encoding, { fatal: true }).decode(content))
+    } catch {
+      throw invalidTemporaryProfile()
+    }
+  } else {
+    values = parseTemporaryProfile(content.toString('utf8'))
   }
 
   const host = values.get('HostName')?.trim() ?? ''
@@ -59,6 +66,32 @@ export async function readTempSession(path: string, readFile: FileReader = readF
     columns,
     rows,
     ...(values.get('LineCodePage')?.trim() ? { lineCodePage: values.get('LineCodePage')?.trim() } : {}),
+  }
+}
+
+function parseTemporaryProfile(decoded: string): Map<string, string> {
+  const values = new Map<string, string>()
+  for (const line of decoded.split(/\r?\n/)) {
+    const separator = line.indexOf('=')
+    if (separator <= 0) continue
+    const key = line.slice(0, separator)
+    if (allowedKeys.has(key)) values.set(key, line.slice(separator + 1))
+  }
+
+  return values
+}
+
+function encodingForLineCodePage(lineCodePage: string | undefined): string | undefined {
+  switch (lineCodePage?.toLowerCase()) {
+    case 'utf-8':
+    case 'utf8':
+    case '65001':
+      return 'utf-8'
+    case '936':
+    case 'gbk':
+    case 'gb2312':
+    case 'gb18030':
+      return 'gb18030'
   }
 }
 
