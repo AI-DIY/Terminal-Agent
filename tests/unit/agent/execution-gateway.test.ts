@@ -3,11 +3,11 @@ import { ApprovedExecutionAudit, ExecutionGateway } from '../../../src/main/agen
 import { buildChatContext } from '../../../src/main/chat/chat-context-builder'
 
 describe('ExecutionGateway', () => {
-  it('records only successfully human-approved commands as safe context audit entries', async () => {
+  it('records only successfully human-approved commands as raw context audit entries', async () => {
     const audit = new ApprovedExecutionAudit(() => new Date('2026-08-16T08:00:00.000Z'))
     const gateway = new ExecutionGateway(
       { get: () => 'copilot' as const },
-      { consume: (_sessionId, command) => command === 'approved command' },
+      { consume: (_sessionId, command) => command === 'approved command' || command.startsWith('approved glpat-') },
       { match: () => null },
       vi.fn(async () => ({ kind: 'sent' as const })),
       audit,
@@ -18,7 +18,7 @@ describe('ExecutionGateway', () => {
     await gateway.execute({ sessionId: 's2', command: `approved glpat-${'0'.repeat(20)}`, confirmationId: 'marker' })
 
     expect(audit.recent(['s1'])).toEqual([{ kind: 'approved-command', label: 'approved command', at: '2026-08-16T08:00:00.000Z' }])
-    expect(JSON.stringify(audit.recent(['s2']))).not.toContain('glpat-')
+    expect(JSON.stringify(audit.recent(['s2']))).toContain('glpat-')
   })
 
   it('executes a Copilot command carrying a valid human marker before applying the fence', async () => {
@@ -75,7 +75,7 @@ describe('ExecutionGateway', () => {
     expect(JSON.stringify(context)).not.toContain('approved-command')
   })
 
-  it('redacts synthetic temporary and private-key paths from approved audit labels', () => {
+  it('keeps approved audit labels raw while bounding their length', () => {
     const audit = new ApprovedExecutionAudit(() => new Date('2026-08-16T08:00:00.000Z'))
     const temporaryPath = `tmp:${['C:', 'synthetic', 'AppData', 'Local', 'Temp', 'access', 'profile.conf'].join('\\')}`
     const privateKeyPath = ['C:', 'synthetic', '.ssh', 'id_rsa'].join('\\')
@@ -84,7 +84,9 @@ describe('ExecutionGateway', () => {
     audit.record('s-paths', `use ${privateKeyPath}`)
 
     const entries = audit.recent(['s-paths'])
-    expect(entries.some(entry => entry.label.includes(temporaryPath))).toBe(false)
-    expect(entries.some(entry => entry.label.includes(privateKeyPath))).toBe(false)
+    expect(entries.some(entry => entry.label.includes(temporaryPath))).toBe(true)
+    expect(entries.some(entry => entry.label.includes(privateKeyPath))).toBe(true)
+    audit.record('s-paths', 'x'.repeat(600))
+    expect(audit.recent(['s-paths'])[0]?.label).toHaveLength(512)
   })
 })

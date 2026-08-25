@@ -5,13 +5,15 @@ import {
   chatRequestIdSchema,
   chatShellAssociationSchema,
   chatTimestampSchema,
+  chatTitleStateSchema,
   sessionModeSchema,
 } from '../../shared/contracts'
-import { sanitizeShellHistoryDisplay } from '../shell-history/shell-history-contracts'
 
 export const persistedChatSchema = z.object({
   id: chatIdentifierSchema,
   title: z.string().trim().min(1).max(255),
+  titleState: chatTitleStateSchema,
+  pinnedAt: chatTimestampSchema.nullable(),
   createdAt: chatTimestampSchema,
   updatedAt: chatTimestampSchema,
   mode: sessionModeSchema,
@@ -29,12 +31,15 @@ export const persistedAssociationSchema = chatShellAssociationSchema.extend({
 
 export const chatOperationSchema = z.object({
   requestId: chatRequestIdSchema,
-  kind: z.enum(['create', 'appendMessage', 'updateMessage', 'updateTitle', 'setMode', 'associateShell', 'bindSession', 'closeAssociation', 'remove']),
+  kind: z.enum(['create', 'appendMessage', 'updateMessage', 'updateTitle', 'setMode', 'associateShell', 'bindSession', 'closeAssociation', 'pin', 'unpin', 'remove']),
   chatId: chatIdentifierSchema,
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
   appliedAt: chatTimestampSchema,
   resultId: chatIdentifierSchema.optional(),
   result: z.object({
+    title: z.string().trim().min(1).max(255),
+    titleState: chatTitleStateSchema,
+    pinnedAt: chatTimestampSchema.nullable(),
     createdAt: chatTimestampSchema,
     updatedAt: chatTimestampSchema,
     mode: sessionModeSchema,
@@ -42,7 +47,7 @@ export const chatOperationSchema = z.object({
 }).strict()
 
 export const chatDocumentSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   liveChatId: chatIdentifierSchema.nullable(),
   chats: z.array(persistedChatSchema),
   messages: z.array(persistedMessageSchema),
@@ -74,7 +79,9 @@ export const chatDocumentSchema = z.object({
     requireTimeOrder(chat.createdAt, chat.updatedAt, ['chats', index, 'updatedAt'], 'chat updatedAt precedes createdAt', context)
     if (chat.deletedAt) {
       requireTimeOrder(chat.createdAt, chat.deletedAt, ['chats', index, 'deletedAt'], 'chat deletedAt precedes createdAt', context)
-      if (chat.title !== '已删除聊天') addIssue(context, ['chats', index, 'title'], 'deleted chat must use the safe tombstone title')
+      if (chat.title !== '已删除任务') addIssue(context, ['chats', index, 'title'], 'deleted chat must use the safe tombstone title')
+      if (chat.titleState !== 'custom') addIssue(context, ['chats', index, 'titleState'], 'deleted chat must use the custom title state')
+      if (chat.pinnedAt !== null) addIssue(context, ['chats', index, 'pinnedAt'], 'deleted chat cannot remain pinned')
     }
   }
   for (const [index, message] of document.messages.entries()) {
@@ -144,7 +151,7 @@ export const chatDocumentSchema = z.object({
       }
     }
   }
-  const lastResultByChat = new Map<string, { createdAt: string; updatedAt: string; mode: 'copilot' | 'autonomous' }>()
+  const lastResultByChat = new Map<string, z.infer<typeof chatOperationSchema.shape.result>>()
   let previousAppliedAt: string | undefined
   const removeOperationsByChat = indexRemoveOperations(document.operations, (operation, index) => {
     if (previousAppliedAt && Date.parse(operation.appliedAt) <= Date.parse(previousAppliedAt)) {
@@ -232,17 +239,25 @@ export const chatDocumentSchema = z.object({
     const result = operation.result
     const chat = chatEntry.chat
     requireTimeOrder(chat.createdAt, operation.appliedAt, ['operations', index, 'appliedAt'], 'operation appliedAt precedes chat createdAt', context)
-    requireTimeOrder(operation.appliedAt, chat.updatedAt, ['operations', index, 'appliedAt'], 'operation appliedAt follows chat updatedAt', context)
+    if (operation.kind !== 'pin' && operation.kind !== 'unpin') {
+      requireTimeOrder(operation.appliedAt, chat.updatedAt, ['operations', index, 'appliedAt'], 'operation appliedAt follows chat updatedAt', context)
+    }
     if (result.createdAt !== chat.createdAt) addIssue(context, ['operations', index, 'result', 'createdAt'], 'operation result createdAt must match chat createdAt')
-    if (result.updatedAt !== operation.appliedAt) addIssue(context, ['operations', index, 'result', 'updatedAt'], 'operation result updatedAt must equal appliedAt')
     requireTimeOrder(chat.createdAt, result.updatedAt, ['operations', index, 'result', 'updatedAt'], 'operation result updatedAt precedes chat createdAt', context)
     requireTimeOrder(result.updatedAt, chat.updatedAt, ['operations', index, 'result', 'updatedAt'], 'operation result updatedAt follows chat updatedAt', context)
+    if (result.titleState !== 'custom') {
+      const expectedTitle = systemTaskTitle(result.titleState, result.createdAt)
+      if (result.title !== expectedTitle) {
+        addIssue(context, ['operations', index, 'result', 'title'], `${result.titleState} task title must match its creation time`)
+      }
+    }
 
-    const previous = lastResultByChat.get(operation.chatId)
-    if (operation.kind === 'create') {
-      if (previous) addIssue(context, ['operations', index, 'kind'], 'create operation must be the first chat operation')
-      if (result.updatedAt !== result.createdAt) addIssue(context, ['operations', index, 'result', 'updatedAt'], 'create result updatedAt must equal createdAt')
-      if (result.mode !== 'copilot') addIssue(context, ['operations', index, 'result', 'mode'], 'create result mode must be copilot')
+   const previous = lastResultByChat.get(operation.chatId)
+   if (operation.kind === 'create') {
+     if (previous) addIssue(context, ['operations', index, 'kind'], 'create operation must be the first chat operation')
+     if (result.updatedAt !== result.createdAt) addIssue(context, ['operations', index, 'result', 'updatedAt'], 'create result updatedAt must equal createdAt')
+     if (result.mode !== 'copilot') addIssue(context, ['operations', index, 'result', 'mode'], 'create result mode must be copilot')
+      if (result.titleState === 'started') addIssue(context, ['operations', index, 'result', 'titleState'], 'create result cannot start a task')
     } else if (!previous) {
       addIssue(context, ['operations', index, 'kind'], 'chat operation requires an earlier create result')
     }
@@ -251,6 +266,41 @@ export const chatDocumentSchema = z.object({
       if (operation.kind !== 'setMode' && result.mode !== previous.mode) {
         addIssue(context, ['operations', index, 'result', 'mode'], `${operation.kind} cannot change chat mode`)
       }
+      if (operation.kind === 'pin' || operation.kind === 'unpin') {
+        if (result.updatedAt !== previous.updatedAt) addIssue(context, ['operations', index, 'result', 'updatedAt'], `${operation.kind} cannot change chat updatedAt`)
+        if (result.title !== previous.title) addIssue(context, ['operations', index, 'result', 'title'], `${operation.kind} cannot change chat title`)
+        if (result.titleState !== previous.titleState) addIssue(context, ['operations', index, 'result', 'titleState'], `${operation.kind} cannot change chat titleState`)
+        if (operation.kind === 'pin' && result.pinnedAt !== operation.appliedAt) {
+          addIssue(context, ['operations', index, 'result', 'pinnedAt'], 'pin result pinnedAt must equal appliedAt')
+        }
+        if (operation.kind === 'unpin' && result.pinnedAt !== null) {
+          addIssue(context, ['operations', index, 'result', 'pinnedAt'], 'unpin result pinnedAt must be null')
+        }
+      } else {
+        if (result.updatedAt !== operation.appliedAt) addIssue(context, ['operations', index, 'result', 'updatedAt'], 'operation result updatedAt must equal appliedAt')
+        if (result.pinnedAt !== previous.pinnedAt) addIssue(context, ['operations', index, 'result', 'pinnedAt'], `${operation.kind} cannot change pinnedAt`)
+        if (operation.kind === 'updateTitle') {
+          if (result.titleState !== 'custom') addIssue(context, ['operations', index, 'result', 'titleState'], 'updateTitle result must use the custom title state')
+        } else if (operation.kind === 'appendMessage' || operation.kind === 'associateShell' || operation.kind === 'bindSession') {
+          const startsTask = previous.titleState === 'new' && (
+            operation.kind === 'associateShell'
+            || (operation.kind === 'appendMessage' && operation.resultId !== undefined
+              && messagesById.get(operation.resultId)?.message.role === 'user')
+          )
+          if (!startsTask && result.title !== previous.title) {
+            addIssue(context, ['operations', index, 'result', 'title'], `${operation.kind} cannot change chat title`)
+          }
+          const expectedTitleState = startsTask ? 'started' : previous.titleState
+          if (result.titleState !== expectedTitleState) {
+            addIssue(context, ['operations', index, 'result', 'titleState'], `${operation.kind} result has an invalid titleState transition`)
+          }
+        } else {
+          if (result.title !== previous.title) addIssue(context, ['operations', index, 'result', 'title'], `${operation.kind} cannot change chat title`)
+          if (result.titleState !== previous.titleState) addIssue(context, ['operations', index, 'result', 'titleState'], `${operation.kind} cannot change chat titleState`)
+        }
+      }
+    } else if (result.updatedAt !== operation.appliedAt) {
+      addIssue(context, ['operations', index, 'result', 'updatedAt'], 'operation result updatedAt must equal appliedAt')
     }
     lastResultByChat.set(operation.chatId, result)
   })
@@ -274,6 +324,9 @@ export const chatDocumentSchema = z.object({
     }
     if (finalResult.updatedAt !== chat.updatedAt) addIssue(context, ['chats', index, 'updatedAt'], 'chat updatedAt must match its final operation result')
     if (finalResult.mode !== chat.mode) addIssue(context, ['chats', index, 'mode'], 'chat mode must match its final operation result')
+    if (finalResult.title !== chat.title) addIssue(context, ['chats', index, 'title'], 'chat title must match its final operation result')
+    if (finalResult.titleState !== chat.titleState) addIssue(context, ['chats', index, 'titleState'], 'chat titleState must match its final operation result')
+    if (finalResult.pinnedAt !== chat.pinnedAt) addIssue(context, ['chats', index, 'pinnedAt'], 'chat pinnedAt must match its final operation result')
   }
 })
 
@@ -327,49 +380,24 @@ export type ChatOperation = z.infer<typeof chatOperationSchema>
 export type ChatDocument = z.infer<typeof chatDocumentSchema>
 
 export function emptyChatDocument(): ChatDocument {
-  return { version: 1, liveChatId: null, chats: [], messages: [], associations: [], operations: [] }
+  return { version: 2, liveChatId: null, chats: [], messages: [], associations: [], operations: [] }
 }
 
-export function migrateChatDocument(persisted: unknown): { value: unknown; changed: boolean } {
-  if (!isRecord(persisted) || persisted.version !== 1) {
-    return { value: persisted, changed: false }
+export function guardChatDocumentVersion(persisted: unknown): { value: unknown; changed: boolean } {
+  if (isRecord(persisted) && Object.hasOwn(persisted, 'version') && persisted.version !== 2) {
+    throw new Error('任务数据版本不兼容，请清空旧任务数据后重试。')
   }
+  return { value: persisted, changed: false }
+}
 
-  let changed = false
-  const chats = Array.isArray(persisted.chats) ? persisted.chats.filter(isRecord) : []
-  const messages = Array.isArray(persisted.messages) ? persisted.messages : []
-  const migratedMessages = messages.map(message => {
-    if (!isRecord(message) || message.role !== 'assistant' || message.state !== 'error' || message.content !== '已取消。' || message.retryable !== undefined) return message
-    changed = true
-    return { ...message, retryable: false }
-  })
-  const associations = Array.isArray(persisted.associations) ? persisted.associations.filter(isRecord) : []
-  const migratedAssociations = associations.map(association => {
-    const migrated = { ...association }
-    for (const field of ['hostname', 'title'] as const) {
-      if (typeof association[field] !== 'string') continue
-      const safeValue = sanitizeShellHistoryDisplay(association[field])
-      if (safeValue !== association[field]) changed = true
-      migrated[field] = safeValue
-    }
-    return migrated
-  })
-  const hasLiveChatId = Object.prototype.hasOwnProperty.call(persisted, 'liveChatId')
-  if (hasLiveChatId && !changed) return { value: persisted, changed: false }
-
-  const openChatIds = new Set(associations
-    .filter(association => association.status === 'open' && typeof association.chatId === 'string')
-    .map(association => association.chatId as string))
-  const liveChatId = hasLiveChatId
-    ? persisted.liveChatId
-    : chats
-      .filter(chat => typeof chat.id === 'string' && chat.deletedAt === undefined && openChatIds.has(chat.id))
-      .sort((left, right) => {
-        const updatedOrder = String(right.updatedAt ?? '').localeCompare(String(left.updatedAt ?? ''))
-        return updatedOrder || String(left.id).localeCompare(String(right.id))
-      })[0]?.id ?? null
-
-  return { value: { ...persisted, liveChatId, messages: migratedMessages, associations: migratedAssociations }, changed: true }
+function systemTaskTitle(state: 'new' | 'started', createdAt: string): string {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(createdAt))
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? ''
+  const prefix = state === 'new' ? '新建任务' : '任务'
+  return `${prefix} ${value('year')}-${value('month')}-${value('day')} ${value('hour')}:${value('minute')}:${value('second')}`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

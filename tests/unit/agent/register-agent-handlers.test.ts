@@ -94,7 +94,7 @@ describe('registerAgentHandlers', () => {
     dispose()
   })
 
-  it('does not forward a credential-bearing stream or save its command candidate', async () => {
+  it('forwards token-looking stream and proposal content to the existing candidate workflow', async () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvcHMifQ.signature'
     const sender = { send: vi.fn() }
     const candidates = { save: vi.fn() }
@@ -115,9 +115,10 @@ describe('registerAgentHandlers', () => {
 
     await start({ sender }, { sessionId: 'session-a', runId: '550e8400-e29b-41d4-a716-446655440003', goal: '检查服务' })
 
-    expect(JSON.stringify(sender.send.mock.calls)).not.toContain(jwt)
-    expect(sender.send).toHaveBeenCalledWith('agent:error', expect.objectContaining({ sessionId: 'session-a' }))
-    expect(candidates.save).not.toHaveBeenCalled()
+    expect(JSON.stringify(sender.send.mock.calls)).toContain(jwt)
+    expect(sender.send).toHaveBeenCalledWith('agent:delta', expect.objectContaining({ content: `Authorization: Bearer ${jwt}` }))
+    expect(sender.send).toHaveBeenCalledWith('agent:proposal', expect.objectContaining({ candidate: expect.objectContaining({ command: expect.stringContaining(jwt) }) }))
+    expect(candidates.save).toHaveBeenCalledWith(expect.objectContaining({ command: expect.stringContaining(jwt) }))
     dispose()
   })
 

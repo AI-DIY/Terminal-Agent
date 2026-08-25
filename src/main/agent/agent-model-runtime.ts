@@ -4,7 +4,6 @@ import type { AgentCandidate } from '../../shared/contracts'
 import type { ChatCompletionsClient, ChatMessage } from '../model/chat-completions-client'
 import type { ModelSettingsService, ModelSettings } from '../settings/model-settings-service'
 import type { AgentEventPublisher, SchedulerModelPort, SchedulerModelRequest } from './agent-contracts'
-import { containsSensitiveMaterial, redactSensitiveText, SensitiveTextStreamRedactor } from './sensitive-data'
 
 type ModelSettingsSource = Pick<ModelSettingsService, 'load'>
 type ChatCompletionsSource = Pick<ChatCompletionsClient, 'stream'>
@@ -21,7 +20,6 @@ const agentResultSchema = z.object({
 }).strict()
 
 export class ModelConfigurationError extends Error {}
-export class UnsafeAgentOutputError extends Error {}
 
 export class AgentModelRuntime implements SchedulerModelPort {
   constructor(
@@ -34,22 +32,16 @@ export class AgentModelRuntime implements SchedulerModelPort {
   async stream(request: SchedulerModelRequest, publish: AgentEventPublisher): Promise<void> {
     const settings = await this.requireSettings(request.hasImages ?? false)
     let response = ''
-    const output = new SensitiveTextStreamRedactor()
     const onDelta = (content: string): void => {
       response += content
-      const safeContent = output.push(content)
-      if (safeContent) publish({ kind: 'delta', content: safeContent })
+      publish({ kind: 'delta', content })
     }
     if (request.signal) {
       await this.client.stream(settings, createMessages(request), onDelta, undefined, request.signal)
     } else {
       await this.client.stream(settings, createMessages(request), onDelta)
     }
-    const finalContent = output.finish()
-    if (finalContent) await publish({ kind: 'delta', content: finalContent })
-
     const parsed = parseFinalResult(response)
-    assertSafeResult(parsed)
     const candidate: AgentCandidate | null = parsed.candidate
       ? { id: this.createCandidateId(), sessionId: request.sessionId, ...parsed.candidate }
       : null
@@ -81,53 +73,17 @@ export class AgentModelRuntime implements SchedulerModelPort {
   }
 }
 
-function assertSafeResult(result: z.infer<typeof agentResultSchema>): void {
-  const values = [
-    result.analysis,
-    ...result.evidenceStrategy,
-    ...(result.candidate ? [result.candidate.command, result.candidate.explanation] : []),
-  ]
-  if (values.some(containsSensitiveMaterial)) {
-    throw new UnsafeAgentOutputError('AI output contains sensitive data')
-  }
-}
-
 function createMessages(request: SchedulerModelRequest): ChatMessage[] {
-  const safeInput = {
-    goal: redactSensitiveText(request.goal),
-    hostname: redactSensitiveText(request.hostname),
-    facts: sanitizeFacts(request.facts),
-  }
   return [
     {
       role: 'system',
-      content: '你是运维辅助代理。只能基于提供的目标和结构化主机事实进行分析。不得索取、推测、输出或执行密码、私钥、口令、API Key、令牌或完整终端记录。最终必须使用中文，并严格返回指定 JSON：analysis、evidenceStrategy、candidate；candidate 只能是 null 或一条安全候选命令。辅助驾驶会在执行前要求用户确认。',
+      content: '你是运维辅助代理。只能基于提供的目标和结构化主机事实进行分析。最终必须使用中文，并严格返回指定 JSON：analysis、evidenceStrategy、candidate；candidate 只能是 null 或一条候选命令。辅助驾驶会在执行前要求用户确认。',
     },
-    { role: 'user', content: JSON.stringify(safeInput) },
+    {
+      role: 'user',
+      content: JSON.stringify({ goal: request.goal, hostname: request.hostname, facts: request.facts }),
+    },
   ]
-}
-
-function sanitizeFacts(facts: SchedulerModelRequest['facts']): SchedulerModelRequest['facts'] {
-  const cleanRecord = (record: Record<string, string>) => Object.fromEntries(Object.entries(record).map(([key, value]) => {
-    if (containsSensitiveMaterial(key) || containsSensitiveMaterial(value)) {
-      return ['[REDACTED FIELD]', '[REDACTED SENSITIVE CONTENT]']
-    }
-    return [redactSensitiveText(key), redactSensitiveText(value)]
-  }))
-  return {
-    hostname: redactSensitiveText(facts.hostname),
-    observedAt: facts.observedAt,
-    ...(facts.connectionIp ? { connectionIp: redactSensitiveText(facts.connectionIp) } : {}),
-    ...(facts.operatingSystem ? { operatingSystem: { name: redactSensitiveText(facts.operatingSystem.name), ...(facts.operatingSystem.version ? { version: redactSensitiveText(facts.operatingSystem.version) } : {}) } } : {}),
-    ...(facts.cpu ? { cpu: { ...(facts.cpu.model ? { model: redactSensitiveText(facts.cpu.model) } : {}), ...(facts.cpu.architecture ? { architecture: redactSensitiveText(facts.cpu.architecture) } : {}), ...(facts.cpu.logicalCores ? { logicalCores: facts.cpu.logicalCores } : {}) } } : {}),
-    ...(facts.memory ? { memory: { ...facts.memory } } : {}),
-    ...(facts.disks ? { disks: facts.disks.map(disk => ({ name: redactSensitiveText(disk.name), totalBytes: disk.totalBytes })) } : {}),
-    ...(facts.networkInterfaces ? { networkInterfaces: facts.networkInterfaces.map(item => ({ name: redactSensitiveText(item.name), addresses: item.addresses.map(redactSensitiveText) })) } : {}),
-    ...(facts.processes ? { processes: facts.processes.map(process => ({ name: redactSensitiveText(process.name), pid: process.pid, ...(process.workingDirectory ? { workingDirectory: redactSensitiveText(process.workingDirectory) } : {}) })) } : {}),
-    ...(facts.currentUser ? { currentUser: redactSensitiveText(facts.currentUser) } : {}),
-    ...(facts.workingDirectory ? { workingDirectory: redactSensitiveText(facts.workingDirectory) } : {}),
-    ...(facts.services ? { services: cleanRecord(facts.services) } : {}),
-  }
 }
 
 function parseFinalResult(response: string): z.infer<typeof agentResultSchema> {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AgentModelRuntime, ModelConfigurationError, UnsafeAgentOutputError } from '../../../src/main/agent/agent-model-runtime'
+import { AgentModelRuntime, ModelConfigurationError } from '../../../src/main/agent/agent-model-runtime'
 
 const request = {
   goal: '检查 nginx，密码是 hunter2，令牌为 sk-secret-token，API Key is alpha beta',
@@ -41,7 +41,7 @@ describe('AgentModelRuntime', () => {
     expect(resolveRoute).toHaveBeenCalledWith({ hasImages: true })
     expect(client.stream).toHaveBeenCalledWith(expect.objectContaining({ provider: 'ollama', model: 'llava' }), expect.anything(), expect.any(Function))
   })
-  it('does not include bearer, GitHub, AWS, or labelled credentials in model messages', async () => {
+  it('passes authorized model goals and host facts through unchanged', async () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvcHMiLCJyb2xlIjoiYWRtaW4ifQ.signature'
     const githubToken = 'ghp_abcdefghijklmnopqrstuvwxyz1234567890'
     const awsKey = 'AKIAIOSFODNN7EXAMPLE'
@@ -65,12 +65,10 @@ describe('AgentModelRuntime', () => {
 
     const messages = client.stream.mock.calls[0]?.[1] as Array<{ content: string }>
     const modelInput = JSON.stringify(messages)
-    for (const secret of [jwt, githubToken, awsKey, 'correct horse', 'private-key-material']) {
-      expect(modelInput).not.toContain(secret)
-    }
+    for (const value of [jwt, githubToken, awsKey, 'correct horse', 'private-key-material']) expect(modelInput).toContain(value)
   })
 
-  it('redacts cross-chunk stream output and rejects a proposal with a credential-bearing command', async () => {
+  it('publishes cross-chunk output and a strict proposal unchanged', async () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvcHMifQ.signature'
     const client = { stream: vi.fn(async (_settings, _messages, onDelta) => {
       const result = JSON.stringify({ analysis: '正常', evidenceStrategy: [], candidate: { command: `echo ${jwt}`, explanation: '检查' } })
@@ -83,24 +81,10 @@ describe('AgentModelRuntime', () => {
     }) }, client, () => 'candidate-1')
     const events: unknown[] = []
 
-    await expect(runtime.stream(request, event => events.push(event))).rejects.toThrow('sensitive')
+    await runtime.stream(request, event => events.push(event))
 
-    expect(JSON.stringify(events)).not.toContain(jwt)
-    expect(events).not.toContainEqual(expect.objectContaining({ kind: 'proposal' }))
-  })
-
-  it('does not publish the tail of a multi-word password before rejecting it', async () => {
-    const client = { stream: vi.fn(async (_settings, _messages, onDelta) => {
-      onDelta(JSON.stringify({ analysis: 'password=correct horse battery staple', evidenceStrategy: [], candidate: null }))
-    }) }
-    const runtime = new AgentModelRuntime({ load: vi.fn().mockResolvedValue({
-      endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5-mini', apiKey: 'sk-real-key', contextLimit: 12_000,
-    }) }, client, () => 'candidate-1')
-    const events: unknown[] = []
-
-    await expect(runtime.stream(request, event => events.push(event))).rejects.toThrow('sensitive')
-    expect(JSON.stringify(events)).not.toContain('correct')
-    expect(JSON.stringify(events)).not.toContain('horse battery staple')
+    expect(JSON.stringify(events)).toContain(jwt)
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'proposal', candidate: expect.objectContaining({ command: `echo ${jwt}` }) }))
   })
 
   it('uses protected model settings, streams raw deltas, and emits one saved-ready proposal from strict JSON', async () => {
@@ -133,15 +117,14 @@ describe('AgentModelRuntime', () => {
     expect(client.stream.mock.calls[0]).toHaveLength(3)
     const messages = client.stream.mock.calls[0]?.[1] as Array<{ content: string }>
     const modelInput = JSON.stringify(messages)
-    expect(modelInput).not.toContain('hunter2')
-    expect(modelInput).not.toContain('sk-secret-token')
-    expect(modelInput).not.toContain('alpha')
-    expect(modelInput).not.toContain('beta')
-    expect(modelInput).not.toContain('correct horse battery staple')
+    expect(modelInput).toContain('hunter2')
+    expect(modelInput).toContain('sk-secret-token')
+    expect(modelInput).toContain('alpha')
+    expect(modelInput).toContain('beta')
+    expect(modelInput).toContain('correct horse battery staple')
     expect(modelInput).not.toContain('do-not-send')
     expect(modelInput).not.toContain('FULL TERMINAL TRANSCRIPT')
     expect(messages[0]?.content).toContain('辅助驾驶会在执行前要求用户确认')
-    expect(messages[0]?.content).not.toContain('待人工确认的命令')
   })
 
   it('fails with a clear local error before calling the model when protected settings are unavailable', async () => {
@@ -175,7 +158,7 @@ describe('AgentModelRuntime', () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: 'proposal', analysis: '服务正常' }))
   })
 
-  it('does not publish credentials echoed by the model into renderer events', async () => {
+  it('publishes token-looking model analysis and evidence unchanged', async () => {
     const leaked = 'Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature'
     const client = {
       stream: vi.fn(async (_settings, _messages, onDelta) => onDelta(JSON.stringify({
@@ -189,10 +172,10 @@ describe('AgentModelRuntime', () => {
     }) }, client, () => 'candidate-1')
     const events: unknown[] = []
 
-    await expect(runtime.stream(request, event => events.push(event))).rejects.toBeInstanceOf(UnsafeAgentOutputError)
+    await runtime.stream(request, event => events.push(event))
 
-    expect(JSON.stringify(events)).not.toContain(leaked)
-    expect(JSON.stringify(events)).not.toContain('ghp_012345678901234567890123456789012345')
+    expect(JSON.stringify(events)).toContain(leaked)
+    expect(JSON.stringify(events)).toContain('ghp_012345678901234567890123456789012345')
   })
 
   it('forwards the active run AbortSignal to the Chat Completions client', async () => {

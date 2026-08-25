@@ -153,7 +153,7 @@ watch(
         </div>
         <span v-else class="history-readonly-note">以下 Shell 已关闭，仅提供只读回放</span>
         <button v-if="isLive" type="button" class="connect-button" @click="emit('connect')"><Plus :size="13" aria-hidden="true" /><span>新建 SSH 连接</span></button>
-        <button v-else-if="liveChatAvailable" type="button" class="connect-button" @click="emit('restoreLive')">返回实时聊天</button>
+        <button v-else-if="liveChatAvailable" type="button" class="connect-button" @click="emit('restoreLive')">返回实时任务</button>
         <button
           v-if="(isLive && currentSessions.length) || (!isLive && historyHosts.length)"
           type="button"

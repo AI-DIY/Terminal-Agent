@@ -5,11 +5,13 @@ import {
   chatBindSessionRequestSchema,
   chatCloseAssociationRequestSchema,
   chatCreateRequestSchema,
+  chatPinRequestSchema,
   chatRemoveRequestSchema,
   chatSetModeRequestSchema,
   chatTransferSessionsRequestSchema,
   type ChatTransferSessionsRequest,
   chatUpdateTitleRequestSchema,
+  chatUnpinRequestSchema,
   type ChatAppendMessageRequest,
   type ChatUpdateMessageRequest,
   type ChatAssociateShellRequest,
@@ -17,10 +19,12 @@ import {
   type ChatBindSessionRequest,
   type ChatCloseAssociationRequest,
   type ChatCreateRequest,
+  type ChatPinRequest,
   type ChatRemoveRequest,
   type ChatSessionResolution,
   type ChatSetModeRequest,
   type ChatUpdateTitleRequest,
+  type ChatUnpinRequest,
   type ChatWorkspace,
   type ChatWorkspaceSnapshot,
 } from '../../shared/contracts'
@@ -29,7 +33,7 @@ import { sanitizeShellHistoryDisplay } from '../shell-history/shell-history-cont
 import { createHash, randomUUID } from 'node:crypto'
 import type { ChatMutation, ChatRepository, ChatTransferMutation } from './chat-repository'
 
-type ChatRepositoryPort = Pick<ChatRepository, 'listSnapshot' | 'get' | 'findRetryMessage' | 'recoverInterruptedStreams' | 'create' | 'appendMessage' | 'updateMessage' | 'updateTitle' | 'setMode' | 'associateShell' | 'associateOrCreateShell' | 'recordSessionRequest' | 'transferSessions' | 'closeAssociation' | 'closeSession' | 'findOpenSession' | 'findSessionRequest' | 'openSessionIds' | 'remove'>
+type ChatRepositoryPort = Pick<ChatRepository, 'listSnapshot' | 'get' | 'findRetryMessage' | 'recoverInterruptedStreams' | 'create' | 'appendMessage' | 'updateMessage' | 'updateTitle' | 'pin' | 'unpin' | 'setMode' | 'associateShell' | 'associateOrCreateShell' | 'recordSessionRequest' | 'transferSessions' | 'closeAssociation' | 'closeSession' | 'findOpenSession' | 'findSessionRequest' | 'openSessionIds' | 'remove'>
 
 export class ChatService {
   private readonly changedListeners = new Set<(event: ChatChangedEvent) => void>()
@@ -87,6 +91,16 @@ export class ChatService {
   async updateTitle(request: ChatUpdateTitleRequest): Promise<ChatWorkspaceSnapshot> {
     const parsed = chatUpdateTitleRequestSchema.parse(request)
     return this.trackMutation(() => this.apply(this.repository.updateTitle(parsed), 'updated'))
+  }
+
+  async pin(request: ChatPinRequest): Promise<ChatWorkspaceSnapshot> {
+    const parsed = chatPinRequestSchema.parse(request)
+    return this.trackMutation(() => this.apply(this.repository.pin(parsed), 'updated'))
+  }
+
+  async unpin(request: ChatUnpinRequest): Promise<ChatWorkspaceSnapshot> {
+    const parsed = chatUnpinRequestSchema.parse(request)
+    return this.trackMutation(() => this.apply(this.repository.unpin(parsed), 'updated'))
   }
 
   async setMode(request: ChatSetModeRequest): Promise<ChatWorkspaceSnapshot> {

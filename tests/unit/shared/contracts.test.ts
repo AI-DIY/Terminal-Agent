@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { terminalAgentNamespace } from '../../../src/preload/api'
-import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema, chatAppendMessageRequestSchema, chatAssociateShellRequestSchema, chatBindSessionRequestSchema, chatChangedEventSchema, chatCloseAssociationRequestSchema, chatCreateRequestSchema, chatListSnapshotSchema, chatRemoveRequestSchema, chatSetModeRequestSchema, chatShellAssociationSchema, chatTimestampSchema, chatUpdateTitleRequestSchema } from '../../../src/shared/contracts'
+import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema, chatAppendMessageRequestSchema, chatAssociateShellRequestSchema, chatBindSessionRequestSchema, chatChangedEventSchema, chatCloseAssociationRequestSchema, chatCreateRequestSchema, chatListSnapshotSchema, chatPinRequestSchema, chatRemoveRequestSchema, chatSetModeRequestSchema, chatShellAssociationSchema, chatSummarySchema, chatTimestampSchema, chatUnpinRequestSchema, chatUpdateTitleRequestSchema } from '../../../src/shared/contracts'
 
 const { exposeInMainWorld } = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn()
@@ -236,12 +236,39 @@ describe('terminalAgent preload API', () => {
 })
 
 describe('durable chat navigation contracts', () => {
+  it.each([
+    ['pin', chatPinRequestSchema],
+    ['unpin', chatUnpinRequestSchema],
+  ])('accepts only opaque request and chat identifiers for %s requests', (_label, schema) => {
+    const request = { requestId: 'pin-1', chatId: 'chat-1' }
+
+    expect(schema.parse(request)).toEqual(request)
+    expect(() => schema.parse({ ...request, pinnedAt: '2026-08-24T02:00:00.000Z' })).toThrow()
+    expect(() => schema.parse({ requestId: 'pin-1' })).toThrow()
+  })
+
+  it('requires explicit task title and pin state in every renderer summary', () => {
+    expect(chatSummarySchema.parse({
+      id: 'task-1',
+      title: '新建任务 2026-08-24 10:00:00',
+      titleState: 'new',
+      pinnedAt: null,
+      createdAt: '2026-08-24T02:00:00.000Z',
+      updatedAt: '2026-08-24T02:00:00.000Z',
+      shellCount: 0,
+      mode: 'copilot',
+      live: false,
+    })).toMatchObject({ titleState: 'new', pinnedAt: null })
+  })
+
   const chat = {
     id: 'chat-1', title: 'chat', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
+    titleState: 'custom' as const, pinnedAt: null,
     shellCount: 0, mode: 'copilot' as const, live: false, messages: [], shells: [],
   }
   const chatSummary = {
     id: chat.id, title: chat.title, createdAt: chat.createdAt, updatedAt: chat.updatedAt,
+    titleState: chat.titleState, pinnedAt: chat.pinnedAt,
     shellCount: chat.shellCount, mode: chat.mode, live: chat.live,
   }
 

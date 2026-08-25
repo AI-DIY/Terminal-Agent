@@ -9,14 +9,17 @@ import {
   chatTransferSessionsRequestSchema,
   chatRunRequestSchema,
   chatRuntimeEventSchema,
+  chatPinRequestSchema,
+  chatUnpinRequestSchema,
+  chatUpdateTitleRequestSchema,
 } from '../../shared/contracts'
 import type { ChatService } from './chat-service'
 import type { ConnectedSession, SessionService } from '../ssh/session-service'
 import type { ChatRuntime } from './chat-runtime'
 
-const channels = ['chats:list', 'chats:create', 'chats:get', 'chats:resolve-session', 'chats:set-mode', 'chats:remove', 'chats:bind-session', 'chats:transfer-sessions'] as const
+const channels = ['chats:list', 'chats:create', 'chats:get', 'chats:resolve-session', 'chats:set-mode', 'chats:update-title', 'chats:pin', 'chats:unpin', 'chats:remove', 'chats:bind-session', 'chats:transfer-sessions'] as const
 
-type ChatHandlerService = Pick<ChatService, 'list' | 'create' | 'get' | 'resolveSession' | 'setMode' | 'remove' | 'associateSession' | 'transferSessions' | 'closeSession' | 'reconcileSessions' | 'onChanged'>
+type ChatHandlerService = Pick<ChatService, 'list' | 'create' | 'get' | 'resolveSession' | 'setMode' | 'updateTitle' | 'pin' | 'unpin' | 'remove' | 'associateSession' | 'transferSessions' | 'closeSession' | 'reconcileSessions' | 'onChanged'>
 type SessionLookup = Pick<SessionService, 'snapshot' | 'onClosed'>
 
 export function registerChatHandlers(service: ChatHandlerService, trustedSender: WebContents, sessions: SessionLookup, runtime?: ChatRuntime): () => void {
@@ -40,6 +43,18 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
   ipcMain.handle('chats:set-mode', (event, request: unknown) => {
     assertTrustedSender(event, trustedSender)
     return service.setMode(chatSetModeRequestSchema.parse(request))
+  })
+  ipcMain.handle('chats:update-title', (event, request: unknown) => {
+    assertTrustedSender(event, trustedSender)
+    return service.updateTitle(chatUpdateTitleRequestSchema.parse(request))
+  })
+  ipcMain.handle('chats:pin', (event, request: unknown) => {
+    assertTrustedSender(event, trustedSender)
+    return service.pin(chatPinRequestSchema.parse(request))
+  })
+  ipcMain.handle('chats:unpin', (event, request: unknown) => {
+    assertTrustedSender(event, trustedSender)
+    return service.unpin(chatUnpinRequestSchema.parse(request))
   })
   ipcMain.handle('chats:remove', async (event, request: unknown) => {
     assertTrustedSender(event, trustedSender)

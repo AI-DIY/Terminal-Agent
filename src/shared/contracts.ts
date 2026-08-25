@@ -82,9 +82,14 @@ export const chatTimestampSchema = z.string().regex(canonicalChatTimestampPatter
   return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === timestamp
 }, 'Invalid canonical chat timestamp')
 
+export const chatTitleStateSchema = z.enum(['new', 'started', 'custom'])
+export type ChatTitleState = z.infer<typeof chatTitleStateSchema>
+
 export const chatSummarySchema = z.object({
   id: chatIdentifierSchema,
   title: z.string().trim().min(1).max(255),
+  titleState: chatTitleStateSchema,
+  pinnedAt: chatTimestampSchema.nullable(),
   createdAt: chatTimestampSchema,
   updatedAt: chatTimestampSchema,
   shellCount: z.number().int().nonnegative(),
@@ -155,6 +160,18 @@ export const chatRemoveRequestSchema = z.object({
   chatId: chatIdentifierSchema,
 }).strict()
 export type ChatRemoveRequest = z.infer<typeof chatRemoveRequestSchema>
+
+export const chatPinRequestSchema = z.object({
+  requestId: chatRequestIdSchema,
+  chatId: chatIdentifierSchema,
+}).strict()
+export type ChatPinRequest = z.infer<typeof chatPinRequestSchema>
+
+export const chatUnpinRequestSchema = z.object({
+  requestId: chatRequestIdSchema,
+  chatId: chatIdentifierSchema,
+}).strict()
+export type ChatUnpinRequest = z.infer<typeof chatUnpinRequestSchema>
 
 export const chatBindSessionRequestSchema = z.object({
   requestId: chatRequestIdSchema,

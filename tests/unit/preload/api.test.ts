@@ -13,6 +13,8 @@ describe('chat preload API', () => {
     const create = { requestId: 'create-1', title: 'chat' }
     const mode = { requestId: 'mode-1', chatId: 'chat-1', mode: 'autonomous' as const }
     const remove = { requestId: 'remove-1', chatId: 'chat-1' }
+    const rename = { requestId: 'rename-1', chatId: 'chat-1', title: '任务名称' }
+    const pin = { requestId: 'pin-1', chatId: 'chat-1' }
     const bind = { requestId: 'bind-1', chatId: 'chat-1', sessionId: 's1' }
     const transfer = { requestId: 'transfer-1', sourceChatId: 'chat-1', targetChatId: 'chat-2', sessionIds: ['s1', 's2'] }
 
@@ -24,6 +26,9 @@ describe('chat preload API', () => {
     await api.chats.resolveSession({ sessionId: 's1' })
     await api.chats.setMode(mode)
     await api.chats.remove(remove)
+    await api.chats.updateTitle(rename)
+    await api.chats.pin(pin)
+    await api.chats.unpin(pin)
     await api.chats.bindSession(bind)
     await api.chats.transferSessions(transfer)
 
@@ -33,8 +38,11 @@ describe('chat preload API', () => {
     expect(ipc.invoke).toHaveBeenNthCalledWith(4, 'chats:resolve-session', { sessionId: 's1' })
     expect(ipc.invoke).toHaveBeenNthCalledWith(5, 'chats:set-mode', mode)
     expect(ipc.invoke).toHaveBeenNthCalledWith(6, 'chats:remove', remove)
-    expect(ipc.invoke).toHaveBeenNthCalledWith(7, 'chats:bind-session', bind)
-    expect(ipc.invoke).toHaveBeenNthCalledWith(8, 'chats:transfer-sessions', transfer)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(7, 'chats:update-title', rename)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(8, 'chats:pin', pin)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(9, 'chats:unpin', pin)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(10, 'chats:bind-session', bind)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(11, 'chats:transfer-sessions', transfer)
   })
 
   it('unsubscribes the exact listener wrapper registered for chat changes', () => {
@@ -68,6 +76,29 @@ describe('chat preload API', () => {
     expect(listener).toHaveBeenCalledWith(validError)
     expect(() => wrapper?.({}, { ...validError, messageId: undefined })).toThrow()
     expect(listener).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('diagnostics preload API', () => {
+  it('routes only fixed zero-argument diagnostic commands and validates public errors', async () => {
+    const ipc = createIpc()
+    const api = createTerminalAgentApi(ipc)
+    const listener = vi.fn()
+
+    expect(Object.isFrozen(api.diagnostics)).toBe(true)
+    await api.diagnostics.openRendererDevTools()
+    await api.diagnostics.openNodeInspector()
+    const unsubscribe = api.diagnostics.onError(listener)
+    const wrapper = ipc.on.mock.calls.find(([channel]) => channel === 'diagnostics:error')?.[1]
+    wrapper?.({}, '无法打开诊断窗口。请关闭后重试。')
+    unsubscribe()
+
+    expect(ipc.invoke).toHaveBeenNthCalledWith(1, 'diagnostics:open-renderer-devtools')
+    expect(ipc.invoke).toHaveBeenNthCalledWith(2, 'diagnostics:open-node-inspector')
+    expect(listener).toHaveBeenCalledWith('无法打开诊断窗口。请关闭后重试。')
+    expect(ipc.removeListener).toHaveBeenCalledWith('diagnostics:error', wrapper)
+    expect(Object.keys(api.diagnostics)).not.toContain('open')
+    expect(() => wrapper?.({}, '')).toThrow()
   })
 })
 

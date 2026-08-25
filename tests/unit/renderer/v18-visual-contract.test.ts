@@ -13,8 +13,8 @@ describe('V18 production visual contract', () => {
     const chat = rendererSource('components/chat/GlobalChatPanel.vue')
 
     expect(sidebar).toContain('任务历史区')
-    expect(sidebar).toContain('聊天与 Shell 记录')
-    expect(sidebar).toContain('新建聊天')
+    expect(sidebar).toContain('任务与 Shell 记录')
+    expect(sidebar).toContain('新建任务')
     expect(shellCanvas).toContain('新建 SSH 连接')
     expect(shellCanvas).toContain('Shell 布局')
     expect(sessionTabs).not.toContain('辅助驾驶')
@@ -50,6 +50,52 @@ describe('V18 production visual contract', () => {
     expect(shellCanvas).toContain("from '@lucide/vue'")
     expect(sessionTabs).toContain("from '@lucide/vue'")
     expect(chat).toContain("from '@lucide/vue'")
+  })
+
+  it('gives task history an accessible action menu, inline rename, and low-distraction scrollbar', () => {
+    const sidebar = rendererSource('components/workbench/WorkbenchSessionSidebar.vue')
+
+    expect(sidebar).toContain("MoreHorizontal, PanelLeftClose, Pencil, Pin, PinOff, Plus, Trash2")
+    expect(sidebar).toContain('aria-label="任务名称"')
+    expect(sidebar).toContain('maxlength="255"')
+    expect(sidebar).toContain('@keydown.enter.prevent="saveRename(chat.id)"')
+    expect(sidebar).toContain('@keydown.esc.prevent="cancelRename"')
+    expect(sidebar).toContain('@blur="saveRename(chat.id)"')
+    expect(sidebar).toContain('重命名')
+    expect(sidebar).toContain("chat.pinnedAt ? '取消置顶' : '置顶'")
+    expect(sidebar).toContain('aria-label="已置顶"')
+    expect(sidebar).toContain('scrollbar-color: transparent transparent')
+    expect(sidebar).toContain('nav:hover,nav:focus-within')
+    expect(sidebar).toContain('::-webkit-scrollbar-button')
+  })
+
+  it('uses task-facing labels without renaming internal chat contracts', () => {
+    const workbench = rendererSource('views/WorkbenchView.vue')
+    const shell = rendererSource('components/workbench/WorkbenchShell.vue')
+    const shellCanvas = rendererSource('components/workbench/ShellCanvas.vue')
+    const store = rendererSource('stores/chat-workspaces.ts')
+
+    expect(workbench).toContain("'未选择任务'")
+    expect(workbench).toContain('此任务没有关联 Shell。')
+    expect(shell).toContain('当前任务')
+    expect(shellCanvas).toContain('返回实时任务')
+    expect(store).toContain('无法读取任务。')
+    expect(store).toContain('无法新建任务。')
+    expect(store).toContain('无法删除任务。')
+  })
+
+  it('keeps the independent diagnostic tools ordered ahead of native window controls', () => {
+    const workbench = rendererSource('views/WorkbenchView.vue')
+    const shell = rendererSource('components/workbench/WorkbenchShell.vue')
+
+    expect(workbench).toContain("import { Bug, Code2, Settings } from '@lucide/vue'")
+    expect(workbench.indexOf('aria-label="设置"')).toBeLessThan(workbench.indexOf('aria-label="DevTools"'))
+    expect(workbench.indexOf('aria-label="DevTools"')).toBeLessThan(workbench.indexOf('aria-label="Node Inspector"'))
+    expect(workbench).toContain('window.terminalAgent.diagnostics.openRendererDevTools()')
+    expect(workbench).toContain('window.terminalAgent.diagnostics.openNodeInspector()')
+    expect(workbench).toContain('diagnostics.onError')
+    expect(shell).toContain('@media (max-width: 1080px)')
+    expect(shell).toContain('.app-header-actions :deep(.header-button span) { display: none; }')
   })
 
   it('renders model routing as the approved V18 option cards', () => {

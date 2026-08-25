@@ -1,6 +1,5 @@
 import type { SessionMode } from '../../shared/contracts'
 import type { RegexFenceMatch } from './regex-fence-service'
-import { redactSensitiveText } from './sensitive-data'
 
 export type AgentExecutionRequest = {
   sessionId: string
@@ -26,7 +25,7 @@ export class ApprovedExecutionAudit {
   constructor(private readonly now: () => Date = () => new Date()) {}
 
   record(sessionId: string, command: string): void {
-    const label = redactSensitiveText(command).slice(0, 512)
+    const label = command.slice(0, 512)
     this.entries.unshift({ sessionId, kind: 'approved-command', label, at: this.now().toISOString() })
     if (this.entries.length > 100) this.entries.length = 100
   }

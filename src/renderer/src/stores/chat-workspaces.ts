@@ -2,8 +2,11 @@ import { reactive } from 'vue'
 import type {
   ChatChangedEvent,
   ChatListSnapshot,
+  ChatPinRequest,
   ChatSessionResolution,
   ChatSummary,
+  ChatUnpinRequest,
+  ChatUpdateTitleRequest,
   ChatWorkspace,
   ChatWorkspaceSnapshot,
 } from '../../../shared/contracts'
@@ -81,6 +84,9 @@ type ChatApi = {
   create(request: { requestId: string }): Promise<ChatWorkspaceSnapshot>
   get(chatId: string): Promise<ChatWorkspaceSnapshot>
   resolveSession(request: { sessionId: string }): Promise<ChatSessionResolution>
+  updateTitle(request: ChatUpdateTitleRequest): Promise<ChatWorkspaceSnapshot>
+  pin(request: ChatPinRequest): Promise<ChatWorkspaceSnapshot>
+  unpin(request: ChatUnpinRequest): Promise<ChatWorkspaceSnapshot>
   remove(request: { requestId: string; chatId: string }): Promise<void>
   onChanged(listener: (event: ChatChangedEvent) => void): () => void
 }
@@ -94,6 +100,8 @@ function summaryOf(chat: ChatWorkspace): ChatSummary {
   return {
     id: chat.id,
     title: chat.title,
+    titleState: chat.titleState,
+    pinnedAt: chat.pinnedAt,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     shellCount: chat.shellCount,
@@ -103,12 +111,15 @@ function summaryOf(chat: ChatWorkspace): ChatSummary {
 }
 
 export function groupChatSummaries(chats: readonly ChatSummary[], now: Date): ChatGroup[] {
+  const pinned = chats
+    .filter(chat => chat.pinnedAt !== null)
+    .sort((left, right) => right.pinnedAt!.localeCompare(left.pinnedAt!) || left.id.localeCompare(right.id))
   const today = startOfLocalDay(now)
   const weekStart = startOfLocalWeek(today)
   const weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 7)
   const datedBuckets = new Map<string, { date: number; chats: ChatSummary[] }>()
   const earlier: ChatSummary[] = []
-  for (const chat of chats) {
+  for (const chat of chats.filter(chat => chat.pinnedAt === null)) {
     const created = new Date(chat.createdAt)
     if (Number.isNaN(created.getTime())) {
       earlier.push(chat)
@@ -126,9 +137,9 @@ export function groupChatSummaries(chats: readonly ChatSummary[], now: Date): Ch
   }
   const groups = [...datedBuckets.entries()]
     .sort(([, left], [, right]) => right.date - left.date)
-    .map(([label, bucket]) => ({ label, chats: bucket.chats }))
-  if (earlier.length > 0) groups.push({ label: '更早', chats: earlier })
-  return groups
+    .map(([label, bucket]) => ({ label, chats: sortOrdinaryChats(bucket.chats) }))
+  if (earlier.length > 0) groups.push({ label: '更早', chats: sortOrdinaryChats(earlier) })
+  return pinned.length > 0 ? [{ label: '置顶', chats: pinned }, ...groups] : groups
 }
 
 export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = {}) {
@@ -196,7 +207,7 @@ export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = 
         return
       }
     } catch (error) {
-      if (isCurrent() && sequence === navigationSequence) state.error = error instanceof Error ? error.message : '无法读取聊天。'
+      if (isCurrent() && sequence === navigationSequence) state.error = error instanceof Error ? error.message : '无法读取任务。'
     }
   }
 
@@ -255,7 +266,7 @@ export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = 
       selectedNavigationSequence = sequence
       return true
     } catch (error) {
-      if (sequence === navigationSequence) state.error = error instanceof Error ? error.message : '无法新建聊天。'
+      if (sequence === navigationSequence) state.error = error instanceof Error ? error.message : '无法新建任务。'
       return false
     }
   }
@@ -266,6 +277,36 @@ export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = 
     const remove = () => pendingCreates.delete(pending)
     void pending.then(remove, remove)
     return pending
+  }
+
+  async function updateTitle(chatId: string, title: string): Promise<boolean> {
+    state.error = ''
+    try {
+      return mergeSnapshot(await api.updateTitle({ requestId: requestId(), chatId, title }))
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : '无法更新任务名称。'
+      return false
+    }
+  }
+
+  async function pin(chatId: string): Promise<boolean> {
+    state.error = ''
+    try {
+      return mergeSnapshot(await api.pin({ requestId: requestId(), chatId }))
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : '无法置顶任务。'
+      return false
+    }
+  }
+
+  async function unpin(chatId: string): Promise<boolean> {
+    state.error = ''
+    try {
+      return mergeSnapshot(await api.unpin({ requestId: requestId(), chatId }))
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : '无法取消置顶任务。'
+      return false
+    }
   }
 
   const unsubscribe = api.onChanged(event => {
@@ -312,12 +353,15 @@ export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = 
         const initial = state.liveChatId ?? state.chats[0]?.id
         if (initial) await select(initial)
       } catch (error) {
-        state.error = error instanceof Error ? error.message : '无法读取聊天列表。'
+        state.error = error instanceof Error ? error.message : '无法读取任务列表。'
       } finally {
         state.loading = false
       }
     },
     create,
+    updateTitle,
+    pin,
+    unpin,
     async waitForPendingCreate(): Promise<void> {
       while (pendingCreates.size > 0) await Promise.allSettled([...pendingCreates])
     },
@@ -334,7 +378,7 @@ export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = 
         if (!isCurrent()) return
         if (state.chats.some(chat => chat.id === chatId)) await removeLocal(chatId, sequence)
       } catch (error) {
-        if (isCurrent() && sequence === navigationSequence) state.error = error instanceof Error ? error.message : '无法删除聊天。'
+        if (isCurrent() && sequence === navigationSequence) state.error = error instanceof Error ? error.message : '无法删除任务。'
       } finally {
         if (removalSequences.get(chatId) === sequence) removalSequences.delete(chatId)
       }
@@ -403,6 +447,10 @@ export async function focusOwnedWorkbenchSession<TWorkspace>(options: {
 
 function startOfLocalDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function sortOrdinaryChats(chats: readonly ChatSummary[]): ChatSummary[] {
+  return [...chats].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
 }
 
 function startOfLocalWeek(day: Date): Date {

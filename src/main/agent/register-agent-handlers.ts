@@ -1,11 +1,10 @@
 import { ipcMain, type WebContents } from 'electron'
 import { agentStartRequestSchema, type AgentCandidate, type AgentStreamEvent, type SessionMode } from '../../shared/contracts'
-import { ModelConfigurationError, UnsafeAgentOutputError } from './agent-model-runtime'
+import { ModelConfigurationError } from './agent-model-runtime'
 import { ModelConnectionError } from '../model/chat-completions-client'
 import type { AgentEventPublisher, AgentGoalContext } from './agent-contracts'
 import type { AgentExecutionResult } from './execution-gateway'
 import type { HostMemorySettingsService } from '../settings/host-memory-settings-service'
-import { containsSensitiveMaterial, SensitiveTextStreamRedactor } from './sensitive-data'
 
 type Scheduler = {
   start(context: AgentGoalContext, publish: AgentEventPublisher): Promise<void>
@@ -83,7 +82,6 @@ export function registerAgentHandlers(
       run.controller.abort()
       sendError(sender, session.id, parsed.runId, 'AI 分析超时。请稍后重试。')
     }, timeoutMs)
-    let output: SensitiveTextStreamRedactor | undefined
     try {
       if (options.hostMemory && !await options.hostMemory.canCollect()) {
         if (isCurrentRun()) sendError(sender, session.id, parsed.runId, '主机记忆未启用，无法读取缓存事实。请在设置中重新启用。')
@@ -115,8 +113,6 @@ export function registerAgentHandlers(
         return
       }
 
-      const streamOutput = new SensitiveTextStreamRedactor()
-      output = streamOutput
       const pendingPublishes: Promise<void>[] = []
       await scheduler.start({
         goal: parsed.goal,
@@ -131,7 +127,6 @@ export function registerAgentHandlers(
           parsed.runId,
           streamEvent,
           candidates,
-          streamOutput,
           isCurrentRun,
           () => sessions.snapshot().find(item => item.id === session.id)?.mode,
           executionGateway,
@@ -141,9 +136,7 @@ export function registerAgentHandlers(
         return publishing
       })
       await Promise.all(pendingPublishes)
-      publishRemainingDelta(sender, session.id, parsed.runId, streamOutput, isCurrentRun)
     } catch (error) {
-      if (output) publishRemainingDelta(sender, session.id, parsed.runId, output, isCurrentRun)
       if (isCurrentRun()) sendError(sender, session.id, parsed.runId, publicErrorMessage(error))
     } finally {
       completeRun(session.id, run)
@@ -168,23 +161,15 @@ async function publishStreamEvent(
   runId: string,
   event: AgentStreamEvent,
   candidates: CandidateSink,
-  output: SensitiveTextStreamRedactor,
   isCurrentRun: () => boolean,
   getCurrentMode: () => SessionMode | undefined,
   executionGateway?: ExecutionGatewaySource,
 ): Promise<void> {
   if (!isCurrentRun()) return
   if (event.kind === 'delta') {
-    const content = output.push(event.content)
-    if (content && isCurrentRun()) sender.send('agent:delta', { sessionId, runId, content })
+    sender.send('agent:delta', { sessionId, runId, content: event.content })
     return
   }
-  const values = [
-    event.analysis,
-    ...event.evidenceStrategy,
-    ...(event.candidate ? [event.candidate.command, event.candidate.explanation] : []),
-  ]
-  if (values.some(containsSensitiveMaterial)) throw new UnsafeAgentOutputError('AI proposal contains sensitive data')
   let autonomousExecution = false
   if (event.candidate) {
     if (event.candidate.sessionId !== sessionId) throw new Error('Candidate session does not match the active session')
@@ -214,18 +199,6 @@ async function publishStreamEvent(
   })
 }
 
-function publishRemainingDelta(
-  sender: WebContents,
-  sessionId: string,
-  runId: string,
-  output: SensitiveTextStreamRedactor,
-  isCurrentRun: () => boolean,
-): void {
-  if (!isCurrentRun()) return
-  const content = output.finish()
-  if (content && isCurrentRun()) sender.send('agent:delta', { sessionId, runId, content })
-}
-
 function sendError(sender: WebContents, sessionId: string, runId: string, message: string): void {
   sender.send('agent:error', { sessionId, runId, message })
 }
@@ -236,9 +209,6 @@ function publicErrorMessage(error: unknown): string {
   }
   if (error instanceof ModelConnectionError) {
     return error.message
-  }
-  if (error instanceof UnsafeAgentOutputError) {
-    return 'AI 响应包含敏感内容，已拒绝显示和执行。'
   }
   return 'AI 分析暂时不可用。请检查模型连接后重试。'
 }

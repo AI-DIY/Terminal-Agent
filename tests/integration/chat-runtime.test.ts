@@ -7,7 +7,7 @@ import { ChatRuntime, type ChatRuntimeEvent } from '../../src/main/chat/chat-run
 import { buildChatContext } from '../../src/main/chat/chat-context-builder'
 
 describe('global chat integration', () => {
-  it('streams through a real repository, redacts output, and restores the completed message after reload', async () => {
+  it('streams model output unchanged through a real repository and restores it after reload', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-chat-integration-'))
     try {
       const path = join(directory, 'chat-workspaces.json')
@@ -37,16 +37,16 @@ describe('global chat integration', () => {
       await runtime.send({ chatId: chat.id, runId: '77777777-7777-4777-8777-777777777777', content: 'say hello' }, event => events.push(event))
       expect(events.some(event => event.kind === 'chat:delta' && event.content.includes('你好'))).toBe(true)
       expect(events.some(event => event.kind === 'chat:completed')).toBe(true)
-      expect(JSON.stringify(events).includes(genericOpenAiToken)).toBe(false)
+      expect(JSON.stringify(events)).toContain(genericOpenAiToken)
       const restarted = new ChatRepository(path)
       const restored = await restarted.get(chat.id)
       expect(restored.messages).toHaveLength(2)
       expect(restored.messages[0]).toMatchObject({ role: 'user', content: 'say hello', state: 'complete' })
       expect(restored.messages[1]).toMatchObject({ role: 'assistant', state: 'complete' })
-      expect(JSON.stringify(restored)).not.toContain('glpat-')
-      expect(JSON.stringify(restored).includes(genericOpenAiToken)).toBe(false)
+      expect(JSON.stringify(restored)).toContain('glpat-')
+      expect(JSON.stringify(restored)).toContain(genericOpenAiToken)
       expect(JSON.parse(await readFile(path, 'utf8')).messages).toHaveLength(2)
-      expect((await readFile(path, 'utf8')).includes(genericOpenAiToken)).toBe(false)
+      await expect(readFile(path, 'utf8')).resolves.toContain(genericOpenAiToken)
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

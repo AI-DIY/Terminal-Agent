@@ -10,7 +10,7 @@ import type { AtomicJsonStoreFileSystem } from '../../../src/main/persistence/at
 function service() {
   const repository = {
     create: vi.fn(), listSnapshot: vi.fn(), get: vi.fn(), setMode: vi.fn(), remove: vi.fn(),
-    appendMessage: vi.fn(), updateTitle: vi.fn(), associateShell: vi.fn(), associateOrCreateShell: vi.fn(), recordSessionRequest: vi.fn(), transferSessions: vi.fn(), closeAssociation: vi.fn(), closeSession: vi.fn(), findOpenSession: vi.fn(), findSessionRequest: vi.fn(), openSessionIds: vi.fn(), recoverInterruptedStreams: vi.fn(),
+    appendMessage: vi.fn(), updateTitle: vi.fn(), pin: vi.fn(), unpin: vi.fn(), associateShell: vi.fn(), associateOrCreateShell: vi.fn(), recordSessionRequest: vi.fn(), transferSessions: vi.fn(), closeAssociation: vi.fn(), closeSession: vi.fn(), findOpenSession: vi.fn(), findSessionRequest: vi.fn(), openSessionIds: vi.fn(), recoverInterruptedStreams: vi.fn(),
   }
   return { repository, service: new ChatService(repository as unknown as ChatRepository) }
 }
@@ -22,6 +22,26 @@ function deferred<T>() {
 }
 
 describe('ChatService', () => {
+  it('publishes pin state only after a real repository mutation', async () => {
+    const { repository, service: chatService } = service()
+    const workspace = {
+      id: 'chat-1', title: '任务', titleState: 'custom' as const, pinnedAt: '2026-08-16T08:01:00.000Z',
+      createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
+      shellCount: 0, mode: 'copilot' as const, live: false, messages: [], shells: [],
+    }
+    repository.pin.mockResolvedValue({ value: workspace, changed: true, liveChatId: null })
+    repository.unpin.mockResolvedValue({ value: { ...workspace, pinnedAt: null }, changed: false, liveChatId: null })
+    const listener = vi.fn()
+    chatService.onChanged(listener)
+
+    await expect(chatService.pin({ requestId: 'pin-1', chatId: workspace.id })).resolves.toMatchObject({ revision: 1, chat: workspace })
+    await expect(chatService.unpin({ requestId: 'unpin-1', chatId: workspace.id })).resolves.toMatchObject({ revision: 1 })
+
+    expect(repository.pin).toHaveBeenCalledWith({ requestId: 'pin-1', chatId: workspace.id })
+    expect(repository.unpin).toHaveBeenCalledWith({ requestId: 'unpin-1', chatId: workspace.id })
+    expect(listener).toHaveBeenCalledOnce()
+  })
+
   it('serializes interrupted stream recovery without publishing a renderer change', async () => {
     const { repository, service: chatService } = service()
     repository.recoverInterruptedStreams.mockResolvedValue(1)
@@ -37,7 +57,7 @@ describe('ChatService', () => {
   it('returns revisioned snapshots and publishes full workspaces in revision order', async () => {
     const { repository, service: chatService } = service()
     const workspace = {
-      id: '11111111-1111-4111-8111-111111111111', title: 'chat', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
+      id: '11111111-1111-4111-8111-111111111111', title: 'chat', titleState: 'custom' as const, pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
       shellCount: 0, mode: 'copilot' as const, live: false, messages: [], shells: [],
     }
     repository.listSnapshot.mockResolvedValue({ chats: [workspace], liveChatId: workspace.id })
@@ -55,7 +75,7 @@ describe('ChatService', () => {
   it('retries a workspace read when its result predates the current revision', async () => {
     const { repository, service: chatService } = service()
     const oldWorkspace = {
-      id: 'chat-1', title: '旧标题', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
+      id: 'chat-1', title: '旧标题', titleState: 'custom' as const, pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
       shellCount: 0, mode: 'copilot' as const, live: false, messages: [], shells: [],
     }
     const newWorkspace = { ...oldWorkspace, title: '新标题', updatedAt: '2026-08-16T08:01:00.000Z' }
@@ -79,7 +99,7 @@ describe('ChatService', () => {
       status: 'open' as const, associatedAt: '2026-08-16T08:00:00.000Z',
     }
     const workspace = {
-      id: 'chat-1', title: 'chat', createdAt: association.associatedAt, updatedAt: association.associatedAt,
+      id: 'chat-1', title: 'chat', titleState: 'custom' as const, pinnedAt: null, createdAt: association.associatedAt, updatedAt: association.associatedAt,
       shellCount: 1, mode: 'copilot' as const, live: true, messages: [], shells: [association],
     }
     repository.findOpenSession.mockResolvedValue(association)
@@ -98,7 +118,7 @@ describe('ChatService', () => {
   it('derives association metadata from a real main-process session and closes it by session id', async () => {
     const { repository, service: chatService } = service()
     const workspace = {
-      id: '11111111-1111-4111-8111-111111111111', title: 'chat', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
+      id: '11111111-1111-4111-8111-111111111111', title: 'chat', titleState: 'custom' as const, pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
       shellCount: 1, mode: 'copilot' as const, live: true, messages: [], shells: [],
     }
     repository.associateOrCreateShell.mockResolvedValue({ value: workspace, changed: true, liveChatId: workspace.id })
@@ -179,7 +199,7 @@ describe('ChatService', () => {
   it('keeps same-chat session binding idempotent and atomically transfers cross-chat ownership', async () => {
     const { repository, service: chatService } = service()
     const existing = { id: 'association-1', chatId: 'chat-1', sessionId: 's1', historyId: 'history-1', hostname: 'host', title: 'host', status: 'open' as const, associatedAt: '2026-08-16T08:00:00.000Z' }
-    const workspace = { id: 'chat-1', title: 'chat', createdAt: existing.associatedAt, updatedAt: existing.associatedAt, shellCount: 1, mode: 'copilot' as const, live: true, messages: [], shells: [existing] }
+    const workspace = { id: 'chat-1', title: 'chat', titleState: 'custom' as const, pinnedAt: null, createdAt: existing.associatedAt, updatedAt: existing.associatedAt, shellCount: 1, mode: 'copilot' as const, live: true, messages: [], shells: [existing] }
     const transferredWorkspace = { ...workspace, id: 'chat-2', title: 'target', shells: [{ ...existing, id: 'association-2', chatId: 'chat-2' }] }
     repository.findOpenSession.mockResolvedValue(existing)
     repository.recordSessionRequest.mockResolvedValue({ value: workspace, changed: true, liveChatId: workspace.id })
@@ -528,7 +548,7 @@ describe('ChatService', () => {
       status: 'open' as const, associatedAt: '2026-08-16T08:00:00.000Z',
     }
     const fallback = {
-      id: 'fallback', title: 'fallback', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.001Z',
+      id: 'fallback', title: 'fallback', titleState: 'custom' as const, pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.001Z',
       shellCount: 1, mode: 'copilot' as const, live: true, messages: [], shells: [{ ...stale, chatId: 'fallback' }],
     }
     repository.findOpenSession.mockResolvedValue(stale)
@@ -547,7 +567,7 @@ describe('ChatService', () => {
   it('uses stable session metadata when an atomic transfer request is retried', async () => {
     const { repository, service: chatService } = service()
     const source = {
-      id: 'source', title: 'source', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.001Z',
+      id: 'source', title: 'source', titleState: 'custom' as const, pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.001Z',
       shellCount: 2, mode: 'copilot' as const, live: false, messages: [], shells: [],
     }
     const target = { ...source, id: 'target', title: 'target', live: true }
@@ -599,7 +619,7 @@ describe('ChatService', () => {
   it('publishes both sides of a transfer at one authoritative revision', async () => {
     const { repository, service: chatService } = service()
     const source = {
-      id: 'source', title: 'source', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.001Z',
+      id: 'source', title: 'source', titleState: 'custom' as const, pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.001Z',
       shellCount: 0, mode: 'copilot' as const, live: false, messages: [], shells: [],
     }
     const target = { ...source, id: 'target', title: 'target', shellCount: 1, live: true }
@@ -620,7 +640,7 @@ describe('ChatService', () => {
 
   it('closes stale persisted associations before renderer restores navigation', async () => {
     const { repository, service: chatService } = service()
-    const workspace = { id: 'chat-1', title: 'chat', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:01:00.000Z', shellCount: 1, mode: 'copilot' as const, live: false, messages: [], shells: [] }
+    const workspace = { id: 'chat-1', title: 'chat', titleState: 'custom' as const, pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:01:00.000Z', shellCount: 1, mode: 'copilot' as const, live: false, messages: [], shells: [] }
     repository.openSessionIds.mockResolvedValue(['stale-s1', 'live-s2'])
     repository.closeSession.mockResolvedValue({ value: workspace, changed: true, liveChatId: null })
 
@@ -651,7 +671,7 @@ describe('ChatService', () => {
   it('publishes one event for each first write, suppresses duplicate writes, and honors unsubscribe', async () => {
     const { repository, service: chatService } = service()
     const workspace = {
-      id: '11111111-1111-4111-8111-111111111111', title: 'chat',
+      id: '11111111-1111-4111-8111-111111111111', title: 'chat', titleState: 'custom' as const, pinnedAt: null,
       createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
       shellCount: 1, mode: 'copilot' as const, live: true, messages: [], shells: [{
         id: '22222222-2222-4222-8222-222222222222', chatId: '11111111-1111-4111-8111-111111111111',

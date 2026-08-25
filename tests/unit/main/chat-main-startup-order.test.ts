@@ -7,7 +7,11 @@ type MockWindow = {
     titleBarStyle?: string
     titleBarOverlay?: { color: string; symbolColor: string; height: number }
   }
-  webContents: { send: ReturnType<typeof vi.fn> }
+  webContents: {
+    send: ReturnType<typeof vi.fn>
+    on: ReturnType<typeof vi.fn>
+    removeListener: ReturnType<typeof vi.fn>
+  }
   emitClosed(): void
 }
 
@@ -58,7 +62,7 @@ const state = vi.hoisted(() => {
 vi.mock('electron', () => {
   class BrowserWindow {
     static getAllWindows() { return state.windows }
-    readonly webContents = { send: vi.fn() }
+    readonly webContents = { send: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
     private readonly listeners = new Map<string, Array<() => void>>()
     readonly options: MockWindow['options']
 

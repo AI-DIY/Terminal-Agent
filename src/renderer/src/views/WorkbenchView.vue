@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Settings } from '@lucide/vue'
+import { Bug, Code2, Settings } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { BastionCatalogSnapshot, BastionHostSummary, BastionLaunchRequest, ChatWorkspace, SavedDirectSessionInput, TerminalDataEvent } from '../../../shared/contracts'
 import type { ConnectionDialogRequest } from '../components/ConnectionDialog.vue'
@@ -33,6 +33,7 @@ const showConnection = ref(false)
 const showSavedSessions = ref(false)
 const editingProfile = ref<DirectSessionSummary | null>(null)
 const connectionError = ref('')
+const diagnosticError = ref('')
 const bastionCatalog = ref<BastionCatalogSnapshot | null>(null)
 const bastionHosts = ref<BastionHostSummary[]>([])
 const selectedBastionSystemId = ref('')
@@ -85,6 +86,7 @@ let unsubscribeAccessClientError: (() => void) | undefined
 let unsubscribeShellHistory: (() => void) | undefined
 let unsubscribeHostMemoryDisclosure: (() => void) | undefined
 let unsubscribeHostMemoryInvalidation: (() => void) | undefined
+let unsubscribeDiagnosticsError: (() => void) | undefined
 let stopShellHistoryEligibilityRefresh: (() => void) | undefined
 let bastionHostRequestId = 0
 const workbenchOperations = createWorkbenchOperationGate()
@@ -205,6 +207,18 @@ async function createChat(invalidateOperation = true): Promise<void> {
   activeSessionId.value = null
 }
 
+async function renameTask(chatId: string, title: string): Promise<boolean> {
+  return chatStore.updateTitle(chatId, title)
+}
+
+async function pinTask(chatId: string): Promise<boolean> {
+  return chatStore.pin(chatId)
+}
+
+async function unpinTask(chatId: string): Promise<boolean> {
+  return chatStore.unpin(chatId)
+}
+
 async function selectChat(chatId: string, invalidateOperation = true, isCurrent: () => boolean = () => true): Promise<void> {
   if (invalidateOperation) workbenchOperations.invalidate()
   if (!isCurrent()) return
@@ -258,7 +272,7 @@ async function removeChat(chatId: string): Promise<void> {
     if (chatStore.state.chats.some(chat => chat.id === chatId)) await selectChat(chatId, false, isCurrent)
     if (!isCurrent()) return
     restoreSelectedShellView()
-    connectionError.value = error instanceof Error ? error.message : '无法删除聊天。'
+    connectionError.value = error instanceof Error ? error.message : '无法删除任务。'
   }
 }
 
@@ -617,6 +631,24 @@ function onWindowKeydown(event: KeyboardEvent): void {
   else if (autonomousUpgrade.state.visible) autonomousUpgrade.cancel()
 }
 
+async function openRendererDevTools(): Promise<void> {
+  diagnosticError.value = ''
+  try {
+    await window.terminalAgent.diagnostics.openRendererDevTools()
+  } catch (error) {
+    diagnosticError.value = error instanceof Error ? error.message : '无法打开 DevTools。'
+  }
+}
+
+async function openNodeInspector(): Promise<void> {
+  diagnosticError.value = ''
+  try {
+    await window.terminalAgent.diagnostics.openNodeInspector()
+  } catch (error) {
+    diagnosticError.value = error instanceof Error ? error.message : '无法打开 Node Inspector。'
+  }
+}
+
 async function initializeWorkbench(): Promise<void> {
   await chatStore.load()
   const selected = chatStore.state.selected
@@ -703,6 +735,7 @@ onMounted(() => {
   })
   unsubscribeUpdated = window.terminalAgent.sessions.onUpdated(session => addSession(session, false))
   unsubscribeAccessClientError = window.terminalAgent.accessClient.onError(message => { connectionError.value = message })
+  unsubscribeDiagnosticsError = window.terminalAgent.diagnostics.onError(message => { diagnosticError.value = message })
   unsubscribeHostMemoryDisclosure = window.terminalAgent.settings.onHostMemoryDisclosure(hostMemoryDisclosureQueue.enqueue)
   unsubscribeHostMemoryInvalidation = window.terminalAgent.settings.onHostMemoryInvalidation(event => hostMemoryDisclosureQueue.remove(event.token))
   void window.terminalAgent.settings.pendingHostMemoryDisclosures().then(items => items.forEach(hostMemoryDisclosureQueue.enqueue)).catch(() => undefined)
@@ -728,6 +761,7 @@ onBeforeUnmount(() => {
   unsubscribeOpened?.()
   unsubscribeUpdated?.()
   unsubscribeAccessClientError?.()
+  unsubscribeDiagnosticsError?.()
   unsubscribeShellHistory?.()
   unsubscribeHostMemoryDisclosure?.()
   unsubscribeHostMemoryInvalidation?.()
@@ -740,12 +774,15 @@ onBeforeUnmount(() => {
 <template>
   <WorkbenchShell
     :modal-open="showConnection || showSavedSessions || showHistoryDialog || autonomousUpgrade.state.visible || pendingHostMemoryDisclosure !== null"
-    :current-chat-title="chatStore.state.selected?.title ?? '未选择聊天'"
+    :current-chat-title="chatStore.state.selected?.title ?? '未选择任务'"
     :current-chat-shell-count="chatStore.state.selected?.shellCount ?? 0"
   >
     <template #app-actions>
       <p v-if="connectionError" class="connection-error" role="alert">{{ connectionError }}</p>
-      <button type="button" class="header-button" @click="emit('showSettings')"><Settings :size="14" aria-hidden="true" /><span>设置</span></button>
+      <p v-if="diagnosticError" class="diagnostic-error" role="alert">{{ diagnosticError }}</p>
+      <button type="button" class="header-button" aria-label="设置" title="设置" @click="emit('showSettings')"><Settings :size="14" aria-hidden="true" /><span>设置</span></button>
+      <button type="button" class="header-button" aria-label="DevTools" title="DevTools" @click="openRendererDevTools"><Code2 :size="14" aria-hidden="true" /><span>DevTools</span></button>
+      <button type="button" class="header-button" aria-label="Node Inspector" title="Node Inspector" @click="openNodeInspector"><Bug :size="14" aria-hidden="true" /><span>Node Inspector</span></button>
     </template>
 
     <template #sidebar="{ collapse }">
@@ -754,6 +791,9 @@ onBeforeUnmount(() => {
         :current-chat-id="chatStore.state.selectedId"
         :loading="chatStore.state.loading"
         :error="chatStore.state.error"
+        :rename-task="renameTask"
+        :pin-task="pinTask"
+        :unpin-task="unpinTask"
         @select="selectChat"
         @remove="removeChat"
         @create="createChat"
@@ -784,7 +824,7 @@ onBeforeUnmount(() => {
         @toggle-history-host="toggleHistoricalHost"
       >
         <template #history>
-          <section class="history-playback" aria-label="聊天 Shell 历史回放">
+          <section class="history-playback" aria-label="任务 Shell 历史回放">
             <div
               v-if="historyPlayback.length"
               class="history-shell-grid"
@@ -799,7 +839,7 @@ onBeforeUnmount(() => {
               </article>
             </div>
             <p v-else-if="shellHistory.state.loading">正在读取关联 Shell 历史...</p>
-            <p v-else>此聊天没有关联 Shell。</p>
+            <p v-else>此任务没有关联 Shell。</p>
           </section>
         </template>
         <template #empty>
@@ -905,6 +945,7 @@ onBeforeUnmount(() => {
 .agent-empty strong { color: var(--text-strong); font-size: 12px; }
 .agent-empty p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .connection-error { max-width: min(42vw, 480px); margin: 0; overflow: hidden; color: var(--red); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-error { max-width: min(30vw, 320px); min-width: 0; margin: 0; overflow: hidden; color: var(--red); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .connection-modal { position: fixed; z-index: 10; inset: 57px 9px 9px; display: grid; align-content: center; justify-content: center; padding: 16px; overflow: auto; border-radius: 0 0 7px 7px; background: rgb(20 24 29 / 52%); backdrop-filter: blur(1px); }
 .autonomous-upgrade-dialog { display: grid; gap: 12px; width: min(460px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 18px 48px rgb(16 24 40 / 18%); }
 .autonomous-upgrade-dialog h2,.autonomous-upgrade-dialog p { margin: 0; }

@@ -59,7 +59,7 @@ onBeforeUnmount(() => store.dispose())
           <p>{{ message.content }}</p>
         </div>
       </article>
-      <section v-if="!messages.length" class="empty"><Bot :size="24" aria-hidden="true" /><strong>{{ readOnly ? '此聊天没有 AI 记录' : '开始协作' }}</strong><span>{{ readOnly ? 'Shell 历史仍可在中间工作区查看' : '输入目标，AI 会结合当前聊天中的 Shell 信息回答' }}</span></section>
+      <section v-if="!messages.length" class="empty"><Bot :size="24" aria-hidden="true" /><strong>{{ readOnly ? '此任务没有 AI 记录' : '开始协作' }}</strong><span>{{ readOnly ? 'Shell 历史仍可在中间工作区查看' : '输入目标，AI 会结合当前任务中的 Shell 信息回答' }}</span></section>
       <p v-if="chatId && store.state.errors[chatId]" class="error" role="alert"><span>{{ store.state.errors[chatId] }}</span><button v-if="retryable" type="button" @click="retry"><RefreshCw :size="13" aria-hidden="true" />重试</button></p>
     </div>
 

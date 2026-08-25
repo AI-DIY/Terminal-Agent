@@ -30,6 +30,36 @@ afterEach(async () => {
 })
 
 describe('ChatRepository', () => {
+  it('pins and unpins a task without changing its updatedAt', async () => {
+    const repository = await createRepository()
+    const created = await repository.create({ requestId: 'create-pin-task' })
+    const updatedAt = created.value.updatedAt
+
+    const pinned = await repository.pin({ requestId: 'pin-task', chatId: created.value.id })
+    expect(pinned.value).toMatchObject({
+      id: created.value.id,
+      titleState: 'new',
+      pinnedAt: '2026-08-16T08:00:00.001Z',
+      updatedAt,
+      mode: 'copilot',
+    })
+
+    const unpinned = await repository.unpin({ requestId: 'unpin-task', chatId: created.value.id })
+    expect(unpinned.value).toMatchObject({
+      id: created.value.id,
+      titleState: 'new',
+      pinnedAt: null,
+      updatedAt,
+      mode: 'copilot',
+    })
+
+    const persisted = chatDocumentSchema.parse(JSON.parse(await readFile(repository.path, 'utf8')))
+    expect(persisted.operations.slice(-2)).toMatchObject([
+      { kind: 'pin', appliedAt: '2026-08-16T08:00:00.001Z', result: { pinnedAt: '2026-08-16T08:00:00.001Z', updatedAt } },
+      { kind: 'unpin', appliedAt: '2026-08-16T08:00:00.002Z', result: { pinnedAt: null, updatedAt } },
+    ])
+  })
+
   it('persists streaming message updates with independent update request ids', async () => {
     const repository = await createRepository()
     const chat = (await repository.create({ requestId: 'create-streaming' })).value
@@ -117,7 +147,7 @@ describe('ChatRepository', () => {
     await expect(repository.findRetryMessage(chat.id, 'retryable request')).resolves.toBe(retryable.value.messages.at(-1)?.id)
   })
 
-  it('migrates a legacy cancellation into an explicit terminal retry marker', async () => {
+  it('does not rewrite v2 cancellation records during restart', async () => {
     const repository = await createRepository()
     const chat = (await repository.create({ requestId: 'create-legacy-cancellation' })).value
     await repository.appendMessage({ requestId: 'append-legacy-user', chatId: chat.id, role: 'user', content: 'legacy cancellation', state: 'complete' })
@@ -125,8 +155,8 @@ describe('ChatRepository', () => {
 
     const restored = await new ChatRepository(repository.path).get(chat.id)
 
-    expect(restored.messages.at(-1)).toMatchObject({ role: 'assistant', content: '已取消。', state: 'error', retryable: false })
-    expect(JSON.parse(await readFile(repository.path, 'utf8')).messages.at(-1)).toMatchObject({ retryable: false })
+    expect(restored.messages.at(-1)).toMatchObject({ role: 'assistant', content: '已取消。', state: 'error' })
+    expect(Object.keys(JSON.parse(await readFile(repository.path, 'utf8')).messages.at(-1))).not.toContain('retryable')
   })
 
   it('computes the next logical timestamp for a legal large document without argument expansion', () => {
@@ -137,17 +167,17 @@ describe('ChatRepository', () => {
     for (let index = 0; index < count; index += 1) {
       const timestamp = new Date(base + index).toISOString()
       const chatId = `chat-${index}`
-      chats.push({ id: chatId, title: 'Chat', createdAt: timestamp, updatedAt: timestamp, mode: 'copilot' })
+      chats.push({ id: chatId, title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt: timestamp, updatedAt: timestamp, mode: 'copilot' })
       operations.push({
         requestId: `create-${index}`,
         kind: 'create',
         chatId,
         fingerprint,
         appliedAt: timestamp,
-        result: { createdAt: timestamp, updatedAt: timestamp, mode: 'copilot' },
+        result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt: timestamp, updatedAt: timestamp, mode: 'copilot' },
       })
     }
-    const document: ChatDocument = { version: 1, liveChatId: null, chats, messages: [], associations: [], operations }
+    const document: ChatDocument = { version: 2, liveChatId: null, chats, messages: [], associations: [], operations }
 
     expect(nextLogicalTimestamp(new Date(base), document)).toBe(new Date(base + count).toISOString())
   })
@@ -189,9 +219,9 @@ describe('ChatRepository', () => {
 
   it('builds summaries from chats and one association aggregation without messages', () => {
     const summaries = summarizeChats([
-      { id: 'chat-1', title: 'One', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:02:00.000Z', mode: 'copilot' },
-      { id: 'chat-2', title: 'Two', createdAt: '2026-08-16T08:01:00.000Z', updatedAt: '2026-08-16T08:01:00.000Z', mode: 'autonomous' },
-      { id: 'chat-3', title: 'Deleted', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:03:00.000Z', mode: 'copilot', deletedAt: '2026-08-16T08:03:00.000Z' },
+      { id: 'chat-1', title: 'One', titleState: 'custom', pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:02:00.000Z', mode: 'copilot' },
+      { id: 'chat-2', title: 'Two', titleState: 'custom', pinnedAt: null, createdAt: '2026-08-16T08:01:00.000Z', updatedAt: '2026-08-16T08:01:00.000Z', mode: 'autonomous' },
+      { id: 'chat-3', title: '已删除任务', titleState: 'custom', pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:03:00.000Z', mode: 'copilot', deletedAt: '2026-08-16T08:03:00.000Z' },
     ], [
       { id: 'association-1', chatId: 'chat-1', requestId: 'associate-1', historyId: 'history-1', hostname: 'host-1', title: 'Shell 1', status: 'closed', associatedAt: '2026-08-16T08:00:00.001Z', closedAt: '2026-08-16T08:00:00.002Z', closeRequestId: 'close-1' },
       { id: 'association-2', chatId: 'chat-1', requestId: 'associate-2', historyId: 'history-2', hostname: 'host-2', title: 'Shell 2', status: 'open', associatedAt: '2026-08-16T08:00:00.003Z' },
@@ -199,8 +229,8 @@ describe('ChatRepository', () => {
     ])
 
     expect(summaries).toEqual([
-      { id: 'chat-1', title: 'One', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:02:00.000Z', mode: 'copilot', shellCount: 2, live: true },
-      { id: 'chat-2', title: 'Two', createdAt: '2026-08-16T08:01:00.000Z', updatedAt: '2026-08-16T08:01:00.000Z', mode: 'autonomous', shellCount: 0, live: false },
+      { id: 'chat-1', title: 'One', titleState: 'custom', pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:02:00.000Z', mode: 'copilot', shellCount: 2, live: true },
+      { id: 'chat-2', title: 'Two', titleState: 'custom', pinnedAt: null, createdAt: '2026-08-16T08:01:00.000Z', updatedAt: '2026-08-16T08:01:00.000Z', mode: 'autonomous', shellCount: 0, live: false },
     ])
   })
 
@@ -408,7 +438,7 @@ describe('ChatRepository', () => {
     await expect(repository.findOpenSession('s1')).resolves.toMatchObject({ chatId: source.id, status: 'open' })
   })
 
-  it('creates default copilot chat with deterministic fallback title and persists request idempotency', async () => {
+  it('creates a default task with deterministic fallback title and persists request idempotency', async () => {
     const repository = await createRepository()
     const first = await repository.create({ requestId: 'create-1' })
     const second = await repository.create({ requestId: 'create-1' })
@@ -416,9 +446,68 @@ describe('ChatRepository', () => {
     expect(second.value).toEqual(first.value)
     expect(first.changed).toBe(true)
     expect(second.changed).toBe(false)
-    expect(first.value.title).toBe('新建聊天 2026-08-16 16:00:00')
+    expect(first.value.title).toBe('新建任务 2026-08-16 16:00:00')
+    expect(first.value.titleState).toBe('new')
     expect(first.value.mode).toBe('copilot')
-    expect(JSON.parse(await readFile(join(dirs[0], 'chat-workspaces.json'), 'utf8')).version).toBe(1)
+    expect(JSON.parse(await readFile(join(dirs[0], 'chat-workspaces.json'), 'utf8')).version).toBe(2)
+  })
+
+  it('starts a task only for the first persisted user message and preserves a custom title', async () => {
+    const repository = await createRepository()
+    const created = (await repository.create({ requestId: 'create-title-lifecycle' })).value
+
+    const assistant = await repository.appendMessage({
+      requestId: 'append-assistant-before-user', chatId: created.id, role: 'assistant', content: '正在生成', state: 'streaming',
+    })
+    expect(assistant.value).toMatchObject({
+      title: '新建任务 2026-08-16 16:00:00',
+      titleState: 'new',
+    })
+
+    const user = await repository.appendMessage({
+      requestId: 'append-first-user', chatId: created.id, role: 'user', content: '检查服务状态', state: 'complete',
+    })
+    expect(user.value).toMatchObject({
+      title: '任务 2026-08-16 16:00:00',
+      titleState: 'started',
+    })
+
+    await repository.updateTitle({ requestId: 'rename-started-task', chatId: created.id, title: '生产环境排障' })
+    const later = await repository.appendMessage({
+      requestId: 'append-later-user', chatId: created.id, role: 'user', content: '继续检查', state: 'complete',
+    })
+    expect(later.value).toMatchObject({ title: '生产环境排障', titleState: 'custom' })
+  })
+
+  it('starts a task when its first Shell association is persisted', async () => {
+    const repository = await createRepository()
+    const created = (await repository.create({ requestId: 'create-shell-title-lifecycle' })).value
+
+    const associated = await repository.associateShell({
+      requestId: 'associate-first-shell', chatId: created.id, historyId: 'history-first-shell', hostname: 'host-1', title: 'Shell 1',
+    })
+
+    expect(associated.value).toMatchObject({
+      title: '任务 2026-08-16 16:00:00',
+      titleState: 'started',
+    })
+  })
+
+  it('preserves associated Shell metadata verbatim for the authorized model context', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-raw-shell-metadata' })).value
+    const hostname = 'tmp:C:\\synthetic\\AppData\\Local\\Temp\\access\\profile.conf'
+    const title = `C:\\synthetic\\.ssh\\id_rsa sk-proj-${'A'.repeat(32)}`
+
+    await repository.associateShell({
+      requestId: 'associate-raw-shell-metadata', chatId: chat.id, sessionId: 'raw-session', historyId: 'raw-history', hostname, title,
+    })
+
+    await expect(repository.get(chat.id)).resolves.toMatchObject({
+      shells: [expect.objectContaining({ hostname, title })],
+    })
+    const persisted = JSON.parse(await readFile(repository.path, 'utf8')) as { associations: Array<{ hostname: string; title: string }> }
+    expect(persisted.associations).toEqual([expect.objectContaining({ hostname, title })])
   })
 
   it('sorts by updated time and exposes shell count and appended-only messages', async () => {
@@ -453,7 +542,7 @@ describe('ChatRepository', () => {
     expect(snapshot.liveChatId).toBe(current.id)
   })
 
-  it('migrates a missing liveChatId to the deterministic open workspace and persists it across restart', async () => {
+  it('rejects a v2 document missing liveChatId without rewriting its bytes', async () => {
     const repository = await createRepository()
     const open = (await repository.create({ requestId: 'create-open', title: 'open' })).value
     await repository.associateShell({
@@ -465,12 +554,10 @@ describe('ChatRepository', () => {
     delete legacy.liveChatId
     await writeFile(repository.path, JSON.stringify(legacy), 'utf8')
 
-    const migrated = new ChatRepository(repository.path)
-    expect((await migrated.listSnapshot()).liveChatId).toBe(open.id)
-    expect(JSON.parse(await readFile(repository.path, 'utf8')).liveChatId).toBe(open.id)
-
+    const source = await readFile(repository.path)
     const restarted = new ChatRepository(repository.path)
-    expect((await restarted.listSnapshot()).liveChatId).toBe(open.id)
+    await expect(restarted.listSnapshot()).rejects.toThrow('AtomicJsonStore could not read valid JSON data')
+    expect(await readFile(repository.path)).toEqual(source)
   })
 
   it('preserves an explicit null liveChatId during restart migration checks', async () => {
@@ -490,7 +577,7 @@ describe('ChatRepository', () => {
     expect(JSON.parse(await readFile(repository.path, 'utf8')).liveChatId).toBeNull()
   })
 
-  it('sanitizes persisted association display metadata when a version-one document already has a live chat', async () => {
+  it('does not rewrite persisted v2 association display metadata during restart', async () => {
     const repository = await createRepository()
     const chat = (await repository.create({ requestId: 'create-1', title: 'safe chat title' })).value
     await repository.appendMessage({ requestId: 'message-1', chatId: chat.id, role: 'user', content: 'SAFE_MESSAGE_PLACEHOLDER', state: 'complete' })
@@ -503,21 +590,15 @@ describe('ChatRepository', () => {
     associations[0].title = 'curl --user operator:SAFE_KEY_MATERIAL_PLACEHOLDER https://host.example'
     await writeFile(repository.path, JSON.stringify(persisted), 'utf8')
 
+    const source = await readFile(repository.path)
     const restarted = new ChatRepository(repository.path)
-    const snapshot = await restarted.listSnapshot()
     const workspace = await restarted.get(chat.id)
-    const association = await restarted.findOpenSession('session-safe')
-    const rewritten = await readFile(repository.path, 'utf8')
 
-    expect(snapshot.liveChatId).toBe(chat.id)
-    expect(workspace.shells[0]).toMatchObject({ hostname: '[REDACTED SENSITIVE CONTENT]', title: '[REDACTED SENSITIVE CONTENT]' })
-    expect(association).toMatchObject({ chatId: chat.id, hostname: '[REDACTED SENSITIVE CONTENT]', title: '[REDACTED SENSITIVE CONTENT]' })
-    expect(rewritten).not.toContain('SAFE_PATH_PLACEHOLDER')
-    expect(rewritten).not.toContain('SAFE_KEY_MATERIAL_PLACEHOLDER')
-    expect(rewritten).toContain('SAFE_MESSAGE_PLACEHOLDER')
+    expect(workspace.shells[0]).toMatchObject({ hostname: 'tmp:SAFE_PATH_PLACEHOLDER', title: 'curl --user operator:SAFE_KEY_MATERIAL_PLACEHOLDER https://host.example' })
+    expect(await readFile(repository.path)).toEqual(source)
   })
 
-  it('sanitizes existing version-one shell metadata without changing messages, session ownership, or idempotency', async () => {
+  it('does not rewrite existing v2 shell metadata or request history', async () => {
     const repository = await createRepository()
     const chat = (await repository.create({ requestId: 'create-migration', title: 'migration chat' })).value
     await repository.appendMessage({
@@ -534,17 +615,15 @@ describe('ChatRepository', () => {
     legacy.associations[0]!.title = 'curl --user operator:INLINE_CREDENTIAL_PLACEHOLDER'
     await writeFile(repository.path, JSON.stringify(legacy), 'utf8')
 
+    const source = await readFile(repository.path, 'utf8')
     const restarted = new ChatRepository(repository.path)
-    const snapshot = await restarted.listSnapshot()
     const workspace = await restarted.get(chat.id)
     const owner = await restarted.findOpenSession('session-migration')
-    const rewritten = await readFile(repository.path, 'utf8')
 
-    expect(snapshot.liveChatId).toBe(chat.id)
     expect(workspace.messages).toEqual([expect.objectContaining({ content: 'MESSAGE_SAFE_PLACEHOLDER' })])
-    expect(workspace.shells).toEqual([expect.objectContaining({ hostname: '[REDACTED SENSITIVE CONTENT]', title: '[REDACTED SENSITIVE CONTENT]' })])
-    expect(owner).toEqual(expect.objectContaining({ chatId: chat.id, hostname: '[REDACTED SENSITIVE CONTENT]', title: '[REDACTED SENSITIVE CONTENT]' }))
-    expect(rewritten).not.toContain('INLINE_CREDENTIAL_PLACEHOLDER')
+    expect(workspace.shells).toEqual([expect.objectContaining({ hostname: 'tmp:INLINE_CREDENTIAL_PLACEHOLDER', title: 'curl --user operator:INLINE_CREDENTIAL_PLACEHOLDER' })])
+    expect(owner).toEqual(expect.objectContaining({ chatId: chat.id, hostname: 'tmp:INLINE_CREDENTIAL_PLACEHOLDER', title: 'curl --user operator:INLINE_CREDENTIAL_PLACEHOLDER' }))
+    expect(await readFile(repository.path, 'utf8')).toEqual(source)
 
     await expect(restarted.associateShell({
       requestId: 'associate-migration', chatId: chat.id, sessionId: 'session-migration', historyId: 'history-migration',
@@ -791,7 +870,7 @@ describe('ChatRepository', () => {
     const restarted = new ChatRepository(repository.path)
     const replayAfterDelete = await restarted.create({ requestId: 'create-1' })
     expect(replayAfterDelete).toEqual({
-      value: { ...created.value, title: '已删除聊天', updatedAt: '2026-08-16T08:00:00.002Z' },
+      value: { ...created.value, title: '已删除任务', titleState: 'custom', pinnedAt: null, updatedAt: '2026-08-16T08:00:00.002Z' },
       changed: false,
       liveChatId: null,
     })
@@ -1040,7 +1119,9 @@ describe('ChatRepository', () => {
     }), 'utf8')
 
     const repository = new ChatRepository(path)
-    await expect(repository.list()).rejects.toThrow('AtomicJsonStore could not read valid JSON data')
+    const source = await readFile(path)
+    await expect(repository.list()).rejects.toThrow('任务数据版本不兼容，请清空旧任务数据后重试。')
+    expect(await readFile(path)).toEqual(source)
   })
 
   it('uses one global logical watermark across chats and every write kind', async () => {
@@ -1063,7 +1144,7 @@ describe('ChatRepository', () => {
 
     const persisted = chatDocumentSchema.parse(JSON.parse(await readFile(repository.path, 'utf8')))
     expect(second.createdAt).toBe('2026-08-16T10:00:00.001Z')
-    expect(second.title).toBe('新建聊天 2026-08-16 18:00:00')
+    expect(second.title).toBe('新建任务 2026-08-16 18:00:00')
     expect(persisted.operations.map(operation => operation.appliedAt)).toEqual([
       '2026-08-16T10:00:00.000Z',
       '2026-08-16T10:00:00.001Z',
@@ -1119,7 +1200,7 @@ describe('ChatRepository', () => {
     const second = (await restarted.create({ requestId: 'create-2' })).value
 
     expect(second).toMatchObject({
-      title: '新建聊天 2026-08-16 18:00:01',
+      title: '新建任务 2026-08-16 18:00:01',
       createdAt: '2026-08-16T10:00:01.000Z',
       updatedAt: '2026-08-16T10:00:01.000Z',
     })
@@ -1129,12 +1210,12 @@ describe('ChatRepository', () => {
     ])
   })
 
-  it('sanitizes legacy version-one shell associations while preserving live ownership and messages', async () => {
+  it('rejects a legacy version-one task document without rewriting its bytes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'chat-repository-legacy-association-safety-'))
     dirs.push(dir)
     const path = join(dir, 'chat-workspaces.json')
     const placeholder = 'INLINE_CREDENTIAL_PLACEHOLDER'
-    await writeFile(path, JSON.stringify({
+    const source = JSON.stringify({
       version: 1,
       chats: [{ id: 'chat-1', title: 'Chat', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.002Z', mode: 'copilot' }],
       messages: [{
@@ -1159,21 +1240,11 @@ describe('ChatRepository', () => {
           resultId: 'association-1', result: { createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.002Z', mode: 'copilot' },
         },
       ],
-    }), 'utf8')
+    })
+    await writeFile(path, source, 'utf8')
 
     const repository = new ChatRepository(path)
-    const workspace = await repository.get('chat-1')
-    const persisted = JSON.parse(await readFile(path, 'utf8'))
-
-    expect(workspace.shells[0]).toMatchObject({
-      id: 'association-1', historyId: 'history-1', hostname: '[REDACTED SENSITIVE CONTENT]', title: '[REDACTED SENSITIVE CONTENT]',
-    })
-    expect(workspace.messages[0].content).toBe(placeholder)
-    expect(persisted.liveChatId).toBe('chat-1')
-    expect(persisted.associations[0]).toMatchObject({
-      id: 'association-1', chatId: 'chat-1', historyId: 'history-1',
-      hostname: '[REDACTED SENSITIVE CONTENT]', title: '[REDACTED SENSITIVE CONTENT]',
-    })
-    expect(JSON.stringify(persisted.associations[0])).not.toContain(placeholder)
+    await expect(repository.get('chat-1')).rejects.toThrow('任务数据版本不兼容，请清空旧任务数据后重试。')
+    expect(await readFile(path, 'utf8')).toBe(source)
   })
 })

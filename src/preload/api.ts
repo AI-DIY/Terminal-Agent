@@ -1,5 +1,6 @@
 import type { ConnectedSession, TerminalClosedEvent, TerminalDataEvent } from '../main/ssh/session-service'
 import { chatRuntimeEventSchema, hostMemoryConsentTokenSchema, hostMemoryDisclosureSchema, hostMemoryInvalidationSchema, hostMemoryRecordSchema, hostMemorySettingsSchema, rendererModelProfileSchema } from '../shared/contracts'
+import { z } from 'zod'
 import type {
   AgentDeltaEvent,
   AgentErrorEvent,
@@ -14,10 +15,13 @@ import type {
   ChatCreateRequest,
   ChatListSnapshot,
   ChatRemoveRequest,
+  ChatPinRequest,
   ChatResolveSessionRequest,
   ChatSessionResolution,
   ChatSetModeRequest,
+  ChatUnpinRequest,
   ChatTransferSessionsRequest,
+  ChatUpdateTitleRequest,
   ChatWorkspaceSnapshot,
   ChatRunRequest,
   ChatRuntimeEvent,
@@ -50,6 +54,9 @@ export type TerminalAgentApi = {
     get(chatId: string): Promise<ChatWorkspaceSnapshot>
     resolveSession(request: ChatResolveSessionRequest): Promise<ChatSessionResolution>
     setMode(request: ChatSetModeRequest): Promise<ChatWorkspaceSnapshot>
+    updateTitle(request: ChatUpdateTitleRequest): Promise<ChatWorkspaceSnapshot>
+    pin(request: ChatPinRequest): Promise<ChatWorkspaceSnapshot>
+    unpin(request: ChatUnpinRequest): Promise<ChatWorkspaceSnapshot>
     remove(request: ChatRemoveRequest): Promise<void>
     bindSession(request: ChatBindSessionRequest): Promise<ChatWorkspaceSnapshot>
     transferSessions(request: ChatTransferSessionsRequest): Promise<ChatWorkspaceSnapshot>
@@ -59,6 +66,11 @@ export type TerminalAgentApi = {
     send(request: ChatRunRequest): Promise<void>
     cancel(chatId: string): Promise<void>
     onEvent(listener: (event: ChatRuntimeEvent) => void): () => void
+  }
+  diagnostics: {
+    openRendererDevTools(): Promise<void>
+    openNodeInspector(): Promise<void>
+    onError(listener: (message: string) => void): () => void
   }
   shellHistory: {
     list(request: ShellHistoryListRequest): Promise<ShellHistorySummary[]>
@@ -152,6 +164,9 @@ export function createTerminalAgentApi(ipcRenderer: {
       get: (chatId: string) => ipcRenderer.invoke('chats:get', chatId) as Promise<ChatWorkspaceSnapshot>,
       resolveSession: (request: ChatResolveSessionRequest) => ipcRenderer.invoke('chats:resolve-session', request) as Promise<ChatSessionResolution>,
       setMode: (request: ChatSetModeRequest) => ipcRenderer.invoke('chats:set-mode', request) as Promise<ChatWorkspaceSnapshot>,
+      updateTitle: (request: ChatUpdateTitleRequest) => ipcRenderer.invoke('chats:update-title', request) as Promise<ChatWorkspaceSnapshot>,
+      pin: (request: ChatPinRequest) => ipcRenderer.invoke('chats:pin', request) as Promise<ChatWorkspaceSnapshot>,
+      unpin: (request: ChatUnpinRequest) => ipcRenderer.invoke('chats:unpin', request) as Promise<ChatWorkspaceSnapshot>,
       remove: async (request: ChatRemoveRequest) => { await ipcRenderer.invoke('chats:remove', request) },
       bindSession: (request: ChatBindSessionRequest) => ipcRenderer.invoke('chats:bind-session', request) as Promise<ChatWorkspaceSnapshot>,
       transferSessions: (request: ChatTransferSessionsRequest) => ipcRenderer.invoke('chats:transfer-sessions', request) as Promise<ChatWorkspaceSnapshot>,
@@ -164,6 +179,15 @@ export function createTerminalAgentApi(ipcRenderer: {
         const handler = (_event: unknown, payload: unknown) => listener(chatRuntimeEventSchema.parse(payload))
         ipcRenderer.on('chat:event', handler)
         return () => ipcRenderer.removeListener('chat:event', handler)
+      },
+    }),
+    diagnostics: Object.freeze({
+      openRendererDevTools: async () => { await ipcRenderer.invoke('diagnostics:open-renderer-devtools') },
+      openNodeInspector: async () => { await ipcRenderer.invoke('diagnostics:open-node-inspector') },
+      onError: (listener: (message: string) => void) => {
+        const handler = (_event: unknown, payload: unknown) => listener(z.string().trim().min(1).max(4_000).parse(payload))
+        ipcRenderer.on('diagnostics:error', handler)
+        return () => ipcRenderer.removeListener('diagnostics:error', handler)
       },
     }),
     shellHistory: Object.freeze({

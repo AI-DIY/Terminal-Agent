@@ -4,7 +4,11 @@ import { recoverChatStreamsBeforeCreatingMainWindow } from '../../../src/main/ch
 
 const state = vi.hoisted(() => ({
   windows: [] as Array<{
-    webContents: { send: ReturnType<typeof vi.fn> }
+    webContents: {
+      send: ReturnType<typeof vi.fn>
+      on: ReturnType<typeof vi.fn>
+      removeListener: ReturnType<typeof vi.fn>
+    }
     options: { show?: boolean }
     isDestroyed: ReturnType<typeof vi.fn>
     setTitleBarOverlay: ReturnType<typeof vi.fn>
@@ -27,7 +31,7 @@ const state = vi.hoisted(() => ({
 vi.mock('electron', () => {
   class BrowserWindow {
     static getAllWindows() { return state.windows }
-    readonly webContents = { send: vi.fn() }
+    readonly webContents = { send: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
     private readonly listeners = new Map<string, Array<() => void>>()
     loadURL = vi.fn().mockResolvedValue(undefined)
     loadFile = vi.fn().mockResolvedValue(undefined)

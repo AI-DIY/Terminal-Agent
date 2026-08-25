@@ -3,6 +3,7 @@ import {
   chatDocumentSchema,
   chatOperationSchema,
   indexRemoveOperations,
+  guardChatDocumentVersion,
   type ChatDocument,
   type ChatOperation,
 } from '../../../src/main/chat/chat-contracts'
@@ -14,9 +15,9 @@ const fingerprint = 'a'.repeat(64)
 
 function validDocument(): ChatDocument {
   return {
-    version: 1,
+    version: 2,
     liveChatId: 'chat-1',
-    chats: [{ id: 'chat-1', title: 'Chat', createdAt, updatedAt, mode: 'copilot' }],
+    chats: [{ id: 'chat-1', title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt, mode: 'copilot' }],
     messages: [{
       id: 'message-1', chatId: 'chat-1', requestId: 'message-request-1', role: 'user',
       content: 'hello', createdAt: messageAt, state: 'complete',
@@ -29,17 +30,17 @@ function validDocument(): ChatDocument {
       {
         requestId: 'create-request-1', kind: 'create', chatId: 'chat-1', fingerprint,
         appliedAt: createdAt,
-        result: { createdAt, updatedAt: createdAt, mode: 'copilot' },
+        result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt: createdAt, mode: 'copilot' },
       },
       {
         requestId: 'message-request-1', kind: 'appendMessage', chatId: 'chat-1', fingerprint, resultId: 'message-1',
         appliedAt: messageAt,
-        result: { createdAt, updatedAt: messageAt, mode: 'copilot' },
+        result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt: messageAt, mode: 'copilot' },
       },
       {
         requestId: 'association-request-1', kind: 'associateShell', chatId: 'chat-1', fingerprint, resultId: 'association-1',
         appliedAt: updatedAt,
-        result: { createdAt, updatedAt, mode: 'copilot' },
+        result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt, mode: 'copilot' },
       },
     ],
   }
@@ -60,7 +61,7 @@ function closeAssociation(document: ChatDocument): void {
     fingerprint,
     appliedAt: updatedAt,
     resultId: 'association-1',
-    result: { createdAt, updatedAt, mode: 'copilot' },
+    result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt, mode: 'copilot' },
   })
 }
 
@@ -73,6 +74,34 @@ function withAppliedAt(document: ChatDocument): ChatDocument {
 }
 
 describe('chatDocumentSchema semantic invariants', () => {
+  it('rejects a version-one task document without mutating its data', () => {
+    const legacyDocument = {
+      version: 1,
+      liveChatId: null,
+      chats: [],
+      messages: [],
+      associations: [],
+      operations: [],
+    }
+    const source = JSON.stringify(legacyDocument)
+
+    expect(() => guardChatDocumentVersion(legacyDocument)).toThrow('任务数据版本不兼容，请清空旧任务数据后重试。')
+    expect(JSON.stringify(legacyDocument)).toBe(source)
+  })
+
+  it('rejects every persisted task-document version other than version two', () => {
+    const futureDocument = {
+      version: 3,
+      liveChatId: null,
+      chats: [],
+      messages: [],
+      associations: [],
+      operations: [],
+    }
+
+    expect(() => guardChatDocumentVersion(futureDocument)).toThrow('任务数据版本不兼容，请清空旧任务数据后重试。')
+  })
+
   it('requires the persisted live workspace to reference an active chat', () => {
     const missing = validDocument()
     missing.liveChatId = 'missing-chat'
@@ -80,7 +109,7 @@ describe('chatDocumentSchema semantic invariants', () => {
 
     const deleted = validDocument()
     deleted.chats[0].deletedAt = updatedAt
-    deleted.chats[0].title = '已删除聊天'
+    deleted.chats[0].title = '已删除任务'
     deleted.liveChatId = deleted.chats[0].id
     expect(chatDocumentSchema.safeParse(deleted).success).toBe(false)
   })
@@ -92,7 +121,7 @@ describe('chatDocumentSchema semantic invariants', () => {
       chatId: 'chat-1',
       appliedAt: createdAt,
       fingerprint: 'a'.repeat(64),
-      result: { createdAt, updatedAt: createdAt, mode: 'copilot' },
+      result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt: createdAt, mode: 'copilot' },
     }
 
     expect(chatOperationSchema.safeParse(operation).success).toBe(true)
@@ -100,6 +129,102 @@ describe('chatDocumentSchema semantic invariants', () => {
     expect(chatOperationSchema.safeParse({ ...operation, fingerprint: 'a'.repeat(63) }).success).toBe(false)
     expect(chatOperationSchema.safeParse({ ...operation, fingerprint: 'A'.repeat(64) }).success).toBe(false)
     expect(chatOperationSchema.safeParse({ ...operation, fingerprint: 'g'.repeat(64) }).success).toBe(false)
+  })
+
+  it('allows only the first user message or a persisted Shell association to start a new task', () => {
+    const firstUserMessage = validDocument()
+    firstUserMessage.chats[0] = {
+      ...firstUserMessage.chats[0],
+      title: '任务 2026-08-16 16:00:00',
+      titleState: 'started',
+      updatedAt: messageAt,
+    }
+    firstUserMessage.associations = []
+    firstUserMessage.operations = firstUserMessage.operations.slice(0, 2)
+    firstUserMessage.operations[0].result = {
+      title: '新建任务 2026-08-16 16:00:00', titleState: 'new', pinnedAt: null,
+      createdAt, updatedAt: createdAt, mode: 'copilot',
+    }
+    firstUserMessage.operations[1].result = {
+      title: '任务 2026-08-16 16:00:00', titleState: 'started', pinnedAt: null,
+      createdAt, updatedAt: messageAt, mode: 'copilot',
+    }
+    expect(chatDocumentSchema.safeParse(firstUserMessage).success).toBe(true)
+
+    const firstShell = validDocument()
+    firstShell.chats[0] = {
+      ...firstShell.chats[0],
+      title: '任务 2026-08-16 16:00:00',
+      titleState: 'started',
+    }
+    firstShell.messages = []
+    firstShell.operations = [firstShell.operations[0], firstShell.operations[2]]
+    firstShell.operations[0].result = {
+      title: '新建任务 2026-08-16 16:00:00', titleState: 'new', pinnedAt: null,
+      createdAt, updatedAt: createdAt, mode: 'copilot',
+    }
+    firstShell.operations[1].result = {
+      title: '任务 2026-08-16 16:00:00', titleState: 'started', pinnedAt: null,
+      createdAt, updatedAt, mode: 'copilot',
+    }
+    expect(chatDocumentSchema.safeParse(firstShell).success).toBe(true)
+
+    const assistantOnly = validDocument()
+    assistantOnly.chats[0] = {
+      ...assistantOnly.chats[0],
+      title: '新建任务 2026-08-16 16:00:00',
+      titleState: 'new',
+      updatedAt: messageAt,
+    }
+    assistantOnly.messages[0].role = 'assistant'
+    assistantOnly.associations = []
+    assistantOnly.operations = assistantOnly.operations.slice(0, 2)
+    assistantOnly.operations[0].result = {
+      title: '新建任务 2026-08-16 16:00:00', titleState: 'new', pinnedAt: null,
+      createdAt, updatedAt: createdAt, mode: 'copilot',
+    }
+    assistantOnly.operations[1].result = {
+      title: '新建任务 2026-08-16 16:00:00', titleState: 'new', pinnedAt: null,
+      createdAt, updatedAt: messageAt, mode: 'copilot',
+    }
+    expect(chatDocumentSchema.safeParse(assistantOnly).success).toBe(true)
+  })
+
+  it('requires canonical system titles for new and first-started tasks', () => {
+    const invalidNewTask = validDocument()
+    invalidNewTask.messages = []
+    invalidNewTask.associations = []
+    invalidNewTask.operations = invalidNewTask.operations.slice(0, 1)
+    invalidNewTask.chats[0] = {
+      ...invalidNewTask.chats[0],
+      title: '新建任务 任意标题',
+      titleState: 'new',
+      updatedAt: createdAt,
+    }
+    invalidNewTask.operations[0].result = {
+      title: '新建任务 任意标题', titleState: 'new', pinnedAt: null,
+      createdAt, updatedAt: createdAt, mode: 'copilot',
+    }
+    expect(chatDocumentSchema.safeParse(invalidNewTask).success).toBe(false)
+
+    const invalidStartedTask = validDocument()
+    invalidStartedTask.associations = []
+    invalidStartedTask.operations = invalidStartedTask.operations.slice(0, 2)
+    invalidStartedTask.chats[0] = {
+      ...invalidStartedTask.chats[0],
+      title: '任务 任意标题',
+      titleState: 'started',
+      updatedAt: messageAt,
+    }
+    invalidStartedTask.operations[0].result = {
+      title: '新建任务 2026-08-16 16:00:00', titleState: 'new', pinnedAt: null,
+      createdAt, updatedAt: createdAt, mode: 'copilot',
+    }
+    invalidStartedTask.operations[1].result = {
+      title: '任务 任意标题', titleState: 'started', pinnedAt: null,
+      createdAt, updatedAt: messageAt, mode: 'copilot',
+    }
+    expect(chatDocumentSchema.safeParse(invalidStartedTask).success).toBe(false)
   })
 
   it('indexes every chat remove count and final remove in one operation pass', () => {
@@ -120,6 +245,68 @@ describe('chatDocumentSchema semantic invariants', () => {
     expect(chatDocumentSchema.parse(validDocument())).toEqual(validDocument())
   })
 
+  it('accepts v2 pin and unpin snapshots without advancing the task updatedAt', () => {
+    const titleAt = '2026-08-16T08:00:00.001Z'
+    const pinnedAt = '2026-08-16T08:00:00.002Z'
+    const unpinnedAt = '2026-08-16T08:00:00.003Z'
+    const document = {
+      version: 2,
+      liveChatId: 'chat-1',
+      chats: [{
+        id: 'chat-1', title: 'Custom task', titleState: 'custom', pinnedAt: null,
+        createdAt, updatedAt: titleAt, mode: 'copilot',
+      }],
+      messages: [],
+      associations: [],
+      operations: [
+        {
+          requestId: 'create-request-1', kind: 'create', chatId: 'chat-1', fingerprint, appliedAt: createdAt,
+          result: { title: '新建任务 2026-08-16 16:00:00', titleState: 'new', pinnedAt: null, createdAt, updatedAt: createdAt, mode: 'copilot' },
+        },
+        {
+          requestId: 'title-request-1', kind: 'updateTitle', chatId: 'chat-1', fingerprint, appliedAt: titleAt,
+          result: { title: 'Custom task', titleState: 'custom', pinnedAt: null, createdAt, updatedAt: titleAt, mode: 'copilot' },
+        },
+        {
+          requestId: 'pin-request-1', kind: 'pin', chatId: 'chat-1', fingerprint, appliedAt: pinnedAt,
+          result: { title: 'Custom task', titleState: 'custom', pinnedAt, createdAt, updatedAt: titleAt, mode: 'copilot' },
+        },
+        {
+          requestId: 'unpin-request-1', kind: 'unpin', chatId: 'chat-1', fingerprint, appliedAt: unpinnedAt,
+          result: { title: 'Custom task', titleState: 'custom', pinnedAt: null, createdAt, updatedAt: titleAt, mode: 'copilot' },
+        },
+      ],
+    }
+
+    expect(chatDocumentSchema.parse(document)).toEqual(document)
+  })
+
+  it('rejects a set-mode snapshot that forges a title transition', () => {
+    const modeAt = '2026-08-16T08:00:00.001Z'
+    const document = {
+      version: 2,
+      liveChatId: 'chat-1',
+      chats: [{
+        id: 'chat-1', title: 'Forged title', titleState: 'custom', pinnedAt: null,
+        createdAt, updatedAt: modeAt, mode: 'autonomous',
+      }],
+      messages: [],
+      associations: [],
+      operations: [
+        {
+          requestId: 'create-request-1', kind: 'create', chatId: 'chat-1', fingerprint, appliedAt: createdAt,
+          result: { title: 'New task', titleState: 'new', pinnedAt: null, createdAt, updatedAt: createdAt, mode: 'copilot' },
+        },
+        {
+          requestId: 'mode-request-1', kind: 'setMode', chatId: 'chat-1', fingerprint, appliedAt: modeAt,
+          result: { title: 'Forged title', titleState: 'custom', pinnedAt: null, createdAt, updatedAt: modeAt, mode: 'autonomous' },
+        },
+      ],
+    }
+
+    expect(chatDocumentSchema.safeParse(document).success).toBe(false)
+  })
+
   it('accepts safe fixed-size appliedAt metadata on operations', () => {
     const document = withAppliedAt(validDocument())
     expect(chatDocumentSchema.parse(document)).toEqual(document)
@@ -134,12 +321,12 @@ describe('chatDocumentSchema semantic invariants', () => {
   it('rejects operation appliedAt values that move backward globally across chats', () => {
     const document = withAppliedAt(validDocument())
     const secondChat = {
-      id: 'chat-2', title: 'Second', createdAt, updatedAt: createdAt, mode: 'copilot' as const,
+      id: 'chat-2', title: 'Second', titleState: 'custom' as const, pinnedAt: null, createdAt, updatedAt: createdAt, mode: 'copilot' as const,
     }
     document.chats.push(secondChat)
     document.operations.push({
       requestId: 'create-request-2', kind: 'create', chatId: 'chat-2', fingerprint, appliedAt: createdAt,
-      result: { createdAt, updatedAt: createdAt, mode: 'copilot' },
+      result: { title: 'Second', titleState: 'custom', pinnedAt: null, createdAt, updatedAt: createdAt, mode: 'copilot' },
     })
     expect(chatDocumentSchema.safeParse(document).success).toBe(false)
   })
@@ -155,10 +342,10 @@ describe('chatDocumentSchema semantic invariants', () => {
 
   it('rejects adjacent operations with equal appliedAt, including tombstone remove then create', () => {
     const document: ChatDocument = {
-      version: 1,
+      version: 2,
       liveChatId: null,
       chats: [{
-        id: 'chat-1', title: '已删除聊天', createdAt, updatedAt: createdAt,
+        id: 'chat-1', title: '已删除任务', titleState: 'custom', pinnedAt: null, createdAt, updatedAt: createdAt,
         mode: 'copilot', deletedAt: createdAt,
       }],
       messages: [],
@@ -253,13 +440,13 @@ describe('chatDocumentSchema semantic invariants', () => {
     ['updateTitle', (document: ChatDocument) => {
       document.operations.push({
         requestId: 'title-request-1', kind: 'updateTitle', chatId: 'chat-1', fingerprint, appliedAt: updatedAt, resultId: 'message-1',
-        result: { createdAt, updatedAt, mode: 'copilot' },
+        result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt, mode: 'copilot' },
       })
     }],
     ['setMode', (document: ChatDocument) => {
       document.operations.push({
         requestId: 'mode-request-1', kind: 'setMode', chatId: 'chat-1', fingerprint, appliedAt: updatedAt, resultId: 'association-1',
-        result: { createdAt, updatedAt, mode: 'copilot' },
+        result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt, mode: 'copilot' },
       })
     }],
     ['remove', (document: ChatDocument) => {
@@ -288,7 +475,7 @@ describe('chatDocumentSchema semantic invariants', () => {
     ['active remove carrying result', (document: ChatDocument) => {
       document.operations.push({
         requestId: 'remove-request-1', kind: 'remove', chatId: 'chat-1', fingerprint, appliedAt: updatedAt,
-        result: { createdAt, updatedAt, mode: 'copilot' },
+        result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt, mode: 'copilot' },
       })
     }],
   ])('rejects %s', (_label, corruptResultState) => {
@@ -414,7 +601,7 @@ describe('chatDocumentSchema semantic invariants', () => {
         chatId: 'chat-1',
         fingerprint,
         appliedAt: updatedAt,
-        result: { createdAt, updatedAt, mode: 'copilot' },
+        result: { title: 'Chat', titleState: 'custom', pinnedAt: null, createdAt, updatedAt, mode: 'copilot' },
       })
     }],
   ])('rejects a deleted chat operation carrying %s', (_label, addUnsafeOperation) => {
@@ -439,7 +626,7 @@ describe('chatDocumentSchema semantic invariants', () => {
 
   it('rejects a tombstone without a remove operation', () => {
     const document = validDocument()
-    document.chats[0] = { ...document.chats[0], title: '已删除聊天', deletedAt: updatedAt }
+    document.chats[0] = { ...document.chats[0], title: '已删除任务', deletedAt: updatedAt }
     document.messages = []
     document.associations = []
     document.operations = [{ requestId: 'create-request-1', kind: 'create', chatId: 'chat-1', fingerprint, appliedAt: createdAt }]
@@ -451,7 +638,7 @@ describe('chatDocumentSchema semantic invariants', () => {
     ['after updatedAt', '2026-08-16T08:01:30.000Z'],
   ])('rejects tombstone deletedAt %s', (_label, deletedAt) => {
     const document = validDocument()
-    document.chats[0] = { ...document.chats[0], title: '已删除聊天', deletedAt }
+    document.chats[0] = { ...document.chats[0], title: '已删除任务', deletedAt }
     document.messages = []
     document.associations = []
     document.operations = [{ requestId: 'remove-request-1', kind: 'remove', chatId: 'chat-1', fingerprint, appliedAt: deletedAt }]
@@ -461,7 +648,7 @@ describe('chatDocumentSchema semantic invariants', () => {
   it('accepts multiple monotonic remove operations when the last appliedAt equals the tombstone time', () => {
     const document = validDocument()
     document.chats[0] = {
-      ...document.chats[0], title: '已删除聊天', updatedAt: '2026-08-16T08:03:00.000Z', deletedAt: '2026-08-16T08:03:00.000Z',
+      ...document.chats[0], title: '已删除任务', updatedAt: '2026-08-16T08:03:00.000Z', deletedAt: '2026-08-16T08:03:00.000Z',
     }
     document.liveChatId = null
     document.messages = []
@@ -480,7 +667,7 @@ describe('chatDocumentSchema semantic invariants', () => {
 
   it('rejects a tombstone whose final remove appliedAt differs from deletedAt', () => {
     const document = validDocument()
-    document.chats[0] = { ...document.chats[0], title: '已删除聊天', deletedAt: updatedAt }
+    document.chats[0] = { ...document.chats[0], title: '已删除任务', deletedAt: updatedAt }
     document.messages = []
     document.associations = []
     document.operations = [

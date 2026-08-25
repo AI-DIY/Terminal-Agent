@@ -10,6 +10,7 @@ export function registerGracefulApplicationShutdown(
   app: QuitApplication,
   closeSessions: () => void,
   drainHistory: () => Promise<void>,
+  disposeDiagnostics: () => void = () => undefined,
 ): () => void {
   let shuttingDown = false
   let persistenceFinished = false
@@ -19,6 +20,7 @@ export function registerGracefulApplicationShutdown(
     if (shuttingDown) return
     shuttingDown = true
     void (async () => {
+      try { disposeDiagnostics() } catch { /* Diagnostic cleanup must not block SSH and history shutdown. */ }
       try { closeSessions() } catch { /* Shutdown continues even if a transport fails to close. */ }
       try { await drainHistory() } catch { /* History errors are already reported through its fixed local event. */ }
       persistenceFinished = true

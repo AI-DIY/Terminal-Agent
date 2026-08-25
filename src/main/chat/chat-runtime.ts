@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatCompletionResponseFormat } from '../model/chat-completions-client'
 import type { ProviderModelSettings } from '../model/model-provider-router'
 import { estimateChatMessages } from './token-estimator'
-import { redactSensitiveText, SensitiveTextStreamRedactor } from '../agent/sensitive-data'
 
 export type ChatRuntimeRequest = { chatId: string; runId: string; content: string; retry?: boolean }
 export type ChatRuntimeEvent =
@@ -62,17 +61,15 @@ export class ChatRuntime {
     let cancelled = false
     const onAbort = () => { if (!timedOut) cancelled = true }
     controller.signal.addEventListener('abort', onAbort, { once: true })
-    const safeRequestContent = redactSensitiveText(request.content)
     let output = ''
     let persistedMessageId: string | undefined
     let retryMessageId: string | undefined
     const pendingUpdates: Promise<unknown>[] = []
-    const redactor = new SensitiveTextStreamRedactor()
     try {
-      if (request.retry) retryMessageId = await this.deps.getRetryMessageId?.(request.chatId, safeRequestContent)
+      if (request.retry) retryMessageId = await this.deps.getRetryMessageId?.(request.chatId, request.content)
       if ((!request.retry || !retryMessageId) && isOwner()) {
         try {
-          await this.deps.appendMessage({ requestId: `${request.runId}:user`, chatId: request.chatId, role: 'user', content: safeRequestContent, state: 'complete' })
+          await this.deps.appendMessage({ requestId: `${request.runId}:user`, chatId: request.chatId, role: 'user', content: request.content, state: 'complete' })
         } catch {
           throw new ChatPersistenceError()
         }
@@ -116,14 +113,12 @@ export class ChatRuntime {
       try {
         const providerStream = Promise.resolve().then(() => this.deps.stream(settings, context, delta => {
           if (!isLiveOwner()) return
-          const safe = redactor.push(delta)
-          if (!safe) return
-          output += safe
+          output += delta
           if (persistedMessageId && this.deps.updateMessage) {
             const update = { requestId: `${request.runId}:assistant:update:${output.length}`, chatId: request.chatId, messageId: persistedMessageId, content: output, state: 'streaming' as const }
             pendingUpdates.push(trackAssistantWrite(Promise.resolve().then(() => isLiveOwner() ? this.deps.updateMessage!(update) : undefined)))
           }
-          publish({ kind: 'chat:delta', chatId: request.chatId, runId: request.runId, messageId, content: safe })
+          publish({ kind: 'chat:delta', chatId: request.chatId, runId: request.runId, messageId, content: delta })
         }, undefined, controller.signal))
         await raceProviderStreamWithAbort(providerStream, controller.signal)
       } finally { clearTimeout(timeout) }
@@ -140,14 +135,9 @@ export class ChatRuntime {
         } else await this.finalizeCancelledRun(run)
         return
       }
-      const trailing = redactor.finish()
       if (!isOwner()) {
         await finalizeCancellationIfNeeded()
         return
-      }
-      if (trailing) {
-        output += trailing
-        publish({ kind: 'chat:delta', chatId: request.chatId, runId: request.runId, messageId, content: trailing })
       }
       await Promise.all(pendingUpdates)
       if (!isLiveOwner()) {

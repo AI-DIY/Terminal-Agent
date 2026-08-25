@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 describe('Terminal-Agent branding', () => {
   it('packages one stripe-free TA mark across native and workbench surfaces', () => {
     const packageJson = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'))
+    const packageLock = JSON.parse(readFileSync(new URL('../../../package-lock.json', import.meta.url), 'utf8'))
     const shell = readFileSync(new URL('../../../src/renderer/src/components/workbench/WorkbenchShell.vue', import.meta.url), 'utf8')
     const iconGenerator = readFileSync(new URL('../../../scripts/windows/generate-ta-icon.ps1', import.meta.url), 'utf8')
     const settings = readFileSync(new URL('../../../src/renderer/src/views/SettingsView.vue', import.meta.url), 'utf8')
@@ -14,7 +15,9 @@ describe('Terminal-Agent branding', () => {
     const appHeaderActionsRule = /\.app-header-actions\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
     const appHeaderActionsChildrenRule = /\.app-header-actions\s+:deep\(\*\)\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
 
-    expect(packageJson.version).toBe('1.0.8')
+    expect(packageJson.version).toBe('1.0.9')
+    expect(packageLock.version).toBe('1.0.9')
+    expect(packageLock.packages[''].version).toBe('1.0.9')
     expect(packageJson.build.win.icon).toBe('build-resources/ta-icon.ico')
     expect(existsSync(icon)).toBe(true)
     expect(readFileSync(icon).subarray(0, 4)).toEqual(Buffer.from([0, 0, 1, 0]))

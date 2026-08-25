@@ -6,9 +6,11 @@ import {
   chatCloseAssociationRequestSchema,
   chatCreateRequestSchema,
   chatIdentifierSchema,
+  chatPinRequestSchema,
   chatRemoveRequestSchema,
   chatSetModeRequestSchema,
   chatTransferSessionsRequestSchema,
+  chatUnpinRequestSchema,
   chatUpdateTitleRequestSchema,
   type ChatAppendMessageRequest,
   chatUpdateMessageRequestSchema,
@@ -18,20 +20,21 @@ import {
   type ChatCloseAssociationRequest,
   type ChatCreateRequest,
   type ChatMessageRecord,
+  type ChatPinRequest,
   type ChatRemoveRequest,
   type ChatSetModeRequest,
   type ChatTransferSessionsRequest,
   type ChatShellAssociation,
   type ChatSummary,
+  type ChatUnpinRequest,
   type ChatUpdateTitleRequest,
   type ChatWorkspace,
 } from '../../shared/contracts'
 import { AtomicJsonStore, type AtomicJsonStoreOptions } from '../persistence/atomic-json-store'
-import { sanitizeShellHistoryDisplay } from '../shell-history/shell-history-contracts'
 import {
   chatDocumentSchema,
   emptyChatDocument,
-  migrateChatDocument,
+  guardChatDocumentVersion,
   type ChatDocument,
   type ChatOperation,
   type PersistedAssociation,
@@ -80,7 +83,7 @@ export class ChatRepository {
     this.createId = options.createId ?? randomUUID
     this.store = new AtomicJsonStore(path, chatDocumentSchema, emptyChatDocument, {
       ...(options.fileSystem ? { fileSystem: options.fileSystem } : {}),
-      migrate: migrateChatDocument,
+      migrate: guardChatDocumentVersion,
     })
   }
 
@@ -135,7 +138,7 @@ export class ChatRepository {
           ]),
           appliedAt,
           resultId: message.id,
-          result: { createdAt: chat.createdAt, updatedAt: chat.updatedAt, mode: chat.mode },
+          result: taskResult(chat),
         })
       }
       return document
@@ -196,7 +199,7 @@ export class ChatRepository {
           chatId: chat.id,
           fingerprint,
           appliedAt,
-          result: { createdAt: chat.createdAt, updatedAt: appliedAt, mode: chat.mode },
+          result: taskResult(chat),
         })
         return current
       })
@@ -233,7 +236,9 @@ export class ChatRepository {
       const id = this.createId()
       document.chats.push({
         id,
-        title: parsed.title ?? fallbackTitle(new Date(timestamp)),
+        title: parsed.title ?? taskTitle('新建任务', new Date(timestamp)),
+        titleState: parsed.title ? 'custom' : 'new',
+        pinnedAt: null,
         createdAt: timestamp,
         updatedAt: timestamp,
         mode: 'copilot',
@@ -250,6 +255,7 @@ export class ChatRepository {
       const chat = requireChat(document, parsed.chatId)
       const id = this.createId()
       document.messages.push({ ...parsed, id, createdAt: timestamp })
+      if (parsed.role === 'user') markChatStarted(chat)
       chat.updatedAt = timestamp
       return { chatId: chat.id, resultId: id }
     })
@@ -277,6 +283,7 @@ export class ChatRepository {
     return this.mutate(parsed.requestId, 'updateTitle', parsed.chatId, fingerprint, (document, timestamp) => {
       const chat = requireChat(document, parsed.chatId)
       chat.title = parsed.title
+      chat.titleState = 'custom'
       chat.updatedAt = timestamp
       return { chatId: chat.id }
     })
@@ -293,8 +300,28 @@ export class ChatRepository {
     })
   }
 
+  async pin(request: ChatPinRequest): Promise<ChatMutation<ChatWorkspace>> {
+    const parsed = chatPinRequestSchema.parse(request)
+    const fingerprint = requestFingerprint('pin', [parsed.chatId])
+    return this.mutate(parsed.requestId, 'pin', parsed.chatId, fingerprint, (document, timestamp) => {
+      const chat = requireChat(document, parsed.chatId)
+      chat.pinnedAt = timestamp
+      return { chatId: chat.id }
+    })
+  }
+
+  async unpin(request: ChatUnpinRequest): Promise<ChatMutation<ChatWorkspace>> {
+    const parsed = chatUnpinRequestSchema.parse(request)
+    const fingerprint = requestFingerprint('unpin', [parsed.chatId])
+    return this.mutate(parsed.requestId, 'unpin', parsed.chatId, fingerprint, document => {
+      const chat = requireChat(document, parsed.chatId)
+      chat.pinnedAt = null
+      return { chatId: chat.id }
+    })
+  }
+
   async associateShell(request: ChatAssociateShellRequest): Promise<ChatMutation<ChatWorkspace>> {
-    const parsed = sanitizeChatShellMetadata(chatAssociateShellRequestSchema.parse(request))
+    const parsed = chatAssociateShellRequestSchema.parse(request)
     const fingerprint = requestFingerprint('associateShell', [
       parsed.chatId, parsed.sessionId ?? null, parsed.historyId, parsed.hostname, parsed.title,
     ])
@@ -305,6 +332,7 @@ export class ChatRepository {
       }
       const id = this.createId()
       document.associations.push({ ...parsed, id, status: 'open', associatedAt: timestamp })
+      markChatStarted(chat)
       chat.updatedAt = timestamp
       document.liveChatId = chat.id
       return { chatId: chat.id, resultId: id }
@@ -312,7 +340,7 @@ export class ChatRepository {
   }
 
   async associateOrCreateShell(request: ChatAssociateShellRequest): Promise<ChatMutation<ChatWorkspace>> {
-    const parsed = sanitizeChatShellMetadata(chatAssociateShellRequestSchema.parse(request))
+    const parsed = chatAssociateShellRequestSchema.parse(request)
     const fingerprint = parsed.sessionId
       ? bindSessionFingerprint({ chatId: parsed.chatId, sessionId: parsed.sessionId })
       : requestFingerprint('associateShell', [parsed.chatId, null, parsed.historyId, parsed.hostname, parsed.title])
@@ -342,7 +370,9 @@ export class ChatRepository {
           const id = this.createId()
           target = {
             id,
-            title: fallbackTitle(new Date(createdAt)),
+            title: taskTitle('新建任务', new Date(createdAt)),
+            titleState: 'new',
+            pinnedAt: null,
             createdAt,
             updatedAt: createdAt,
             mode: 'copilot',
@@ -354,7 +384,7 @@ export class ChatRepository {
             chatId: target.id,
             fingerprint: requestFingerprint('create', [target.title]),
             appliedAt: createdAt,
-            result: { createdAt, updatedAt: createdAt, mode: target.mode },
+            result: taskResult(target),
           })
         }
         resultChatId = target.id
@@ -374,7 +404,7 @@ export class ChatRepository {
               chatId: target.id,
               fingerprint,
               appliedAt,
-              result: { createdAt: target.createdAt, updatedAt: appliedAt, mode: target.mode },
+              result: taskResult(target),
             })
             return current
           }
@@ -385,6 +415,7 @@ export class ChatRepository {
         const id = this.createId()
         changed = true
         current.associations.push({ ...parsed, chatId: target.id, id, status: 'open', associatedAt })
+        markChatStarted(target)
         target.updatedAt = associatedAt
         current.liveChatId = target.id
         current.operations.push({
@@ -394,7 +425,7 @@ export class ChatRepository {
           fingerprint,
           appliedAt: associatedAt,
           resultId: id,
-          result: { createdAt: target.createdAt, updatedAt: target.updatedAt, mode: target.mode },
+          result: taskResult(target),
         })
         return current
       })
@@ -421,7 +452,7 @@ export class ChatRepository {
     bindRequest?: ChatBindSessionRequest,
   ): Promise<ChatTransferMutation> {
     const parsed = chatTransferSessionsRequestSchema.parse(request)
-    const metadataById = new Map(sessions.map(session => [session.sessionId, sanitizeChatShellMetadata(session)]))
+    const metadataById = new Map(sessions.map(session => [session.sessionId, session]))
     if (metadataById.size !== sessions.length || parsed.sessionIds.some(sessionId => !metadataById.has(sessionId))) {
       throw new Error('Transfer metadata does not match requested sessions')
     }
@@ -449,7 +480,9 @@ export class ChatRepository {
           const id = this.createId()
           target = {
             id,
-            title: fallbackTitle(new Date(createdAt)),
+            title: taskTitle('新建任务', new Date(createdAt)),
+            titleState: 'new',
+            pinnedAt: null,
             createdAt,
             updatedAt: createdAt,
             mode: 'copilot',
@@ -462,7 +495,7 @@ export class ChatRepository {
             chatId: id,
             fingerprint: requestFingerprint('create', [target.title]),
             appliedAt: createdAt,
-            result: { createdAt, updatedAt: createdAt, mode: target.mode },
+            result: taskResult(target),
           })
         }
         const associations = parsed.sessionIds.map(sessionId => {
@@ -479,6 +512,7 @@ export class ChatRepository {
           association.status = 'closed'
           association.closedAt = closedAt
           association.closeRequestId = closeRequestId
+          source.updatedAt = closedAt
           current.operations.push({
             requestId: closeRequestId,
             kind: 'closeAssociation',
@@ -486,14 +520,10 @@ export class ChatRepository {
             fingerprint: requestFingerprint('closeAssociation', [source.id, association.id]),
             appliedAt: closedAt,
             resultId: association.id,
-            result: { createdAt: source.createdAt, updatedAt: closedAt, mode: source.mode },
+            result: taskResult(source),
           })
           closedAt = nextLogicalTimestamp(this.now(), current)
         }
-        source.updatedAt = associations.length > 0
-          ? current.operations.at(-1)!.appliedAt
-          : source.updatedAt
-
         let associatedAt = nextLogicalTimestamp(this.now(), current)
         for (const [index, sessionId] of parsed.sessionIds.entries()) {
           const metadata = metadataById.get(sessionId)!
@@ -509,6 +539,8 @@ export class ChatRepository {
             associatedAt,
             requestId: transferIds[index].associateRequestId,
           })
+          markChatStarted(target)
+          target.updatedAt = associatedAt
           current.operations.push({
             requestId: transferIds[index].associateRequestId,
             kind: 'associateShell',
@@ -516,11 +548,10 @@ export class ChatRepository {
             fingerprint,
             appliedAt: associatedAt,
             resultId: id,
-            result: { createdAt: target.createdAt, updatedAt: associatedAt, mode: target.mode },
+            result: taskResult(target),
           })
           associatedAt = nextLogicalTimestamp(this.now(), current)
         }
-        target.updatedAt = current.operations.at(-1)!.appliedAt
         if (current.liveChatId === source.id) current.liveChatId = target.id
         return current
       })
@@ -584,7 +615,7 @@ export class ChatRepository {
           fingerprint,
           appliedAt: timestamp,
           resultId: association.id,
-          result: { createdAt: chat.createdAt, updatedAt: timestamp, mode: chat.mode },
+          result: taskResult(chat),
         })
         return current
       })
@@ -632,13 +663,17 @@ export class ChatRepository {
         const timestamp = nextLogicalTimestamp(this.now(), current)
         changed = Boolean(existing && !existing.deletedAt)
         if (existing) {
-          existing.title = '已删除聊天'
+          existing.title = '已删除任务'
+          existing.titleState = 'custom'
+          existing.pinnedAt = null
           existing.updatedAt = timestamp
           existing.deletedAt = timestamp
         } else {
           current.chats.push({
             id: parsed.chatId,
-            title: '已删除聊天',
+            title: '已删除任务',
+            titleState: 'custom',
+            pinnedAt: null,
             createdAt: timestamp,
             updatedAt: timestamp,
             mode: 'copilot',
@@ -686,7 +721,7 @@ export class ChatRepository {
           fingerprint,
           appliedAt,
           ...result,
-          result: { createdAt: chat.createdAt, updatedAt: chat.updatedAt, mode: chat.mode },
+          result: taskResult(chat),
         })
         return current
       })
@@ -809,7 +844,9 @@ function toWorkspaceOrTombstone(document: ChatDocument, chatId: string): ChatWor
   if (!tombstone) return toWorkspace(document, chatId)
   return {
     id: chatId,
-    title: '已删除聊天',
+    title: '已删除任务',
+    titleState: 'custom',
+    pinnedAt: null,
     createdAt: tombstone.createdAt,
     updatedAt: tombstone.updatedAt,
     mode: tombstone.mode,
@@ -837,6 +874,8 @@ export function summarizeChats(
     return {
       id: chat.id,
       title: chat.title,
+      titleState: chat.titleState,
+      pinnedAt: chat.pinnedAt,
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
       shellCount: shells?.count ?? 0,
@@ -852,21 +891,30 @@ function compareChats(left: ChatSummary, right: ChatSummary): number {
     || left.id.localeCompare(right.id)
 }
 
-function sanitizeChatShellMetadata<T extends { hostname: string; title: string }>(metadata: T): T {
+function markChatStarted(chat: PersistedChat): void {
+  if (chat.titleState !== 'new') return
+  chat.title = taskTitle('任务', new Date(chat.createdAt))
+  chat.titleState = 'started'
+}
+
+function taskResult(chat: PersistedChat) {
   return {
-    ...metadata,
-    hostname: sanitizeShellHistoryDisplay(metadata.hostname),
-    title: sanitizeShellHistoryDisplay(metadata.title),
+    title: chat.title,
+    titleState: chat.titleState,
+    pinnedAt: chat.pinnedAt,
+    createdAt: chat.createdAt,
+    updatedAt: chat.updatedAt,
+    mode: chat.mode,
   }
 }
 
-function fallbackTitle(now: Date): string {
+function taskTitle(prefix: '新建任务' | '任务', now: Date): string {
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
   }).formatToParts(now)
   const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? ''
-  return `新建聊天 ${value('year')}-${value('month')}-${value('day')} ${value('hour')}:${value('minute')}:${value('second')}`
+  return `${prefix} ${value('year')}-${value('month')}-${value('day')} ${value('hour')}:${value('minute')}:${value('second')}`
 }
 
 const minimumCanonicalTimestamp = Date.parse('0000-01-01T00:00:00.000Z')
@@ -892,6 +940,7 @@ export function nextLogicalTimestamp(now: Date, document: ChatDocument): string 
     observe(chat.createdAt)
     observe(chat.updatedAt)
     observe(chat.deletedAt)
+    observe(chat.pinnedAt ?? undefined)
   }
   for (const message of document.messages) observe(message.createdAt)
   for (const association of document.associations) {
@@ -902,6 +951,7 @@ export function nextLogicalTimestamp(now: Date, document: ChatDocument): string 
     observe(operation.appliedAt)
     observe(operation.result?.createdAt)
     observe(operation.result?.updatedAt)
+    observe(operation.result?.pinnedAt ?? undefined)
   }
 
   if (watermark === Number.NEGATIVE_INFINITY) return now.toISOString()

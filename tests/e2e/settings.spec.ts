@@ -107,6 +107,46 @@ test('opens real settings with ordered panels, host memory controls, and termina
   }
 })
 
+test('left-aligns LLM and VLM model profile rows', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-model-alignment-e2e-'))
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  let hasPrimaryFailure = false
+  try {
+    app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, join(process.cwd(), 'out/main/main.js')] })
+    const page = await app.firstWindow()
+    await page.evaluate(async () => {
+      await window.terminalAgent.settings.models.save({
+        name: '左对齐文本模型', kind: 'llm', provider: 'ollama', model: 'llm-left', endpoint: 'http://127.0.0.1:11434', contextLimit: 1_024,
+      })
+      await window.terminalAgent.settings.models.save({
+        name: '左对齐视觉模型', kind: 'vlm', provider: 'ollama', model: 'vlm-left', endpoint: 'http://127.0.0.1:11434', contextLimit: 1_024,
+      })
+    })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+
+    for (const [panelName, profileName] of [
+      ['大语言模型配置', '左对齐文本模型'],
+      ['视觉语言模型配置', '左对齐视觉模型'],
+    ]) {
+      await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: panelName, exact: true }).click()
+      const profile = page.locator('.profile-item').filter({ hasText: profileName })
+      await expect(profile).toBeVisible()
+      const leftEdges = await profile.locator('.profile-select strong,.profile-select span,.profile-select small').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().left))
+      expect(leftEdges).toHaveLength(3)
+      expect(Math.max(...leftEdges) - Math.min(...leftEdges)).toBeLessThanOrEqual(1)
+    }
+  } catch (error) {
+    hasPrimaryFailure = true
+    throw error
+  } finally {
+    const cleanupFailures = await closeE2eResources(
+      async () => { await app?.close() },
+      async () => { await rm(userDataDir, { recursive: true, force: true }) },
+    )
+    throwCleanupFailures(hasPrimaryFailure, cleanupFailures)
+  }
+})
+
 test('runs the direct model key lifecycle through real Electron without exposing or retaining cleared keys', async () => {
   let testModel: Awaited<ReturnType<typeof startKeyedModelServer>> | undefined
   let userDataDir: string | undefined

@@ -11,7 +11,7 @@ describe('registerChatHandlers', () => {
   beforeEach(() => { handle.mockReset(); removeHandler.mockReset() })
 
   it('rejects every untrusted channel before reading payloads or calling the service', async () => {
-    const service = { list: vi.fn(), create: vi.fn(), get: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), remove: vi.fn(), associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(), reconcileSessions: vi.fn(), onChanged: vi.fn(() => () => undefined) }
+    const service = { list: vi.fn(), create: vi.fn(), get: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), updateTitle: vi.fn(), pin: vi.fn(), unpin: vi.fn(), remove: vi.fn(), associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(), reconcileSessions: vi.fn(), onChanged: vi.fn(() => () => undefined) }
     const sessions = { snapshot: vi.fn(), onClosed: vi.fn(() => () => undefined) }
     const trusted = { send: vi.fn() }
     const dispose = registerChatHandlers(service as never, trusted as never, sessions as never)
@@ -30,16 +30,40 @@ describe('registerChatHandlers', () => {
     await expect(handlerFor('chats:remove')(foreignEvent, unreadablePayload)).rejects.toThrow('Untrusted renderer')
     await expect(handlerFor('chats:bind-session')(foreignEvent, unreadablePayload)).rejects.toThrow('Untrusted renderer')
     await expect(handlerFor('chats:transfer-sessions')(foreignEvent, unreadablePayload)).rejects.toThrow('Untrusted renderer')
+    expect(() => handlerFor('chats:update-title')(foreignEvent, unreadablePayload)).toThrow('Untrusted renderer')
+    expect(() => handlerFor('chats:pin')(foreignEvent, unreadablePayload)).toThrow('Untrusted renderer')
+    expect(() => handlerFor('chats:unpin')(foreignEvent, unreadablePayload)).toThrow('Untrusted renderer')
 
     expect(service.list).not.toHaveBeenCalled()
     expect(service.create).not.toHaveBeenCalled()
     expect(service.get).not.toHaveBeenCalled()
     expect(service.resolveSession).not.toHaveBeenCalled()
     expect(service.setMode).not.toHaveBeenCalled()
+    expect(service.updateTitle).not.toHaveBeenCalled()
+    expect(service.pin).not.toHaveBeenCalled()
+    expect(service.unpin).not.toHaveBeenCalled()
     expect(service.remove).not.toHaveBeenCalled()
     expect(service.associateSession).not.toHaveBeenCalled()
     expect(service.transferSessions).not.toHaveBeenCalled()
     expect(service.reconcileSessions).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  it('routes strict title and pin management requests from the trusted renderer', async () => {
+    const service = {
+      list: vi.fn(), create: vi.fn(), get: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), remove: vi.fn(), associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(), reconcileSessions: vi.fn(),
+      updateTitle: vi.fn(async () => undefined), pin: vi.fn(async () => undefined), unpin: vi.fn(async () => undefined), onChanged: vi.fn(() => () => undefined),
+    }
+    const trusted = { send: vi.fn() }
+    const dispose = registerChatHandlers(service as never, trusted as never, { snapshot: vi.fn(() => []), onClosed: vi.fn(() => () => undefined) } as never)
+
+    await handlerFor('chats:update-title')({ sender: trusted }, { requestId: 'rename-1', chatId: 'task-1', title: '任务名' })
+    await handlerFor('chats:pin')({ sender: trusted }, { requestId: 'pin-1', chatId: 'task-1' })
+    await handlerFor('chats:unpin')({ sender: trusted }, { requestId: 'unpin-1', chatId: 'task-1' })
+    expect(() => handlerFor('chats:pin')({ sender: trusted }, { requestId: 'pin-2', chatId: 'task-1', pinnedAt: '2026-08-16T08:00:00.000Z' })).toThrow()
+    expect(service.updateTitle).toHaveBeenCalledWith({ requestId: 'rename-1', chatId: 'task-1', title: '任务名' })
+    expect(service.pin).toHaveBeenCalledWith({ requestId: 'pin-1', chatId: 'task-1' })
+    expect(service.unpin).toHaveBeenCalledWith({ requestId: 'unpin-1', chatId: 'task-1' })
     dispose()
   })
 
@@ -95,10 +119,10 @@ describe('registerChatHandlers', () => {
     dispose()
     expect(unsubscribe).toHaveBeenCalledOnce()
     expect(unsubscribeClosed).toHaveBeenCalledOnce()
-    for (const channel of ['chats:list', 'chats:create', 'chats:get', 'chats:resolve-session', 'chats:set-mode', 'chats:remove', 'chats:bind-session', 'chats:transfer-sessions']) {
+    for (const channel of ['chats:list', 'chats:create', 'chats:get', 'chats:resolve-session', 'chats:set-mode', 'chats:update-title', 'chats:pin', 'chats:unpin', 'chats:remove', 'chats:bind-session', 'chats:transfer-sessions']) {
       expect(removeHandler).toHaveBeenCalledWith(channel)
     }
-    expect(removeHandler).toHaveBeenCalledTimes(8)
+    expect(removeHandler).toHaveBeenCalledTimes(11)
   })
 
   it('cancels an active runtime request before deleting its chat', async () => {

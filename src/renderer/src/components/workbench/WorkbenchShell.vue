@@ -84,7 +84,7 @@ onBeforeUnmount(widthSaver.flush)
   <main class="workbench-shell" :class="`theme-${layout.state.theme}`" :style="shellStyle">
     <header class="app-header" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
       <div class="brand"><span class="brand-mark" aria-hidden="true">TA</span><strong>Terminal-Agent</strong></div>
-      <div class="current-chat">当前聊天&nbsp; / &nbsp;<b>{{ currentChatTitle }}</b><span>{{ currentChatShellCount }} 个 Shell</span></div>
+      <div class="current-chat">当前任务&nbsp; / &nbsp;<b>{{ currentChatTitle }}</b><span>{{ currentChatShellCount }} 个 Shell</span></div>
       <div class="app-header-actions"><slot name="app-actions" /></div>
     </header>
     <section class="workspace" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
@@ -154,5 +154,10 @@ onBeforeUnmount(widthSaver.flush)
   .workspace { grid-template-columns: min(var(--left-width), 170px) 3px minmax(320px, 1fr) 3px min(var(--right-width), 300px); }
   .brand { min-width: 150px; }
   .current-chat span { display: none; }
+}
+@media (max-width: 1080px) {
+  .app-header-actions :deep(.header-button) { width: 30px; min-width: 30px; padding: 0; justify-content: center; }
+  .app-header-actions :deep(.header-button span) { display: none; }
+  .app-header-actions { gap: 4px; }
 }
 </style>

@@ -7,6 +7,8 @@ const now = new Date('2026-08-16T12:00:00.000Z')
 function summary(overrides: Partial<ChatSummary> & Pick<ChatSummary, 'id' | 'title' | 'createdAt'>): ChatSummary {
   return {
     updatedAt: overrides.createdAt,
+    titleState: 'custom',
+    pinnedAt: null,
     shellCount: 0,
     mode: 'copilot',
     live: false,
@@ -37,6 +39,9 @@ function api(chats: ChatSummary[], workspaces: ChatWorkspace[], revision = 4, li
     create: vi.fn(async (): Promise<ChatWorkspaceSnapshot> => ({ revision: revision + 1, chat: workspaces.at(-1)!, liveChatId: workspaces.at(-1)!.id })),
     get: vi.fn(async (chatId: string) => ({ revision, chat: byId.get(chatId)!, liveChatId })),
     resolveSession: vi.fn(async (request: { sessionId: string }): Promise<ChatSessionResolution> => ({ revision, sessionId: request.sessionId, chat: null, liveChatId })),
+    updateTitle: vi.fn(async (): Promise<ChatWorkspaceSnapshot> => ({ revision: revision + 1, chat: workspaces.at(-1)!, liveChatId })),
+    pin: vi.fn(async (): Promise<ChatWorkspaceSnapshot> => ({ revision: revision + 1, chat: workspaces.at(-1)!, liveChatId })),
+    unpin: vi.fn(async (): Promise<ChatWorkspaceSnapshot> => ({ revision: revision + 1, chat: workspaces.at(-1)!, liveChatId })),
     remove: vi.fn(async () => undefined),
     onChanged: vi.fn((listener: (event: ChatChangedEvent) => void) => {
       listeners.add(listener)
@@ -77,6 +82,62 @@ describe('chat workspaces store', () => {
     ])
   })
 
+  it('places pinned tasks first by newest pin time and excludes them from date groups', async () => {
+    const { groupChatSummaries } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const chats = [
+      summary({ id: 'ordinary', title: '普通任务', createdAt: localTimestamp(2026, 7, 16), updatedAt: '2026-08-16T03:00:00.000Z' }),
+      summary({ id: 'pin-b', title: '较早置顶', createdAt: localTimestamp(2026, 7, 15), pinnedAt: '2026-08-16T01:00:00.000Z' }),
+      summary({ id: 'pin-a', title: '同刻置顶 A', createdAt: localTimestamp(2026, 7, 10), pinnedAt: '2026-08-16T02:00:00.000Z' }),
+      summary({ id: 'pin-z', title: '同刻置顶 Z', createdAt: localTimestamp(2026, 7, 11), pinnedAt: '2026-08-16T02:00:00.000Z' }),
+    ]
+
+    expect(groupChatSummaries(chats, new Date(2026, 7, 16, 18)).map(group => [
+      group.label,
+      group.chats.map(chat => chat.id),
+    ])).toEqual([
+      ['置顶', ['pin-a', 'pin-z', 'pin-b']],
+      ['今天', ['ordinary']],
+    ])
+  })
+
+  it('merges accepted task title and pin snapshots without optimistic changes on failure', async () => {
+    const { createChatWorkspacesStore } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const first = summary({ id: 'first', title: '第一项', createdAt: localTimestamp(2026, 7, 16), updatedAt: '2026-08-16T03:00:00.000Z' })
+    const second = summary({ id: 'second', title: '第二项', createdAt: localTimestamp(2026, 7, 15), updatedAt: '2026-08-16T02:00:00.000Z' })
+    const renamed = workspace({ ...first, title: '已重命名', titleState: 'custom' })
+    const pinned = workspace({ ...renamed, pinnedAt: '2026-08-16T04:00:00.000Z' })
+    const unpinned = workspace({ ...pinned, pinnedAt: null })
+    const chatApi = api([first, second], [workspace(first), workspace(second)])
+    chatApi.updateTitle.mockResolvedValue({ revision: 5, chat: renamed, liveChatId: null })
+    chatApi.pin.mockResolvedValue({ revision: 6, chat: pinned, liveChatId: null })
+    chatApi.unpin.mockResolvedValue({ revision: 7, chat: unpinned, liveChatId: null })
+    const store = createChatWorkspacesStore(chatApi, {
+      now: () => now,
+      requestId: (() => {
+        const ids = ['rename-1', 'pin-1', 'unpin-1']
+        return () => ids.shift()!
+      })(),
+    })
+    await store.load()
+
+    await expect(store.updateTitle(first.id, ' 已重命名 ')).resolves.toBe(true)
+    expect(chatApi.updateTitle).toHaveBeenCalledWith({ requestId: 'rename-1', chatId: first.id, title: ' 已重命名 ' })
+    expect(store.state.chats.find(chat => chat.id === first.id)?.title).toBe('已重命名')
+
+    await expect(store.pin(first.id)).resolves.toBe(true)
+    expect(store.state.groups[0]).toMatchObject({ label: '置顶', chats: [{ id: first.id }] })
+
+    await expect(store.unpin(first.id)).resolves.toBe(true)
+    expect(store.state.groups[0]?.label).toBe('今天')
+
+    chatApi.pin.mockRejectedValueOnce(new Error('任务操作不可用'))
+    const orderBeforeFailure = store.state.chats.map(chat => chat.id)
+    await expect(store.pin(second.id)).resolves.toBe(false)
+    expect(store.state.chats.map(chat => chat.id)).toEqual(orderBeforeFailure)
+    expect(store.state.chats.find(chat => chat.id === second.id)?.pinnedAt).toBeNull()
+    expect(store.state.error).toBe('任务操作不可用')
+  })
+
   it('starts a new local week on Monday so the preceding Sunday is earlier', async () => {
     const { groupChatSummaries } = await import('../../../src/renderer/src/stores/chat-workspaces')
     const chats = [
@@ -106,7 +167,7 @@ describe('chat workspaces store', () => {
       group.chats.map(chat => chat.id),
     ])).toEqual([
       ['今天', ['current-monday']],
-      ['更早', ['next-monday', 'future-year']],
+      ['更早', ['future-year', 'next-monday']],
     ])
   })
 
@@ -1209,14 +1270,18 @@ describe('durable chat workbench components', () => {
     expect(openedHandler).toContain('void attachSession(session, shouldPromoteFallback, isCurrent).catch')
   })
 
-  it('makes the left sidebar a real chat-only navigation surface', () => {
+  it('makes the left sidebar a task-only navigation surface with task actions', () => {
     const source = readFileSync(new URL('../../../src/renderer/src/components/workbench/WorkbenchSessionSidebar.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('ChatSummary')
     expect(source).toContain("create: []")
     expect(source).toContain("select: [chatId: string]")
     expect(source).toContain("remove: [chatId: string]")
-    expect(source).toContain('暂无聊天')
+    expect(source).toContain('renameTask')
+    expect(source).toContain('pinTask')
+    expect(source).toContain('unpinTask')
+    expect(source).toContain('暂无任务')
+    expect(source).toContain('input?.select()')
     expect(source).not.toContain('SessionView')
     expect(source).not.toContain('新建 SSH 连接')
   })
@@ -1231,4 +1296,5 @@ describe('durable chat workbench components', () => {
     expect(shell).toContain('{{ currentChatShellCount }} 个 Shell')
     expect(view).not.toContain('sessions.length }} 个 Shell')
   })
+
 })

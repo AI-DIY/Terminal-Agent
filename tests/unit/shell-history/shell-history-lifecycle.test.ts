@@ -29,7 +29,7 @@ describe('Shell history lifecycle', () => {
       kind: 'updated',
       liveChatId: 'chat-a',
       chat: {
-        id: 'chat-a', title: '工作聊天', createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:01:00.000Z',
+        id: 'chat-a', title: '工作聊天', titleState: 'custom', pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:01:00.000Z',
         shellCount: 1, mode: 'copilot', live: true, messages: [],
         shells: [{
           id: 'association-a', chatId: 'chat-a', sessionId: 'session-a', historyId: 'history-a', hostname: 'web-01', title: 'web-01',

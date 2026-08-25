@@ -33,6 +33,28 @@ describe('graceful application shutdown', () => {
     beforeQuit?.(finalEvent)
     expect(finalEvent.preventDefault).not.toHaveBeenCalled()
   })
+
+  it('disposes diagnostics once before session shutdown and continues when disposal fails', async () => {
+    let beforeQuit: ((event: { preventDefault(): void }) => void) | undefined
+    const app = {
+      on: vi.fn((event: string, listener: (event: { preventDefault(): void }) => void) => {
+        if (event === 'before-quit') beforeQuit = listener
+      }),
+      removeListener: vi.fn(),
+      quit: vi.fn(),
+    }
+    const disposeDiagnostics = vi.fn(() => { throw new Error('window already closed') })
+    const closeSessions = vi.fn()
+    const drainHistory = vi.fn(async () => undefined)
+    registerGracefulApplicationShutdown(app, closeSessions, drainHistory, disposeDiagnostics)
+
+    beforeQuit?.({ preventDefault: vi.fn() })
+    await vi.waitFor(() => expect(app.quit).toHaveBeenCalledOnce())
+
+    expect(disposeDiagnostics).toHaveBeenCalledOnce()
+    expect(closeSessions).toHaveBeenCalledOnce()
+    expect(disposeDiagnostics.mock.invocationCallOrder[0]).toBeLessThan(closeSessions.mock.invocationCallOrder[0]!)
+  })
 })
 
 function deferred<T>() {

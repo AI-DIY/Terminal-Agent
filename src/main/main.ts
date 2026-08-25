@@ -59,9 +59,12 @@ import { registerShellHistoryLifecycle } from './shell-history/register-shell-hi
 import { registerGracefulApplicationShutdown } from './application-shutdown'
 import { createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../shared/contracts'
 import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
+import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'
+import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'
 
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
+let diagnostics: DiagnosticsController | undefined
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
 const keyMaterials = new KeyMaterialStore()
 const secretStore = new ElectronSecretStore()
@@ -155,6 +158,7 @@ let unregisterChatHandlers: (() => void) | undefined
 let unregisterShellHistoryHandlers: (() => void) | undefined
 let unregisterWorkbenchSettingsHandlers: (() => void) | undefined
 let unregisterHostMemoryHandlers: (() => void) | undefined
+let unregisterDiagnosticsHandlers: (() => void) | undefined
 let unregisterSessionObservation: SessionObservationRegistration | undefined
 const accessClient = new AccessClientService(
   new AccessSessionResolver(new FileSavedSessionRepository(join(app.getPath('userData'), 'access-client-sessions.json')), readTempSession),
@@ -184,8 +188,27 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
     }
   })
   const rendererWindow = mainWindow
+  const windowDiagnostics = new DiagnosticsController(rendererWindow.webContents)
+  diagnostics = windowDiagnostics
+  unregisterDiagnosticsHandlers = registerDiagnosticsHandlers(windowDiagnostics, rendererWindow.webContents)
+  const onBeforeInput = (event: Electron.Event, input: Electron.Input): void => {
+    const opensDevTools = input.type === 'keyDown'
+      && input.control && input.shift && !input.alt && !input.meta
+      && input.key.toLowerCase() === 'i'
+    if (!opensDevTools) return
+    event.preventDefault()
+    void windowDiagnostics.openRendererDevTools().catch(error => {
+      if (!rendererWindow.isDestroyed()) rendererWindow.webContents.send('diagnostics:error', publicDiagnosticsError(error))
+    })
+  }
+  rendererWindow.webContents.on('before-input-event', onBeforeInput)
 
   mainWindow.on('closed', () => {
+    rendererWindow.webContents.removeListener('before-input-event', onBeforeInput)
+    unregisterDiagnosticsHandlers?.()
+    unregisterDiagnosticsHandlers = undefined
+    windowDiagnostics.dispose()
+    if (diagnostics === windowDiagnostics) diagnostics = undefined
     unregisterSessionEvents?.()
     unregisterSessionEvents = undefined
     unregisterAccessClientLaunchEvents?.()
@@ -262,7 +285,7 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
 const isPrimaryInstance = configureAccessClientSingleInstance(app, accessClientLaunches)
 
 if (isPrimaryInstance) {
-  registerGracefulApplicationShutdown(app, () => sessions.closeAll(), () => shellHistoryLifecycle.drain())
+  registerGracefulApplicationShutdown(app, () => sessions.closeAll(), () => shellHistoryLifecycle.drain(), () => diagnostics?.dispose())
   app.whenReady().then(async () => {
     void recordPackagedWindowsInstallPath({
       platform: process.platform,

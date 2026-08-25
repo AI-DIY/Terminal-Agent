@@ -28,4 +28,18 @@ describe('electron startup wiring', () => {
     expect(navigation).toBeGreaterThan(-1)
     expect(workbenchRegistration).toBeLessThan(navigation)
   })
+
+  it('routes Ctrl+Shift+I through the same detached DevTools controller used by the toolbar', () => {
+    const source = readFileSync(new URL('../../src/main/main.ts', import.meta.url), 'utf8')
+
+    expect(source).toContain("import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'")
+    expect(source).toContain("import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'")
+    expect(source).toContain("rendererWindow.webContents.on('before-input-event', onBeforeInput)")
+    expect(source).toContain("input.key.toLowerCase() === 'i'")
+    expect(source).toContain('input.control && input.shift && !input.alt && !input.meta')
+    expect(source).toContain('event.preventDefault()')
+    expect(source).toContain('windowDiagnostics.openRendererDevTools()')
+    expect(source).toContain("rendererWindow.webContents.send('diagnostics:error', publicDiagnosticsError(error))")
+  })
+
 })

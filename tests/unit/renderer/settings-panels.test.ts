@@ -54,4 +54,17 @@ describe('settings panels', () => {
     expect(memory).toContain('memory-status')
     expect(memory).toContain('scope-card')
   })
+
+  it('left-aligns all model profile text inside selectable connection rows', () => {
+    const profiles = readFileSync(new URL('../../../src/renderer/src/components/settings/ModelProfileManager.vue', import.meta.url), 'utf8')
+    const profileSelectRule = /\.profile-select\s*\{([^}]*)\}/.exec(profiles)?.[1] ?? ''
+    const profileTextRule = /\.profile-select strong,\.profile-select span,\.profile-select small\s*\{([^}]*)\}/.exec(profiles)?.[1] ?? ''
+
+    expect(profileSelectRule).toContain('align-content: start;')
+    expect(profileSelectRule).toContain('justify-items: start;')
+    expect(profileSelectRule).toContain('width: 100%;')
+    expect(profileSelectRule).toContain('text-align: left;')
+    expect(profileTextRule).toContain('width: 100%;')
+    expect(profileTextRule).toContain('text-align: left;')
+  })
 })
