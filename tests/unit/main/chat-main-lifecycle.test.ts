@@ -31,7 +31,7 @@ const state = vi.hoisted(() => ({
 vi.mock('electron', () => {
   class BrowserWindow {
     static getAllWindows() { return state.windows }
-    readonly webContents = { send: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
+    private readonly contents = { send: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
     private readonly listeners = new Map<string, Array<() => void>>()
     loadURL = vi.fn().mockResolvedValue(undefined)
     loadFile = vi.fn().mockResolvedValue(undefined)
@@ -45,6 +45,11 @@ vi.mock('electron', () => {
       this.options = options
       this.shown = options.show !== false
       state.windows.push(this)
+    }
+
+    get webContents() {
+      if (this.destroyed) throw new TypeError('Object has been destroyed')
+      return this.contents
     }
 
     show() { this.shown = true }
@@ -180,7 +185,7 @@ describe('main chat lifecycle', () => {
     onThemeSaved?.('graphite')
     expect(window.setTitleBarOverlay).toHaveBeenCalledWith({ color: '#25292e', symbolColor: '#f0f3f6', height: 48 })
 
-    window.emitClosed()
+    expect(() => window.emitClosed()).not.toThrow()
     expect(state.disposeChatHandlers).toHaveBeenCalledOnce()
     expect(state.disposeWorkbenchSettingsHandlers).toHaveBeenCalledOnce()
   })
@@ -193,7 +198,7 @@ describe('main chat lifecycle', () => {
     const saving = saveTheme?.({ sender: window.webContents }, 'pearl')
 
     expect(state.workbenchSaveTheme).toHaveBeenCalledWith('pearl')
-    window.emitClosed()
+    expect(() => window.emitClosed()).not.toThrow()
     saved.resolve({ theme: 'graphite' })
 
     await expect(saving).resolves.toEqual({ theme: 'graphite' })

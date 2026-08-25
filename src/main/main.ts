@@ -204,7 +204,6 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
   rendererWindow.webContents.on('before-input-event', onBeforeInput)
 
   mainWindow.on('closed', () => {
-    rendererWindow.webContents.removeListener('before-input-event', onBeforeInput)
     unregisterDiagnosticsHandlers?.()
     unregisterDiagnosticsHandlers = undefined
     windowDiagnostics.dispose()
