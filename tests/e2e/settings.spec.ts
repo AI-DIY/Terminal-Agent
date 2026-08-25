@@ -132,11 +132,14 @@ test('left-aligns LLM and VLM model profile rows', async () => {
       const profile = page.locator('.profile-item').filter({ hasText: profileName })
       await expect(profile).toBeVisible()
       const alignment = await profile.locator('.profile-select').evaluate(node => ({
+        contentLeftInset: node.querySelector('strong')!.getBoundingClientRect().left - node.closest('.profile-item')!.getBoundingClientRect().left,
         justifyItems: getComputedStyle(node).justifyItems,
         textAlign: getComputedStyle(node).textAlign,
       }))
       const leftEdges = await profile.locator('.profile-select strong,.profile-select span,.profile-select small').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().left))
-      expect(alignment).toEqual({ justifyItems: 'start', textAlign: 'left' })
+      expect(alignment.justifyItems).toBe('start')
+      expect(alignment.textAlign).toBe('left')
+      expect(alignment.contentLeftInset).toBeLessThanOrEqual(11)
       expect(leftEdges).toHaveLength(3)
       expect(Math.max(...leftEdges) - Math.min(...leftEdges)).toBeLessThanOrEqual(1)
     }

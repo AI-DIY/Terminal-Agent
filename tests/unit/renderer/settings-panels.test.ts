@@ -61,6 +61,7 @@ describe('settings panels', () => {
     const profileTextRule = /\.profile-select strong,\.profile-select span,\.profile-select small\s*\{([^}]*)\}/.exec(profiles)?.[1] ?? ''
 
     expect(profileSelectRule).toContain('align-content: start;')
+    expect(profileSelectRule).toContain('justify-content: start;')
     expect(profileSelectRule).toContain('justify-items: start;')
     expect(profileSelectRule).toContain('width: 100%;')
     expect(profileSelectRule).toContain('text-align: left;')
