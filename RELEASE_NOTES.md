@@ -1,3 +1,26 @@
+# Terminal-Agent v1.0.9
+
+Release date: 2026-08-24
+
+## Open-source TA refinements
+
+- Adds `DevTools` for detached renderer-process Chrome DevTools and `Node Inspector` for a dedicated Electron window that automatically attaches to the current Node.js main process. The windows are reused when already open, reopen after closing, and require neither external Chrome nor `chrome://inspect`.
+- Changes the model-chain boundary to pass task messages, authorized host facts, manually approved command audit context, and model responses through unchanged. Local credential storage, temporary bridge-password exclusion, Shell-history protections, host-memory authorization, infrastructure-error normalization, regex fences, and exact one-command confirmation remain in place.
+- Adds task title state and pin state: system titles use Shanghai time, the first persisted user message or Shell association starts the task, custom titles remain intact, and the task menu supports rename, pin/unpin, and delete. Version-1 task data intentionally reports an incompatibility error instead of being migrated.
+- Explicitly left-aligns model-profile rows and reduces task-history scrollbar distraction while retaining layout stability.
+
+## Scope boundaries
+
+- This release does not add a log viewer, task-log persistence, or new business logging.
+- This release does not add grouped command approval; candidate execution remains a single exact-command confirmation flow.
+- This release does not migrate old version-1 task data.
+
+## Windows release assets after packaging
+
+- A Windows package made with `npm run make:win`, or a published release, will generate `Terminal-Agent-Setup-1.0.9.exe`, the standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.9.zip`.
+
+---
+
 # Terminal-Agent v1.0.8
 
 Release date: 2026-08-23

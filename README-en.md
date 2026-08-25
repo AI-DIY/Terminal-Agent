@@ -23,14 +23,14 @@ This is not a way for AI to bypass established operations controls. It is a cont
 - **Connections and tasks in one workbench**: CMDB bastion launches, named bastion targets, password SSH, and private-key SSH are available in one place; multiple Shells can be viewed side by side.
 - **Human-in-the-loop by default**: in Copilot mode, AI provides analysis, evidence steps, and a command candidate. The command is not sent until an operator confirms it.
 - **Explicit guardrails before risky actions**: first-run regex rules cover process termination, interactive editors, file removal, service state changes, power actions, and disk partitioning or formatting.
-- **Minimal sensitive-data exposure**: AI input/output, bridge diagnostics, and approved-command display are redacted for sensitive content. Model keys are stored through Windows-protected storage and are never returned to the renderer.
-- **Built for ongoing operations**: chat workspaces, Shell history, connection layout, and consented local host memory can be restored locally for handoffs and follow-up work.
+- **Local credential protection and execution boundaries**: model keys are stored through Windows-protected storage and never returned to the renderer; SSH credentials, temporary bridge passwords, Shell-history protections, regex fences, and one-command confirmation remain locally enforced.
+- **Built for ongoing operations**: task workspaces, Shell history, connection layout, and consented local host memory can be restored locally for handoffs and follow-up work.
 
 ## Quick Start
 
 ### 1. Install Terminal-Agent
 
-After completing Windows packaging with `npm run make:win` or publishing `v1.0.8`, use the generated `Terminal-Agent-Setup-1.0.8.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
+After completing Windows packaging with `npm run make:win` or publishing `v1.0.9`, use the generated `Terminal-Agent-Setup-1.0.9.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
 
 Inside the workbench, choose **New SSH connection** and select one of these entry points:
 
@@ -69,7 +69,13 @@ Each bridge launch appends a `putty-bridge.log` file beside `putty.exe`. It cont
 
 Model keys are sent to the main process only while testing or saving, then stored through Windows-protected storage. The UI shows configuration state but never backfills a saved key. File-based key input and LLM-to-VLM key sharing have been removed; an existing VLM key reference is migrated to a protected key owned by that profile.
 
-### 4. Use Task-Oriented AI Copilot for Shell Work
+### 4. Manage Tasks and Diagnostic Windows
+
+- A new task starts as `新建任务 YYYY-MM-DD HH:mm:ss`; its first persisted user message or first persisted Shell association changes it to `任务 YYYY-MM-DD HH:mm:ss`. Use the task-row menu to rename, pin/unpin, or remove it. A custom title is never overwritten by later activity.
+- `DevTools` opens detached renderer-process Chrome DevTools. `Node Inspector` opens a separate Electron debugging window already attached to the current application's Node.js main process. Both can be focused again and reopened after closing, without external Chrome, `chrome://inspect`, or a copied WebSocket address.
+- Version-1 task data is not migrated automatically. When the application reports `任务数据版本不兼容，请清空旧任务数据后重试。`, clear the old task data before continuing.
+
+### 5. Use Task-Oriented AI Copilot for Shell Work
 
 Describe the goal for the current work task and associated Shells. For example:
 
@@ -86,7 +92,7 @@ Use this operating rhythm:
 
 Copilot is the default mode. An AI-generated command is never automatically executed in this mode.
 
-### 5. Configure and Use Safety Fences
+### 6. Configure and Use Safety Fences
 
 Open **Settings -> Safety fences** to view, enable, disable, test, and save rules. The first-run defaults include:
 
@@ -99,7 +105,7 @@ Open **Settings -> Safety fences** to view, enable, disable, test, and save rule
 
 An unapproved command matching a fence is not sent to the SSH Shell. Review the candidate first, then grant a one-time confirmation for that specific candidate. The confirmation does not extend to another host, session, or command.
 
-### 6. Use Autonomous Mode Only for Explicitly Authorized Low-Risk Sessions
+### 7. Use Autonomous Mode Only for Explicitly Authorized Low-Risk Sessions
 
 When automation is genuinely required, select **Upgrade autonomous mode** in the **AI workspace** and confirm again in the dialog. The authorization applies only to that session.
 
@@ -111,17 +117,19 @@ Autonomous mode skips per-candidate human review. It is not appropriate for unva
 - Safety fences are local pre-execution controls, not a complete command authorization system. Maintain rules, permissions, and approval processes according to organizational policy.
 - Temporary bastion sessions are not written to **Saved sessions**. Temporary profiles and temporary passwords are not written to the session book.
 - Local host memory uses explicit consent and configurable collection scopes. It can be reviewed, edited, or cleared in Settings; do not use it as a secret storage system.
+- **Model trust boundary**: task messages, authorized host facts, and manually approved command-audit context, as well as model responses, are passed through the model chain unchanged. The application no longer automatically redacts those contents. Configure only a trusted local model, enterprise intranet model, or organization-controlled model service; the application does not additionally block public models.
+- This pass-through policy does not remove local protections: model API keys and SSH credentials keep their existing protection, temporary bridge passwords remain non-persistent, and Shell-history protections, host-memory authorization, execution fences, and exact one-time command confirmation remain in effect.
 - Before any automated action, verify the target environment, change window, backup or rollback plan, and required approvals.
 
 ## Release Assets
 
-A Windows package made with `npm run make:win` or a published `v1.0.8` Release will generate:
+A Windows package made with `npm run make:win` or a published `v1.0.9` Release will generate:
 
 | File | Purpose |
 | --- | --- |
-| `Terminal-Agent-Setup-1.0.8.exe` | Windows x64 installer. |
+| `Terminal-Agent-Setup-1.0.9.exe` | Windows x64 installer. |
 | `putty.exe` | Single-file bridge for Assess/Access Client or bastion mapping. |
-| `Terminal-Agent-Uninstall-Cleanup-1.0.8.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
+| `Terminal-Agent-Uninstall-Cleanup-1.0.9.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
 | `latest.yml` and `.blockmap` | Update metadata for deployments that use auto-update. |
 
 After the cleanup tool has been generated, extract the ZIP and run `清理 Terminal-Agent 卸载残留.cmd` as an administrator. It lists matching entries, requires an explicit `Y`, and exports `.reg` backups before deletion.
