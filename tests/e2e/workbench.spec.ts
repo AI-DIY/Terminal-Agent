@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test as base, type ElectronApplication, type Page } from '@playwright/test'
+import { _electron as electron, expect, test as base, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import electronExecutablePathValue from 'electron'
 import { generateKeyPairSync } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -61,7 +61,7 @@ test('opens independent DevTools and an automatically attached Node Inspector', 
     const electronApp = (await launchApp()).app
     app = electronApp
     const page = await electronApp.firstWindow()
-    const mainBounds = await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getBounds())
+    const mainBounds = await mainWindowBounds(electronApp)
     if (!mainBounds) throw new Error('Expected the Terminal-Agent main window')
 
     await page.getByRole('button', { name: 'DevTools', exact: true }).click()
@@ -72,7 +72,7 @@ test('opens independent DevTools and an automatically attached Node Inspector', 
     await rendererDevTools.close()
     await expect.poll(async () => (await electronApp.windows()).filter(window => window.url().startsWith('devtools://')).length).toBe(0)
 
-    await page.keyboard.press('Control+Shift+I')
+    await sendRendererDevToolsShortcut(electronApp)
     const reopenedDevTools = await waitForElectronWindow(electronApp, url => url.startsWith('devtools://'))
     await reopenedDevTools.close()
     await expect.poll(async () => (await electronApp.windows()).filter(window => window.url().startsWith('devtools://')).length).toBe(0)
@@ -93,7 +93,7 @@ test('opens independent DevTools and an automatically attached Node Inspector', 
     await page.getByRole('button', { name: 'Node Inspector', exact: true }).click()
     const reopenedInspector = await waitForElectronWindow(electronApp, url => url.startsWith('devtools://devtools/bundled/js_app.html'))
     await expect(reopenedInspector.locator('body')).toBeVisible()
-    const afterBounds = await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getBounds())
+    const afterBounds = await mainWindowBounds(electronApp)
     expect(afterBounds).toEqual(mainBounds)
   } finally {
     await app?.close()
@@ -107,6 +107,117 @@ async function waitForElectronWindow(app: ElectronApplication, accepts: (url: st
   return window
 }
 
+async function sendRendererDevToolsShortcut(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ BrowserWindow }) => {
+    const mainWindow = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().startsWith('file:'))
+    if (!mainWindow) throw new Error('Expected the Terminal-Agent main window')
+    mainWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'I', modifiers: ['control', 'shift'] })
+  })
+}
+
+async function mainWindowBounds(app: ElectronApplication): Promise<{ x: number; y: number; width: number; height: number } | undefined> {
+  return app.evaluate(({ BrowserWindow }) => (
+    BrowserWindow.getAllWindows().find(window => window.webContents.getURL().startsWith('file:'))?.getBounds()
+  ))
+}
+
+async function historyScrollMetrics(history: Locator): Promise<{ clientHeight: number; scrollHeight: number; scrollTop: number }> {
+  return history.evaluate(node => ({ clientHeight: node.clientHeight, scrollHeight: node.scrollHeight, scrollTop: node.scrollTop }))
+}
+
+test('keeps a short task history from overflowing during task actions', async ({ launchApp }) => {
+  let app: ElectronApplication | undefined
+
+  try {
+    app = (await launchApp()).app
+    const page = await app.firstWindow()
+    const history = page.getByRole('navigation', { name: '任务历史列表', exact: true })
+
+    await page.getByRole('button', { name: '新建任务', exact: true }).click()
+    const task = page.locator('.history-item.active')
+    await task.getByRole('button', { name: /^任务操作 / }).click()
+    await expect(task.getByRole('menu', { name: '任务操作菜单', exact: true })).toBeVisible()
+    const actionMenuMetrics = await historyScrollMetrics(history)
+    expect(actionMenuMetrics.scrollHeight).toBe(actionMenuMetrics.clientHeight)
+
+    await task.getByRole('menuitem', { name: '重命名', exact: true }).click()
+    await expect(task.getByRole('textbox', { name: '任务名称', exact: true })).toBeVisible()
+    const renameMetrics = await historyScrollMetrics(history)
+    expect(renameMetrics.scrollHeight).toBe(renameMetrics.clientHeight)
+
+    await page.keyboard.press('Escape')
+    await expect(task.getByRole('button', { name: /^任务操作 / })).toBeVisible()
+    await task.getByRole('button', { name: /^任务操作 / }).click()
+    await task.getByRole('menuitem', { name: '删除', exact: true }).click()
+    await expect(page.locator('.history-item')).toHaveCount(0)
+    const deletionMetrics = await historyScrollMetrics(history)
+    expect(deletionMetrics.scrollHeight).toBe(deletionMetrics.clientHeight)
+  } finally {
+    await app?.close()
+  }
+})
+
+test('keeps a long task history scrollable', async ({ launchApp }) => {
+  let app: ElectronApplication | undefined
+
+  try {
+    app = (await launchApp()).app
+    const page = await app.firstWindow()
+    const history = page.getByRole('navigation', { name: '任务历史列表', exact: true })
+
+    await page.evaluate(async () => {
+      await Promise.all(Array.from({ length: 16 }, async (_, index) => {
+        await window.terminalAgent.chats.create({ requestId: crypto.randomUUID(), title: `滚动任务 ${index + 1}` })
+      }))
+    })
+    await expect(page.locator('.history-item')).toHaveCount(16)
+
+    const beforeScroll = await historyScrollMetrics(history)
+    expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight)
+    const afterScroll = await history.evaluate(node => {
+      node.scrollTop = node.scrollHeight
+      return node.scrollTop
+    })
+    expect(afterScroll).toBeGreaterThan(0)
+  } finally {
+    await app?.close()
+  }
+})
+
+test('vertically centers the closed-Shell history heading and summary', async ({ launchApp }) => {
+  const sshServer = await startSshServer()
+  let app: ElectronApplication | undefined
+
+  try {
+    app = (await launchApp()).app
+    const page = await app.firstWindow()
+
+    await connect(page, sshServer.port)
+    await page.getByRole('button', { name: '关闭终端会话 127.0.0.1', exact: true }).click()
+
+    const toolbar = page.locator('.shell-toolbar-content')
+    await expect(toolbar).toBeVisible()
+    await expect(toolbar.getByText('Shell 历史回放', { exact: true })).toBeVisible()
+    const centers = await toolbar.evaluate(node => {
+      const toolbarBox = node.getBoundingClientRect()
+      const titleParts = [...node.querySelectorAll<HTMLElement>('.history-toolbar-title strong,.history-toolbar-title span')]
+      return {
+        toolbar: toolbarBox.top + toolbarBox.height / 2,
+        titleParts: titleParts.map(part => {
+          const box = part.getBoundingClientRect()
+          return box.top + box.height / 2
+        }),
+      }
+    })
+
+    expect(centers.titleParts).toHaveLength(2)
+    for (const center of centers.titleParts) expect(Math.abs(center - centers.toolbar)).toBeLessThanOrEqual(1)
+  } finally {
+    await app?.close()
+    await closeServer(sshServer.server)
+  }
+})
+
 test('persists chat navigation across renderer reload with the real Shell count', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
@@ -117,11 +228,10 @@ test('persists chat navigation across renderer reload with the real Shell count'
 
     await page.getByRole('button', { name: '新建任务', exact: true }).click()
     const activeChat = page.locator('.history-item.active')
-    const title = (await activeChat.locator('strong').textContent())?.trim()
-    if (!title) throw new Error('Expected a durable chat title')
-
     await connect(page, sshServer.port)
     await expect(activeChat.getByText('1 个 Shell', { exact: true })).toBeVisible()
+    const title = (await activeChat.locator('strong').textContent())?.trim()
+    if (!title) throw new Error('Expected a durable task title after its first Shell association')
 
     await page.reload()
 
@@ -157,7 +267,7 @@ test('restores a newly created zero-Shell chat as a connectable live workspace a
 
     await connect(page, sshServer.port)
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()
-    await expect(restoredChat.getByText('1 个 Shell', { exact: true })).toBeVisible()
+    await expect(page.locator('.history-item.active').getByText('1 个 Shell', { exact: true })).toBeVisible()
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
@@ -232,11 +342,11 @@ test('restores a chat with only closed Shells as history playback after reload',
 
     await page.getByRole('button', { name: '新建任务', exact: true }).click()
     const activeChat = page.locator('.history-item.active')
-    const title = (await activeChat.locator('strong').textContent())?.trim()
-    if (!title) throw new Error('Expected a durable chat title')
     await connect(page, sshServer.port)
     await page.getByRole('button', { name: '关闭终端会话 127.0.0.1', exact: true }).click()
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toHaveCount(0)
+    const title = (await activeChat.locator('strong').textContent())?.trim()
+    if (!title) throw new Error('Expected a durable task title after its first Shell association')
 
     await page.reload()
 

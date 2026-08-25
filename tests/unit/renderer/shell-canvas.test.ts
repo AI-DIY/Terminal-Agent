@@ -53,6 +53,14 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(canvas).toContain('v-if="isLive" class="shell-title"')
   })
 
+  it('vertically centers the closed-Shell history title and summary in their toolbar', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+    const titleRule = /\.history-toolbar-title\s*\{([^}]*)\}/.exec(canvas)?.[1] ?? ''
+
+    expect(titleRule).toContain('align-items: center;')
+    expect(titleRule).not.toContain('align-items: baseline;')
+  })
+
   it('keeps upgrade control in the AI workspace and removes save and upgrade controls from Shell workspace', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const chat = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')

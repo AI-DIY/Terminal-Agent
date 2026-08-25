@@ -1,3 +1,19 @@
+# Terminal-Agent v1.0.10
+
+Release date: 2026-08-25
+
+## Single-feedback UI refinements
+
+- Makes the normal task-history list fill the remaining sidebar height, so a short list does not become scrollable when its action menu opens; long task histories retain their existing low-distraction scrollbar and scrolling behavior.
+- Vertically centers the `Shell history replay` title and host/record summary when every SSH session in the task is closed, without changing the workbench layout or history controls.
+- Retains explicit left alignment for both LLM and VLM connection rows and adds a real Electron geometry check for their aligned text.
+
+## Windows release assets after packaging
+
+- A Windows package made with `npm run make:win`, or a published release, will generate `Terminal-Agent-Setup-1.0.10.exe`, the standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-1.0.10.zip`.
+
+---
+
 # Terminal-Agent v1.0.9
 
 Release date: 2026-08-24

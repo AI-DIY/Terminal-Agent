@@ -30,7 +30,7 @@ This is not a way for AI to bypass established operations controls. It is a cont
 
 ### 1. Install Terminal-Agent
 
-After completing Windows packaging with `npm run make:win` or publishing `v1.0.9`, use the generated `Terminal-Agent-Setup-1.0.9.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
+After completing Windows packaging with `npm run make:win` or publishing `v1.0.10`, use the generated `Terminal-Agent-Setup-1.0.10.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
 
 Inside the workbench, choose **New SSH connection** and select one of these entry points:
 
@@ -72,6 +72,8 @@ Model keys are sent to the main process only while testing or saving, then store
 ### 4. Manage Tasks and Diagnostic Windows
 
 - A new task starts as `新建任务 YYYY-MM-DD HH:mm:ss`; its first persisted user message or first persisted Shell association changes it to `任务 YYYY-MM-DD HH:mm:ss`. Use the task-row menu to rename, pin/unpin, or remove it. A custom title is never overwritten by later activity.
+- A short task-history list does not show an unnecessary scrollbar when its task menu opens or when a task is renamed or removed; a long history remains normally scrollable.
+- When all SSH sessions in a task are closed, the Shell history-replay title and its host/record summary are vertically centered in the toolbar. LLM and VLM connection lists remain left aligned.
 - `DevTools` opens detached renderer-process Chrome DevTools. `Node Inspector` opens a separate Electron debugging window already attached to the current application's Node.js main process. Both can be focused again and reopened after closing, without external Chrome, `chrome://inspect`, or a copied WebSocket address.
 - Version-1 task data is not migrated automatically. When the application reports `任务数据版本不兼容，请清空旧任务数据后重试。`, clear the old task data before continuing.
 
@@ -123,13 +125,13 @@ Autonomous mode skips per-candidate human review. It is not appropriate for unva
 
 ## Release Assets
 
-A Windows package made with `npm run make:win` or a published `v1.0.9` Release will generate:
+A Windows package made with `npm run make:win` or a published `v1.0.10` Release will generate:
 
 | File | Purpose |
 | --- | --- |
-| `Terminal-Agent-Setup-1.0.9.exe` | Windows x64 installer. |
+| `Terminal-Agent-Setup-1.0.10.exe` | Windows x64 installer. |
 | `putty.exe` | Single-file bridge for Assess/Access Client or bastion mapping. |
-| `Terminal-Agent-Uninstall-Cleanup-1.0.9.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
+| `Terminal-Agent-Uninstall-Cleanup-1.0.10.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
 | `latest.yml` and `.blockmap` | Update metadata for deployments that use auto-update. |
 
 After the cleanup tool has been generated, extract the ZIP and run `清理 Terminal-Agent 卸载残留.cmd` as an administrator. It lists matching entries, requires an explicit `Y`, and exports `.reg` backups before deletion.

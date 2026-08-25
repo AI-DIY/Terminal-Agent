@@ -143,7 +143,7 @@ function removeTask(chatId: string): void {
 .panel-title { min-width: 0; }.panel-title strong { display: block; overflow: hidden; color: var(--text-strong); font-size: 14px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }.panel-title span { display: block; margin-top: 3px; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .collapse-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 66px; height: 30px; margin-left: auto; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 10px; font-weight: 650; white-space: nowrap; }.collapse-button:hover { border-color: var(--focus); background: var(--hover); }
 .new-chat { display: flex; align-items: center; gap: 7px; height: 32px; margin: 7px 9px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 11px; font-weight: 650; text-align: left; }.new-chat:hover { border-color: var(--focus); background: var(--hover); }
-nav { min-height: 0; overflow-y: auto; padding: 6px 7px 14px; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }
+nav { grid-row: 3 / -1; min-height: 0; overflow-y: auto; padding: 6px 7px 14px; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }
 nav:hover,nav:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }
 nav::-webkit-scrollbar { width: 8px; }
 nav::-webkit-scrollbar-track { background: transparent; }

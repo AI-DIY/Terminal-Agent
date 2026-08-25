@@ -271,7 +271,7 @@ watch(
 .shell-canvas.empty { grid-template-rows: minmax(0, 1fr); }
 .shell-canvas.empty .canvas-content { grid-row: 1; }
 .shell-toolbar-content { position: relative; display: flex; align-items: stretch; min-width: 0; height: 42px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.history-toolbar-title { display: flex; min-width: 0; flex: 1 1 auto; align-items: baseline; gap: 7px; padding: 0 11px; }.history-toolbar-title strong { color: var(--text-strong); font-size: 11px; }.history-toolbar-title span { color: var(--muted); font-size: 9px; }
+.history-toolbar-title { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 7px; padding: 0 11px; }.history-toolbar-title strong { color: var(--text-strong); font-size: 11px; }.history-toolbar-title span { color: var(--muted); font-size: 9px; }
 .hostbar-tools { position: sticky; z-index: 3; right: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 6px; min-width: max-content; margin-left: auto; padding: 0 8px; border-left: 1px solid var(--line-soft); background: var(--panel); box-shadow: -8px 0 12px var(--panel); }
 .shell-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; }
 .shell-title strong { color: var(--text-strong); font-size: 10px; white-space: nowrap; }

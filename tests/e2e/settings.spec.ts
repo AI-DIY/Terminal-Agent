@@ -116,10 +116,10 @@ test('left-aligns LLM and VLM model profile rows', async () => {
     const page = await app.firstWindow()
     await page.evaluate(async () => {
       await window.terminalAgent.settings.models.save({
-        name: '左对齐文本模型', kind: 'llm', provider: 'ollama', model: 'llm-left', endpoint: 'http://127.0.0.1:11434', contextLimit: 1_024,
+        name: '左对齐文本模型', kind: 'llm', provider: 'ollama', model: 'llm-left', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 1_024,
       })
       await window.terminalAgent.settings.models.save({
-        name: '左对齐视觉模型', kind: 'vlm', provider: 'ollama', model: 'vlm-left', endpoint: 'http://127.0.0.1:11434', contextLimit: 1_024,
+        name: '左对齐视觉模型', kind: 'vlm', provider: 'ollama', model: 'vlm-left', endpoint: 'http://127.0.0.1:11434/api/chat', maxImages: 1,
       })
     })
     await page.getByRole('button', { name: '设置', exact: true }).click()
@@ -131,7 +131,12 @@ test('left-aligns LLM and VLM model profile rows', async () => {
       await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: panelName, exact: true }).click()
       const profile = page.locator('.profile-item').filter({ hasText: profileName })
       await expect(profile).toBeVisible()
+      const alignment = await profile.locator('.profile-select').evaluate(node => ({
+        justifyItems: getComputedStyle(node).justifyItems,
+        textAlign: getComputedStyle(node).textAlign,
+      }))
       const leftEdges = await profile.locator('.profile-select strong,.profile-select span,.profile-select small').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().left))
+      expect(alignment).toEqual({ justifyItems: 'start', textAlign: 'left' })
       expect(leftEdges).toHaveLength(3)
       expect(Math.max(...leftEdges) - Math.min(...leftEdges)).toBeLessThanOrEqual(1)
     }

@@ -30,7 +30,7 @@ Terminal-Agent 是面向日常运维与企业堡垒机场景的 Windows SSH 工�
 
 ### 1. 安装 Terminal-Agent
 
-在 Windows 环境完成 `npm run make:win` 打包或发布 `v1.0.9` 后，可使用生成的 `Terminal-Agent-Setup-1.0.9.exe` 安装包；发布后也可从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 获取。安装完成后，先启动一次 Terminal-Agent。
+在 Windows 环境完成 `npm run make:win` 打包或发布 `v1.0.10` 后，可使用生成的 `Terminal-Agent-Setup-1.0.10.exe` 安装包；发布后也可从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 获取。安装完成后，先启动一次 Terminal-Agent。
 
 工作台内选择“新建 SSH 连接”，可使用以下入口：
 
@@ -72,6 +72,8 @@ Assess/Access Client / 堡垒机
 ### 4. 管理任务与诊断窗口
 
 - 新建任务的系统名称为“新建任务 YYYY-MM-DD HH:mm:ss”；首次保存用户消息或首次关联 Shell 后变为“任务 YYYY-MM-DD HH:mm:ss”。可从任务右侧菜单重命名、置顶/取消置顶或删除；自定义名称不会被后续活动覆盖。
+- 任务历史区在少量任务下打开右侧操作菜单、重命名或删除时不会显示无意义的滚动条；历史列表较长时仍可正常滚动。
+- 当任务中的 SSH 连接都已关闭时，Shell 历史回放标题及其主机/记录摘要会在工具栏内垂直居中；大语言模型和视觉语言模型连接列表保持左对齐。
 - 顶部 `DevTools` 会打开独立的渲染进程 Chrome DevTools；`Node Inspector` 会打开独立的 Electron 调试窗口并自动连接当前应用的 Node.js 主进程。两者都可重复聚焦和关闭后重新打开，不需要外部 Chrome、`chrome://inspect` 或复制 WebSocket 地址。
 - v1 任务数据不会自动迁移。若升级后遇到“任务数据版本不兼容，请清空旧任务数据后重试。”，请先清空旧任务数据再继续使用。
 
@@ -123,13 +125,13 @@ Assess/Access Client / 堡垒机
 
 ## Release 文件说明
 
-在 Windows 环境完成 `npm run make:win` 打包或发布 `v1.0.9` 后将生成以下文件：
+在 Windows 环境完成 `npm run make:win` 打包或发布 `v1.0.10` 后将生成以下文件：
 
 | 文件 | 用途 |
 | --- | --- |
-| `Terminal-Agent-Setup-1.0.9.exe` | Windows x64 安装包。 |
+| `Terminal-Agent-Setup-1.0.10.exe` | Windows x64 安装包。 |
 | `putty.exe` | 提供给 Assess/Access Client 或堡垒机映射的单文件桥接程序。 |
-| `Terminal-Agent-Uninstall-Cleanup-1.0.9.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
+| `Terminal-Agent-Uninstall-Cleanup-1.0.10.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
 | `latest.yml` 与 `.blockmap` | 更新元数据；部署自动更新时使用。 |
 
 生成清理工具后，解压 ZIP 并以管理员权限运行 `清理 Terminal-Agent 卸载残留.cmd`。工具会先列出匹配项，并要求明确输入 `Y`；删除前会导出相应的 `.reg` 备份。
