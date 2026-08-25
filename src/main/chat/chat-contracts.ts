@@ -379,13 +379,15 @@ export type PersistedAssociation = z.infer<typeof persistedAssociationSchema>
 export type ChatOperation = z.infer<typeof chatOperationSchema>
 export type ChatDocument = z.infer<typeof chatDocumentSchema>
 
+export const incompatibleChatDocumentVersionMessage = '任务数据版本不兼容，请清空旧任务数据后重试。'
+
 export function emptyChatDocument(): ChatDocument {
   return { version: 2, liveChatId: null, chats: [], messages: [], associations: [], operations: [] }
 }
 
 export function guardChatDocumentVersion(persisted: unknown): { value: unknown; changed: boolean } {
   if (isRecord(persisted) && Object.hasOwn(persisted, 'version') && persisted.version !== 2) {
-    throw new Error('任务数据版本不兼容，请清空旧任务数据后重试。')
+    throw new Error(incompatibleChatDocumentVersionMessage)
   }
   return { value: persisted, changed: false }
 }

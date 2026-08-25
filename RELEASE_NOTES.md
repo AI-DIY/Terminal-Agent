@@ -7,6 +7,7 @@ Release date: 2026-08-24
 - Adds `DevTools` for detached renderer-process Chrome DevTools and `Node Inspector` for a dedicated Electron window that automatically attaches to the current Node.js main process. The windows are reused when already open, reopen after closing, and require neither external Chrome nor `chrome://inspect`.
 - Changes the model-chain boundary to pass task messages, authorized host facts, manually approved command audit context, and model responses through unchanged. Local credential storage, temporary bridge-password exclusion, Shell-history protections, host-memory authorization, infrastructure-error normalization, regex fences, and exact one-command confirmation remain in place.
 - Adds task title state and pin state: system titles use Shanghai time, the first persisted user message or Shell association starts the task, custom titles remain intact, and the task menu supports rename, pin/unpin, and delete. Version-1 task data intentionally reports an incompatibility error instead of being migrated.
+- Fixes startup when retained version-1 task data is present: the main window now opens and presents that incompatibility error instead of leaving only background processes. The legacy task file is neither migrated nor modified.
 - Explicitly left-aligns model-profile rows and reduces task-history scrollbar distraction while retaining layout stability.
 
 ## Scope boundaries

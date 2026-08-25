@@ -145,6 +145,17 @@ describe('main chat lifecycle', () => {
     expect(createMainWindow).toHaveBeenCalledOnce()
   })
 
+  it('creates the main window when task recovery finds an incompatible task document', async () => {
+    const createMainWindow = vi.fn()
+
+    await expect(recoverChatStreamsBeforeCreatingMainWindow(
+      async () => { throw new Error('任务数据版本不兼容，请清空旧任务数据后重试。') },
+      createMainWindow,
+    )).resolves.toBeUndefined()
+
+    expect(createMainWindow).toHaveBeenCalledOnce()
+  })
+
   it('registers chat handlers for the window and disposes them when the window closes', () => {
     const window = createMainWindow() as unknown as (typeof state.windows)[number]
 
