@@ -1,5 +1,7 @@
 import { reactive } from 'vue'
 import type { ChatRuntimeEvent } from '../../../shared/contracts'
+import type { ChatMessageContent, ChatImageUrlPart } from '../../../shared/chat-content'
+import type { ChatExecutionPlan } from '../../../shared/chat-plan'
 
 type Api = {
   send(request: { chatId: string; runId: string; content: any; retry?: boolean }): Promise<void>
@@ -12,6 +14,8 @@ type Message = {
   content: any
   state: 'streaming' | 'complete' | 'error'
   retryable?: boolean
+  messageType?: 'execution_audit'
+  executionPlan?: ChatExecutionPlan
 }
 
 const terminalCancellationContent = '已取消。'
@@ -25,6 +29,7 @@ export function createGlobalChatStore(api: Api) {
     retryableErrors: {} as Record<string, boolean>,
     readOnly: {} as Record<string, boolean>,
     activeMessageIds: {} as Record<string, string | null>,
+    pendingImages: {} as Record<string, ChatImageUrlPart[]>,
   })
   const lastUserMessage = new Map<string, any>()
   const cancelledRuns = new Map<string, string>()
@@ -84,12 +89,22 @@ export function createGlobalChatStore(api: Api) {
     draft(chatId: string): string {
       return state.drafts[chatId] ?? ''
     },
+    setPendingImages(chatId: string, images: ChatImageUrlPart[]): void { state.pendingImages[chatId] = structuredClone(images) },
+    removePendingImage(chatId: string, index: number): void { state.pendingImages[chatId] = (state.pendingImages[chatId] ?? []).filter((_, i) => i !== index) },
+    composeUserContent(chatId: string): ChatMessageContent | null {
+      const text = (state.drafts[chatId] ?? '').trim(); const images = state.pendingImages[chatId] ?? []
+      if (!text && !images.length) return null
+      if (!images.length) return text
+      return [...(text ? [{ type: 'text' as const, text }] : []), ...structuredClone(images)]
+    },
     hydrate(chatId: string, messages: readonly {
       id: string
       role: 'user' | 'assistant' | 'system'
       content: any
       state: 'complete' | 'streaming' | 'error'
       retryable?: boolean
+      messageType?: 'execution_audit'
+      executionPlan?: ChatExecutionPlan
     }[], readOnly = false): void {
       cancelledRuns.delete(chatId)
       state.runs[chatId] = null
@@ -100,6 +115,8 @@ export function createGlobalChatStore(api: Api) {
         content: message.content,
         state: message.state,
         ...(message.retryable === undefined ? {} : { retryable: message.retryable }),
+        ...(message.messageType ? { messageType: message.messageType } : {}),
+        ...(message.executionPlan ? { executionPlan: structuredClone(message.executionPlan) } : {}),
       }))
       const retryTarget = retryableHydratedError(visible)
       if (retryTarget) {
@@ -121,6 +138,7 @@ export function createGlobalChatStore(api: Api) {
       const runId = crypto.randomUUID()
       cancelledRuns.delete(chatId)
       state.drafts[chatId] = ''
+      state.pendingImages[chatId] = []
       state.runs[chatId] = runId
       state.activeMessageIds[chatId] = null
       lastUserMessage.set(chatId, value)

@@ -15,13 +15,18 @@ watch(() => props.chat, value => {
 }, { immediate: true })
 const messages = computed(() => chatId.value ? store.state.messages[chatId.value] ?? [] : [])
 const draft = computed(() => chatId.value ? store.draft(chatId.value) : '')
+const pendingImages = computed(() => chatId.value ? store.state.pendingImages[chatId.value] ?? [] : [])
 const running = computed(() => chatId.value ? Boolean(store.state.runs[chatId.value]) : false)
 const retryable = computed(() => chatId.value ? store.canRetry(chatId.value) : false)
 const mode = computed(() => props.chat?.mode ?? 'copilot')
 const contextUsed = computed(() => messages.value.reduce((total, message) => total + Math.ceil(chatContentText(message.content).length / 4) + 4, 0))
 const contextPercent = computed(() => Math.min(100, Math.round((contextUsed.value / modelContextLimit.value) * 100)))
 function updateDraft(event: Event): void { if (chatId.value) store.setDraft(chatId.value, (event.target as HTMLTextAreaElement).value) }
-function send(): void { if (chatId.value) void store.send(chatId.value, draft.value) }
+function send(): void { if (chatId.value) { const content = store.composeUserContent(chatId.value); if (content) void store.send(chatId.value, content) } }
+function onImage(event: Event): void {
+  const files = Array.from((event.target as HTMLInputElement).files ?? []).slice(0, 8)
+  void Promise.all(files.map(file => new Promise<any>(resolve => { const reader = new FileReader(); reader.onload = () => resolve({ type: 'image_url', image_url: { url: String(reader.result) } }); reader.readAsDataURL(file) }))).then(images => { if (chatId.value) store.setPendingImages(chatId.value, images) })
+}
 function retry(): void { if (chatId.value) void store.retry(chatId.value) }
 function cancel(): void { if (chatId.value) void store.cancel(chatId.value).catch(() => undefined) }
 function onKeydown(event: KeyboardEvent): void { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); send() } }
@@ -57,7 +62,8 @@ onBeforeUnmount(() => store.dispose())
         <span class="message-avatar" aria-hidden="true"><UserRound v-if="message.role === 'user'" :size="14" /><Bot v-else :size="14" /></span>
         <div class="message-content">
           <div class="message-meta"><strong>{{ message.role === 'user' ? '你' : 'Terminal-Agent' }}</strong><span v-if="message.state === 'streaming'">生成中</span><span v-else-if="message.state === 'error'">未完成</span></div>
-          <p>{{ message.content }}</p>
+          <p>{{ typeof message.content === 'string' ? message.content : message.content.map((part: any) => part.type === 'text' ? part.text : '[图片]').join('') }}</p>
+          <div v-if="message.executionPlan" class="execution-plan"><strong>{{ message.executionPlan.title }}</strong><span v-for="step in message.executionPlan.steps" :key="step.id">{{ step.target }} · {{ step.finalCommand || step.originalCommand }} · {{ step.sendState }}</span></div>
         </div>
       </article>
       <section v-if="!messages.length" class="empty"><Bot :size="24" aria-hidden="true" /><strong>{{ readOnly ? '此任务没有 AI 记录' : '开始协作' }}</strong><span>{{ readOnly ? 'Shell 历史仍可在中间工作区查看' : '输入目标，AI 会结合当前任务中的 Shell 信息回答' }}</span></section>
@@ -66,6 +72,7 @@ onBeforeUnmount(() => store.dispose())
 
     <footer class="composer">
       <div class="composer-shell">
+        <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple aria-label="添加图片" @change="onImage">
         <textarea :value="draft" :disabled="readOnly || !chatId" aria-label="聊天输入" placeholder="告诉 AI 要完成什么；AI 会根据当前聊天判断所需信息和 Shell。" @input="updateDraft" @keydown="onKeydown" />
         <div class="composer-foot"><span>{{ readOnly ? '历史聊天只读' : `${chat?.shellCount ?? 0} 个关联 Shell` }}</span><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="send-button" :disabled="readOnly || !chatId || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
       </div>
