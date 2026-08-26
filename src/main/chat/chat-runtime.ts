@@ -120,7 +120,14 @@ export class ChatRuntime {
           ? this.deps.runStructured(settings, {
             messages: context,
             availableHostnames: structuredContext?.availableHostnames ?? [],
-          }, controller.signal).then(result => { materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) })
+          }, controller.signal).then(result => { materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) }).catch(async error => {
+            if (controller.signal.aborted) throw error
+            await this.deps.stream(settings, context, delta => {
+              if (!isLiveOwner()) return
+              output += delta
+              publish({ kind: 'chat:delta', chatId: request.chatId, runId: request.runId, messageId, content: delta })
+            }, undefined, controller.signal)
+          })
           : Promise.resolve().then(() => this.deps.stream(settings, context, delta => {
           if (!isLiveOwner()) return
           output += delta
