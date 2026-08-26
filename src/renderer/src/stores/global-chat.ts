@@ -62,8 +62,9 @@ export function createGlobalChatStore(api: Api) {
       if (message) {
         message.content = event.content
         message.state = 'complete'
+        if (event.executionPlan) message.executionPlan = structuredClone(event.executionPlan)
       } else {
-        list.push({ id: event.messageId, role: 'assistant', content: event.content, state: 'complete' })
+        list.push({ id: event.messageId, role: 'assistant', content: event.content, state: 'complete', ...(event.executionPlan ? { executionPlan: structuredClone(event.executionPlan) } : {}) })
       }
       return
     }
