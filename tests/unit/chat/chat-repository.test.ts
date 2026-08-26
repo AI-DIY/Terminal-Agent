@@ -30,6 +30,46 @@ afterEach(async () => {
 })
 
 describe('ChatRepository', () => {
+  it('round-trips a version-2 text-and-image user message without sharing content references', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-image' })).value
+    const content = [
+      { type: 'text' as const, text: '看图' },
+      { type: 'image_url' as const, image_url: { url: 'data:image/png;base64,AA==' } },
+    ]
+    await repository.appendMessage({ requestId: 'append-image', chatId: chat.id, role: 'user', state: 'complete', content })
+    content[0].text = '被外部修改'
+    const loaded = await repository.get(chat.id)
+    expect(loaded.messages[0]?.content).toEqual([
+      { type: 'text', text: '看图' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
+    ])
+  })
+
+  it('persists execution plans and audits while excluding audits from retry source', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-plan' })).value
+    const plan = { id: 'EP-1', title: '检查', status: 'pending_review' as const, steps: [{ id: 'step-1', target: 'web-02', explanation: '查看状态', originalCommand: 'systemctl status api', sendState: 'pending' as const }] }
+    await repository.appendMessage({ requestId: 'assistant-plan', chatId: chat.id, role: 'assistant', state: 'complete', content: '{"version":1,"reply":"准备执行","plan":null}', executionPlan: plan })
+    await repository.appendMessage({ requestId: 'assistant-error', chatId: chat.id, role: 'assistant', state: 'error', content: '失败', retryable: true })
+    await repository.appendMessage({ requestId: 'audit-1', chatId: chat.id, role: 'user', state: 'complete', messageType: 'execution_audit', content: '【执行审计】计划 EP-1 已发送。' })
+    const loaded = await repository.get(chat.id)
+    expect(loaded.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ executionPlan: expect.objectContaining({ id: 'EP-1' }) }),
+      expect.objectContaining({ messageType: 'execution_audit' }),
+    ]))
+    await expect(repository.findRetryMessage(chat.id)).resolves.toBeUndefined()
+  })
+
+  it('removes stale execution plan fields when updating a message', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-update-plan' })).value
+    const plan = { id: 'EP-2', title: '检查', status: 'pending_review' as const, steps: [{ id: 'step-2', target: 'web-02', explanation: '查看状态', originalCommand: 'systemctl status api', sendState: 'pending' as const }] }
+    const appended = await repository.appendMessage({ requestId: 'append-plan', chatId: chat.id, role: 'assistant', state: 'complete', content: '{"version":1,"reply":"准备执行","plan":null}', executionPlan: plan })
+    const messageId = appended.value.messages.at(-1)!.id
+    await repository.updateMessage({ requestId: 'update-plan', chatId: chat.id, messageId, state: 'error', content: '失败' })
+    expect((await repository.get(chat.id)).messages.at(-1)).not.toHaveProperty('executionPlan')
+  })
   it('pins and unpins a task without changing its updatedAt', async () => {
     const repository = await createRepository()
     const created = await repository.create({ requestId: 'create-pin-task' })

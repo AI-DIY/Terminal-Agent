@@ -31,6 +31,7 @@ import {
   type ChatWorkspace,
 } from '../../shared/contracts'
 import { AtomicJsonStore, type AtomicJsonStoreOptions } from '../persistence/atomic-json-store'
+import type { ChatMessageContent } from '../../shared/chat-content'
 import {
   chatDocumentSchema,
   emptyChatDocument,
@@ -102,7 +103,7 @@ export class ChatRepository {
     return toWorkspace(await this.store.load(), parsed)
   }
 
-  async findRetryMessage(chatId: string, content?: string): Promise<string | undefined> {
+  async findRetryMessage(chatId: string, content?: ChatMessageContent): Promise<string | undefined> {
     const parsed = chatIdentifierSchema.parse(chatId)
     const document = await this.store.load()
     requireChat(document, parsed)
@@ -110,8 +111,9 @@ export class ChatRepository {
     const assistant = messages.at(-1)
     const user = messages.at(-2)
     if (assistant?.role !== 'assistant' || assistant.state !== 'error' || user?.role !== 'user') return undefined
+    if (user.messageType === 'execution_audit') return undefined
     if (assistant.retryable === false || assistant.content === '已取消。') return undefined
-    if (content !== undefined && user.content !== content) return undefined
+    if (content !== undefined && JSON.stringify(user.content) !== JSON.stringify(content)) return undefined
     return assistant.id
   }
 
@@ -134,7 +136,7 @@ export class ChatRepository {
           kind: 'updateMessage',
           chatId: chat.id,
           fingerprint: requestFingerprint('updateMessage', [
-            chat.id, message.id, interruptedStreamRecoveryContent, 'error',
+            chat.id, message.id, interruptedStreamRecoveryContent, 'error', null, null, null,
           ]),
           appliedAt,
           resultId: message.id,
@@ -250,11 +252,20 @@ export class ChatRepository {
 
   async appendMessage(request: ChatAppendMessageRequest): Promise<ChatMutation<ChatWorkspace>> {
     const parsed = chatAppendMessageRequestSchema.parse(request)
-    const fingerprint = requestFingerprint('appendMessage', [parsed.chatId, parsed.role, parsed.content, parsed.state, ...(parsed.retryable === undefined ? [] : [parsed.retryable])])
+    const fingerprint = requestFingerprint('appendMessage', [
+      parsed.chatId, parsed.role, parsed.content, parsed.state,
+      parsed.retryable ?? null, parsed.messageType ?? null, parsed.executionPlan ?? null,
+    ])
     return this.mutate(parsed.requestId, 'appendMessage', parsed.chatId, fingerprint, (document, timestamp) => {
       const chat = requireChat(document, parsed.chatId)
       const id = this.createId()
-      document.messages.push({ ...parsed, id, createdAt: timestamp })
+      document.messages.push({
+        ...parsed,
+        content: Array.isArray(parsed.content) ? structuredClone(parsed.content) : parsed.content,
+        ...(parsed.executionPlan ? { executionPlan: structuredClone(parsed.executionPlan) } : {}),
+        id,
+        createdAt: timestamp,
+      })
       if (parsed.role === 'user') markChatStarted(chat)
       chat.updatedAt = timestamp
       return { chatId: chat.id, resultId: id }
@@ -263,15 +274,22 @@ export class ChatRepository {
 
   async updateMessage(request: ChatUpdateMessageRequest): Promise<ChatMutation<ChatWorkspace>> {
     const parsed = chatUpdateMessageRequestSchema.parse(request)
-    const fingerprint = requestFingerprint('updateMessage', [parsed.chatId, parsed.messageId, parsed.content, parsed.state, ...(parsed.retryable === undefined ? [] : [parsed.retryable])])
+    const fingerprint = requestFingerprint('updateMessage', [
+      parsed.chatId, parsed.messageId, parsed.content, parsed.state,
+      parsed.retryable ?? null, parsed.messageType ?? null, parsed.executionPlan ?? null,
+    ])
     return this.mutate(parsed.requestId, 'updateMessage', parsed.chatId, fingerprint, (document, timestamp) => {
       const chat = requireChat(document, parsed.chatId)
       const message = document.messages.find(item => item.id === parsed.messageId && item.chatId === parsed.chatId)
       if (!message) throw new Error('Unknown chat message')
-      message.content = parsed.content
+      message.content = Array.isArray(parsed.content) ? structuredClone(parsed.content) : parsed.content
       message.state = parsed.state
       if (parsed.retryable === undefined) delete message.retryable
       else message.retryable = parsed.retryable
+      if (parsed.messageType === undefined) delete message.messageType
+      else message.messageType = parsed.messageType
+      if (parsed.executionPlan === undefined) delete message.executionPlan
+      else message.executionPlan = structuredClone(parsed.executionPlan)
       chat.updatedAt = timestamp
       return { chatId: chat.id, resultId: message.id }
     })
@@ -812,10 +830,12 @@ function toWorkspace(document: ChatDocument, chatId: string): ChatWorkspace {
       id: message.id,
       chatId: message.chatId,
       role: message.role,
-      content: message.content,
+      content: Array.isArray(message.content) ? structuredClone(message.content) : message.content,
       createdAt: message.createdAt,
       state: message.state,
       ...(message.retryable === undefined ? {} : { retryable: message.retryable }),
+      ...(message.messageType === undefined ? {} : { messageType: message.messageType }),
+      ...(message.executionPlan === undefined ? {} : { executionPlan: structuredClone(message.executionPlan) }),
     }))
   const shells: ChatShellAssociation[] = document.associations
     .filter(association => association.chatId === chatId)
