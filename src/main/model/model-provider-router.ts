@@ -1,6 +1,7 @@
 import type { ModelProvider, ModelRouting } from '../../shared/validation'
 import type { ChatMessage, ChatCompletionResponseFormat, Fetcher } from './chat-completions-client'
 import { ChatCompletionsClient, ModelConnectionError } from './chat-completions-client'
+import type { ChatMessageContent } from '../../shared/chat-content'
 
 export type ProviderModelSettings = {
   endpoint: string
@@ -118,10 +119,24 @@ export class ModelProviderRouter {
     return this.fetcher(settings.endpoint, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ model: settings.model, messages, stream }),
+      body: JSON.stringify({ model: settings.model, messages: (settings.provider ?? 'openai') === 'ollama' ? messages.map(toOllamaMessage) : messages, stream }),
       ...(signal ? { signal } : {}),
     })
   }
+}
+
+function toOllamaMessage(message: ChatMessage): { role: ChatMessage['role']; content: string; images?: string[] } {
+  if (typeof message.content === 'string') return { role: message.role, content: message.content }
+  const text: string[] = []
+  const images: string[] = []
+  for (const part of message.content) {
+    if (part.type === 'text') text.push(part.text)
+    else {
+      const match = /^data:image\/[^;]+;base64,(.+)$/i.exec(part.image_url.url)
+      if (match?.[1]) images.push(match[1])
+    }
+  }
+  return { role: message.role, content: text.join(''), ...(images.length ? { images } : {}) }
 }
 
 function consumeJsonLines(buffer: string, onDelta: (content: string) => void): string {

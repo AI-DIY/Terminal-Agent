@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { buildChatContext } from '../../../src/main/chat/chat-context-builder'
 
 describe('chat context builder', () => {
+  it('preserves multimodal user blocks and strips application-only audit fields', () => {
+    const context = buildChatContext({
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: '看图' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
+      ] }],
+    })
+    expect(context.at(-1)).toEqual({ role: 'user', content: [
+      { type: 'text', text: '看图' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
+    ] })
+  })
   it('keeps only recent messages while passing authorized metadata through unchanged', () => {
     const temporaryPath = `tmp:${['C:', 'synthetic', 'AppData', 'Local', 'Temp', 'access', 'profile.conf'].join('\\')}`
     const tokenLike = `sk-proj-${'A'.repeat(32)}`

@@ -1,8 +1,9 @@
 import type { ModelSettingsInput } from '../../shared/validation'
+import type { ChatMessageContent } from '../../shared/chat-content'
 
 export type ChatMessage = {
   role: 'system' | 'user' | 'assistant'
-  content: string
+  content: ChatMessageContent
 }
 
 export type Fetcher = typeof fetch

@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 import { ModelProviderRouter } from '../../../src/main/model/model-provider-router'
 
 describe('ModelProviderRouter', () => {
+  it('maps Data URL images to Ollama images without placing Base64 in text', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response('{"message":{"content":"ok"},"done":true}\n', { status: 200 }))
+    const router = new ModelProviderRouter(fetcher)
+    await router.stream({ provider: 'ollama', endpoint: 'http://127.0.0.1:11434/api/chat', model: 'qwen-vl', contextLimit: 8_000, apiKey: null }, [{
+      role: 'user', content: [
+        { type: 'text', text: '检查' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
+      ],
+    }], vi.fn())
+    const body = JSON.parse(fetcher.mock.calls[0]![1].body as string)
+    expect(body.messages[0]).toEqual({ role: 'user', content: '检查', images: ['AA=='] })
+  })
   it('adapts Ollama JSONL streaming into text deltas', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(
       '{"message":{"content":"你好"},"done":false}\n{"message":{"content":"世界"},"done":true}\n',

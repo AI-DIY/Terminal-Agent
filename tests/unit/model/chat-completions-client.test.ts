@@ -2,6 +2,21 @@ import { describe, expect, it, vi } from 'vitest'
 import { ChatCompletionsClient, ModelConnectionError } from '../../../src/main/model/chat-completions-client'
 
 describe('ChatCompletionsClient', () => {
+  it('keeps OpenAI-compatible image content blocks in outgoing requests', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response('data: [DONE]\n\n', { status: 200 }))
+    const client = new ChatCompletionsClient(fetcher)
+    await client.stream({ endpoint: 'https://example.test/v1/chat/completions', model: 'vision', apiKey: '', contextLimit: 8_000 }, [{
+      role: 'user', content: [
+        { type: 'text', text: '检查' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
+      ],
+    }], vi.fn())
+    const body = JSON.parse(fetcher.mock.calls[0]![1].body as string)
+    expect(body.messages[0].content).toEqual([
+      { type: 'text', text: '检查' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
+    ])
+  })
   it('verifies a standard non-streaming Chat Completions connection without JSON Schema extensions', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'pong' } }] }), { status: 200 }))
     const client = new ChatCompletionsClient(fetcher)
