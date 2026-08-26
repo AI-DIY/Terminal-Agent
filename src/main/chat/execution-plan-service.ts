@@ -1,4 +1,4 @@
-import type { AssistantPlanOutput, ChatExecutionPlan, ExecutionPlanStep, ChatPlanEditStepRequest, ChatPlanRemoveStepRequest, ChatPlanCancelRequest, ChatPlanExecuteRequest } from '../../shared/chat-plan'
+import type { AssistantPlanOutput, ChatExecutionPlan, ChatPlanEditStepRequest, ChatPlanRemoveStepRequest, ChatPlanCancelRequest, ChatPlanExecuteRequest } from '../../shared/chat-plan'
 
 type FenceMatcher = { match(command: string): { id: string; name: string } | null }
 type Sessions = { snapshot(): Array<{ id: string; hostname: string }>; write(sessionId: string, data: string): void | Promise<void> }

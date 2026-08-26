@@ -2,6 +2,7 @@ import { Annotation, END, START, StateGraph } from '@langchain/langgraph'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
 import { assistantPlanOutputSchema, parseAssistantPlanOutput } from '../../shared/chat-plan'
 import type { ChatMessage, ChatCompletionResponseFormat } from '../model/chat-completions-client'
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 export type StructuredChatRequest = {
   messages: ChatMessage[]

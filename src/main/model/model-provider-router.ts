@@ -1,7 +1,6 @@
 import type { ModelProvider, ModelRouting } from '../../shared/validation'
 import type { ChatMessage, ChatCompletionResponseFormat, Fetcher } from './chat-completions-client'
 import { ChatCompletionsClient, ModelConnectionError } from './chat-completions-client'
-import type { ChatMessageContent } from '../../shared/chat-content'
 
 export type ProviderModelSettings = {
   endpoint: string

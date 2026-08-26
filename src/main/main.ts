@@ -61,6 +61,7 @@ import { createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../share
 import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
 import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'
 import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { StructuredChatAgent } from './chat/structured-chat-agent'
 import { ExecutionPlanService } from './chat/execution-plan-service'
 
@@ -148,6 +149,7 @@ const chatRuntime = new ChatRuntime({
   materializePlan: plan => executionPlans.materialize(plan),
   stream: (settings, messages, onDelta, format, signal) => chatCompletions.stream(settings, messages, onDelta, format, signal),
 })
+;(chatRuntime as ChatRuntime & { planService?: ExecutionPlanService }).planService = executionPlans
 const executionGateway = new ExecutionGateway(
   sessionModes,
   confirmations,
@@ -271,7 +273,7 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
       pending: () => unregisterSessionObservation?.pending() ?? [],
     },
   )
-  unregisterChatHandlers = registerChatHandlers(chats, mainWindow.webContents, sessions, chatRuntime, executionPlans)
+  unregisterChatHandlers = registerChatHandlers(chats, mainWindow.webContents, sessions, chatRuntime)
   unregisterShellHistoryHandlers = registerShellHistoryHandlers(shellHistory, mainWindow.webContents)
   unregisterWorkbenchSettingsHandlers = registerWorkbenchSettingsHandlers(
     workbenchPreferences,

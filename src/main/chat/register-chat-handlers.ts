@@ -25,6 +25,7 @@ type ChatHandlerService = Pick<ChatService, 'list' | 'create' | 'get' | 'resolve
 type SessionLookup = Pick<SessionService, 'snapshot' | 'onClosed'>
 
 export function registerChatHandlers(service: ChatHandlerService, trustedSender: WebContents, sessions: SessionLookup, runtime?: ChatRuntime, plans?: ExecutionPlanService): () => void {
+  plans ??= (runtime as ChatRuntime & { planService?: ExecutionPlanService } | undefined)?.planService
   ipcMain.handle('chats:list', async event => {
     assertTrustedSender(event, trustedSender)
     await service.reconcileSessions(() => sessions.snapshot())

@@ -5,6 +5,7 @@ import type { ChatMessageContent } from '../../shared/chat-content'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
 import type { StructuredChatRequest } from './structured-chat-agent'
 import { estimateChatMessages } from './token-estimator'
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 export type ChatRuntimeRequest = { chatId: string; runId: string; content: ChatMessageContent; retry?: boolean }
 export type ChatRuntimeEvent =

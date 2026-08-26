@@ -2,6 +2,7 @@ import { reactive } from 'vue'
 import type { ChatRuntimeEvent } from '../../../shared/contracts'
 import type { ChatMessageContent, ChatImageUrlPart } from '../../../shared/chat-content'
 import type { ChatExecutionPlan } from '../../../shared/chat-plan'
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 type Api = {
   send(request: { chatId: string; runId: string; content: any; retry?: boolean }): Promise<void>

@@ -1,5 +1,6 @@
 import type { ModelSettingsInput } from '../../shared/validation'
 import type { ChatMessageContent } from '../../shared/chat-content'
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 export type ChatMessage = {
   role: 'system' | 'user' | 'assistant'
