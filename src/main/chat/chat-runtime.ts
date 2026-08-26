@@ -116,7 +116,7 @@ export class ChatRuntime {
       }
       const timeout = setTimeout(() => { timedOut = true; controller.abort() }, this.deps.timeoutMs ?? 120_000)
       try {
-        const providerStream = this.deps.runStructured
+        const providerStream = this.deps.runStructured && settings.provider !== 'ollama'
           ? this.deps.runStructured(settings, {
             messages: context,
             availableHostnames: structuredContext?.availableHostnames ?? [],
