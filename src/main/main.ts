@@ -61,6 +61,8 @@ import { createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../share
 import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
 import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'
 import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'
+import { StructuredChatAgent } from './chat/structured-chat-agent'
+import { ExecutionPlanService } from './chat/execution-plan-service'
 
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
@@ -97,6 +99,14 @@ const modelProfiles = new ModelProfileService(
 )
 const modelSettings = new ModelSettingsService(modelProfiles)
 const chatCompletions = new ModelProviderRouter()
+const executionPlans = new ExecutionPlanService(chats as any, sessions, regexRules)
+const structuredAgent = new StructuredChatAgent({
+  complete: async (messages, format, signal) => {
+    let output = ''
+    await chatCompletions.stream(await modelProfiles.resolveRoute({ hasImages: messages.some(message => Array.isArray(message.content)) }).then(profile => ({ ...profile, contextLimit: profile.contextLimit ?? 1_024 })), messages, delta => { output += delta }, format, signal)
+    return output
+  },
+})
 const agentScheduler = new AgentScheduler(new AgentModelRuntime(modelSettings, chatCompletions, undefined, modelProfiles))
 const approvedExecutionAudit = new ApprovedExecutionAudit()
 const chatRuntime = new ChatRuntime({
@@ -122,17 +132,20 @@ const chatRuntime = new ChatRuntime({
       const filtered = await hostMemorySettings.filterFacts(record)
       return { hostname: filtered.hostname, scope: 'host', values: filtered as unknown as Record<string, unknown> }
     }))
-    return buildChatContext({
+    const context = buildChatContext({
       messages: snapshot.chat.messages,
       shells: snapshot.chat.shells,
       facts: facts.filter((record): record is NonNullable<typeof record> => Boolean(record)),
       audit: approvedExecutionAudit.recent(snapshot.chat.shells.flatMap(shell => shell.sessionId ? [shell.sessionId] : [])),
     })
+    return { messages: context, hasImages: snapshot.chat.messages.some(message => Array.isArray(message.content)), availableHostnames: snapshot.chat.shells.filter(shell => shell.status === 'open').map(shell => shell.hostname) }
   },
-  resolveModel: async () => {
-    const profile = await modelProfiles.resolveRoute({ hasImages: false })
+  resolveModel: async ({ hasImages = false }: { hasImages?: boolean } = {}) => {
+    const profile = await modelProfiles.resolveRoute({ hasImages })
     return { ...profile, contextLimit: profile.contextLimit ?? 1_024 }
   },
+  runStructured: (settings, input, signal) => structuredAgent.run(input, signal),
+  materializePlan: plan => executionPlans.materialize(plan),
   stream: (settings, messages, onDelta, format, signal) => chatCompletions.stream(settings, messages, onDelta, format, signal),
 })
 const executionGateway = new ExecutionGateway(
@@ -258,7 +271,7 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
       pending: () => unregisterSessionObservation?.pending() ?? [],
     },
   )
-  unregisterChatHandlers = registerChatHandlers(chats, mainWindow.webContents, sessions, chatRuntime)
+  unregisterChatHandlers = registerChatHandlers(chats, mainWindow.webContents, sessions, chatRuntime, executionPlans)
   unregisterShellHistoryHandlers = registerShellHistoryHandlers(shellHistory, mainWindow.webContents)
   unregisterWorkbenchSettingsHandlers = registerWorkbenchSettingsHandlers(
     workbenchPreferences,

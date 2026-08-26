@@ -19,6 +19,7 @@ type RuntimeDeps = {
   getContext(chatId: string): Promise<ChatMessage[] | { messages: ChatMessage[]; hasImages: boolean; availableHostnames: string[] }>
   resolveModel(input?: { hasImages: boolean }): Promise<ProviderModelSettings>
   runStructured?(settings: ProviderModelSettings, input: StructuredChatRequest, signal: AbortSignal): Promise<AssistantPlanOutput>
+  materializePlan?(plan: NonNullable<AssistantPlanOutput['plan']>): import('../../shared/chat-plan').ChatExecutionPlan
   stream(settings: ProviderModelSettings, messages: ChatMessage[], onDelta: (content: string) => void, responseFormat?: ChatCompletionResponseFormat, signal?: AbortSignal): Promise<void>
   timeoutMs?: number
 }
@@ -66,6 +67,7 @@ export class ChatRuntime {
     const onAbort = () => { if (!timedOut) cancelled = true }
     controller.signal.addEventListener('abort', onAbort, { once: true })
     let output = ''
+    let materializedPlan: import('../../shared/chat-plan').ChatExecutionPlan | undefined
     let persistedMessageId: string | undefined
     let retryMessageId: string | undefined
     const pendingUpdates: Promise<unknown>[] = []
@@ -117,7 +119,7 @@ export class ChatRuntime {
           ? this.deps.runStructured(settings, {
             messages: context,
             availableHostnames: structuredContext?.availableHostnames ?? [],
-          }, controller.signal).then(result => { output = JSON.stringify(result) })
+          }, controller.signal).then(result => { materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) })
           : Promise.resolve().then(() => this.deps.stream(settings, context, delta => {
           if (!isLiveOwner()) return
           output += delta
@@ -151,8 +153,8 @@ export class ChatRuntime {
         await finalizeCancellationIfNeeded()
         return
       }
-      if (persistedMessageId && this.deps.updateMessage) await trackAssistantWrite(this.deps.updateMessage({ requestId: `${request.runId}:assistant:complete`, chatId: request.chatId, messageId: persistedMessageId, content: output, state: 'complete' }))
-      else await trackAssistantWrite(this.deps.appendMessage({ requestId: `${request.runId}:assistant`, chatId: request.chatId, role: 'assistant', content: output, state: 'complete' }))
+      if (persistedMessageId && this.deps.updateMessage) await trackAssistantWrite(this.deps.updateMessage({ requestId: `${request.runId}:assistant:complete`, chatId: request.chatId, messageId: persistedMessageId, content: output, state: 'complete', ...(materializedPlan ? { executionPlan: materializedPlan } : {}) }))
+      else await trackAssistantWrite(this.deps.appendMessage({ requestId: `${request.runId}:assistant`, chatId: request.chatId, role: 'assistant', content: output, state: 'complete', ...(materializedPlan ? { executionPlan: materializedPlan } : {}) }))
       if (!isLiveOwner()) {
         await finalizeCancellationIfNeeded()
         return
