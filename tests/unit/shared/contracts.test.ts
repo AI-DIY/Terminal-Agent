@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { terminalAgentNamespace } from '../../../src/preload/api'
-import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema, chatAppendMessageRequestSchema, chatAssociateShellRequestSchema, chatBindSessionRequestSchema, chatChangedEventSchema, chatCloseAssociationRequestSchema, chatCreateRequestSchema, chatListSnapshotSchema, chatPinRequestSchema, chatRemoveRequestSchema, chatSetModeRequestSchema, chatShellAssociationSchema, chatSummarySchema, chatTimestampSchema, chatUnpinRequestSchema, chatUpdateTitleRequestSchema } from '../../../src/shared/contracts'
+import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema, chatAppendMessageRequestSchema, chatAssociateShellRequestSchema, chatBindSessionRequestSchema, chatChangedEventSchema, chatCloseAssociationRequestSchema, chatCreateRequestSchema, chatListSnapshotSchema, chatMessageRecordSchema, chatPinRequestSchema, chatRemoveRequestSchema, chatRunRequestSchema, chatRuntimeEventSchema, chatSetModeRequestSchema, chatShellAssociationSchema, chatSummarySchema, chatTimestampSchema, chatUnpinRequestSchema, chatUpdateMessageRequestSchema, chatUpdateTitleRequestSchema } from '../../../src/shared/contracts'
 
 const { exposeInMainWorld } = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn()
@@ -339,6 +339,41 @@ describe('chatTimestampSchema', () => {
 })
 
 describe('chat contracts', () => {
+  const imageContent = [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }]
+  const executionPlan = {
+    id: 'EP-1', title: '检查服务', status: 'pending_review' as const,
+    steps: [{ id: 'step-1', target: 'web-02', explanation: '查看状态', originalCommand: 'systemctl status api', sendState: 'pending' as const }],
+  }
+
+  it('accepts image-only user runs while keeping text runs nonblank', () => {
+    const request = { chatId: 'chat-1', runId: '550e8400-e29b-41d4-a716-446655440000', content: imageContent }
+    expect(chatRunRequestSchema.parse(request)).toEqual(request)
+    expect(() => chatRunRequestSchema.parse({ ...request, content: '   ' })).toThrow()
+  })
+
+  it('allows multimodal content only for user messages', () => {
+    const base = { id: 'message-1', chatId: 'chat-1', createdAt: '2026-08-16T08:00:00.000Z', state: 'complete' as const }
+    expect(chatMessageRecordSchema.parse({ ...base, role: 'user', content: imageContent })).toMatchObject({ role: 'user' })
+    expect(() => chatMessageRecordSchema.parse({ ...base, role: 'assistant', content: imageContent })).toThrow()
+    expect(() => chatAppendMessageRequestSchema.parse({ requestId: 'message-1', chatId: 'chat-1', role: 'system', content: imageContent, state: 'complete' })).toThrow()
+    expect(() => chatUpdateMessageRequestSchema.parse({ requestId: 'message-1', chatId: 'chat-1', messageId: 'message-1', content: imageContent, state: 'complete' })).toThrow()
+  })
+
+  it('limits audit messages and execution plans to their completed record roles', () => {
+    const base = { id: 'message-1', chatId: 'chat-1', content: '内容', createdAt: '2026-08-16T08:00:00.000Z', state: 'complete' as const }
+    expect(chatMessageRecordSchema.parse({ ...base, role: 'user', messageType: 'execution_audit' })).toMatchObject({ messageType: 'execution_audit' })
+    expect(chatMessageRecordSchema.parse({ ...base, role: 'assistant', executionPlan })).toMatchObject({ executionPlan })
+    expect(() => chatMessageRecordSchema.parse({ ...base, role: 'assistant', messageType: 'execution_audit' })).toThrow()
+    expect(() => chatMessageRecordSchema.parse({ ...base, role: 'assistant', state: 'streaming', executionPlan })).toThrow()
+  })
+
+  it('allows only completed runtime events to carry a materialized execution plan', () => {
+    const base = { chatId: 'chat-1', runId: '550e8400-e29b-41d4-a716-446655440000', messageId: 'message-1' }
+    expect(chatRuntimeEventSchema.parse({ ...base, kind: 'chat:completed', content: '{"version":1,"reply":"完成","plan":null}', executionPlan })).toMatchObject({ executionPlan })
+    expect(() => chatRuntimeEventSchema.parse({ ...base, kind: 'chat:delta', content: 'x', executionPlan })).toThrow()
+    expect(() => chatRuntimeEventSchema.parse({ ...base, kind: 'chat:error', error: '失败', retryable: true, executionPlan })).toThrow()
+  })
+
   it('rejects unknown input fields and credentials in renderer chat DTOs', () => {
     expect(() => chatCreateRequestSchema.parse({ requestId: 'req-1', credential: 'secret' })).toThrow()
     expect(() => chatSetModeRequestSchema.parse({ requestId: 'req-1', chatId: 'chat-1', mode: 'copilot', reconnect: 'ssh' })).toThrow()

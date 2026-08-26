@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { chatMessageContentSchema } from './chat-content'
+import { chatExecutionPlanSchema } from './chat-plan'
 import { containsSensitiveHostMemoryData, normalizeSafeHostMemoryConnectionIp, normalizeSafeHostMemoryConnectionLabel, normalizeSafeHostMemoryIdentity } from './host-memory-safety'
 import { modelEndpointSchema, modelProfileIdSchema } from './validation'
 
@@ -98,15 +100,33 @@ export const chatSummarySchema = z.object({
 }).strict()
 export type ChatSummary = z.infer<typeof chatSummarySchema>
 
+const chatMessageRoleSchema = z.enum(['user', 'assistant', 'system'])
+const chatMessageStateSchema = z.enum(['complete', 'streaming', 'error'])
+const chatMessageInternalFields = {
+  messageType: z.literal('execution_audit').optional(),
+  executionPlan: chatExecutionPlanSchema.optional(),
+}
+
 export const chatMessageRecordSchema = z.object({
   id: chatIdentifierSchema,
   chatId: chatIdentifierSchema,
-  role: z.enum(['user', 'assistant', 'system']),
-  content: z.string().max(1_000_000),
+  role: chatMessageRoleSchema,
+  content: chatMessageContentSchema,
   createdAt: chatTimestampSchema,
-  state: z.enum(['complete', 'streaming', 'error']),
+  state: chatMessageStateSchema,
   retryable: z.boolean().optional(),
-}).strict()
+  ...chatMessageInternalFields,
+}).strict().superRefine((message, context) => {
+  if (Array.isArray(message.content) && message.role !== 'user') {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['content'], message: 'Only user messages may contain multimodal content' })
+  }
+  if (message.messageType === 'execution_audit' && (message.role !== 'user' || message.state !== 'complete' || Array.isArray(message.content))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['messageType'], message: 'Execution audits must be complete user text messages' })
+  }
+  if (message.executionPlan && (message.role !== 'assistant' || message.state !== 'complete' || Array.isArray(message.content))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['executionPlan'], message: 'Execution plans must be complete assistant text messages' })
+  }
+})
 export type ChatMessageRecord = z.infer<typeof chatMessageRecordSchema>
 
 export const chatShellAssociationSchema = z.object({
@@ -211,14 +231,14 @@ export type ChatSessionResolution = z.infer<typeof chatSessionResolutionSchema>
 export const chatRunRequestSchema = z.object({
   chatId: chatIdentifierSchema,
   runId: z.string().uuid(),
-  content: z.string().trim().min(1).max(100_000),
+  content: chatMessageContentSchema.refine(content => typeof content !== 'string' || content.trim().length > 0, 'Text content cannot be blank'),
   retry: z.boolean().optional(),
 }).strict()
 export type ChatRunRequest = z.infer<typeof chatRunRequestSchema>
 
 export const chatRuntimeEventSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('chat:delta'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, content: z.string().max(100_000) }).strict(),
-  z.object({ kind: z.literal('chat:completed'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, content: z.string().max(1_000_000) }).strict(),
+  z.object({ kind: z.literal('chat:completed'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, content: z.string().max(1_000_000), executionPlan: chatExecutionPlanSchema.optional() }).strict(),
   z.object({ kind: z.literal('chat:error'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, error: z.string().max(4_000), retryable: z.boolean() }).strict(),
 ])
 export type ChatRuntimeEvent = z.infer<typeof chatRuntimeEventSchema>
@@ -226,21 +246,43 @@ export type ChatRuntimeEvent = z.infer<typeof chatRuntimeEventSchema>
 export const chatAppendMessageRequestSchema = z.object({
   requestId: chatRequestIdSchema,
   chatId: chatIdentifierSchema,
-  role: z.enum(['user', 'assistant', 'system']),
-  content: z.string().max(1_000_000),
-  state: z.enum(['complete', 'streaming', 'error']),
+  role: chatMessageRoleSchema,
+  content: chatMessageContentSchema,
+  state: chatMessageStateSchema,
   retryable: z.boolean().optional(),
-}).strict()
+  ...chatMessageInternalFields,
+}).strict().superRefine((message, context) => {
+  if (Array.isArray(message.content) && message.role !== 'user') {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['content'], message: 'Only user messages may contain multimodal content' })
+  }
+  if (message.messageType === 'execution_audit' && (message.role !== 'user' || message.state !== 'complete' || Array.isArray(message.content))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['messageType'], message: 'Execution audits must be complete user text messages' })
+  }
+  if (message.executionPlan && (message.role !== 'assistant' || message.state !== 'complete' || Array.isArray(message.content))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['executionPlan'], message: 'Execution plans must be complete assistant text messages' })
+  }
+})
 export type ChatAppendMessageRequest = z.infer<typeof chatAppendMessageRequestSchema>
 
 export const chatUpdateMessageRequestSchema = z.object({
   requestId: chatRequestIdSchema,
   chatId: chatIdentifierSchema,
   messageId: chatIdentifierSchema,
-  content: z.string().max(1_000_000),
-  state: z.enum(['complete', 'streaming', 'error']),
+  content: chatMessageContentSchema,
+  state: chatMessageStateSchema,
   retryable: z.boolean().optional(),
-}).strict()
+  ...chatMessageInternalFields,
+}).strict().superRefine((message, context) => {
+  if (Array.isArray(message.content)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['content'], message: 'Message updates cannot introduce multimodal content' })
+  }
+  if (message.messageType === 'execution_audit' && message.state !== 'complete') {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['messageType'], message: 'Execution audits must be complete' })
+  }
+  if (message.executionPlan && message.state !== 'complete') {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['executionPlan'], message: 'Execution plans must be complete' })
+  }
+})
 export type ChatUpdateMessageRequest = z.infer<typeof chatUpdateMessageRequestSchema>
 
 export const chatUpdateTitleRequestSchema = z.object({
