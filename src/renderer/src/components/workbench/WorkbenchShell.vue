@@ -96,7 +96,7 @@ onBeforeUnmount(widthSaver.flush)
       <section class="shell-region">
         <slot name="shell" />
       </section>
-      <div class="separator" role="separator" aria-label="调整 AI工作区宽度" aria-orientation="vertical" aria-valuemin="340" aria-valuemax="520" :aria-valuenow="layout.state.rightWidth" tabindex="0" @pointerdown="startResize('right', $event)" @keydown="resizeWithKeyboard('right', $event)" />
+      <div class="separator" role="separator" aria-label="调整 AI工作区宽度" aria-orientation="vertical" aria-valuemin="340" aria-valuemax="900" :aria-valuenow="layout.state.rightWidth" tabindex="0" @pointerdown="startResize('right', $event)" @keydown="resizeWithKeyboard('right', $event)" />
       <div class="side-region right-region">
         <div v-show="!layout.state.rightCollapsed" class="side-content"><slot name="agent" :collapse="() => toggleSidebar('right')" /></div>
         <button v-show="layout.state.rightCollapsed" type="button" class="restore-button" aria-label="展开 AI工作区" title="展开 AI工作区" @click="toggleSidebar('right')"><PanelRightOpen :size="16" aria-hidden="true" /><span>AI工作区</span></button>
