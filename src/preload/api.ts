@@ -44,6 +44,7 @@ import type {
 import { modelProfileIdSchema, rendererModelProfileInputSchema, rendererModelSettingsInputSchema, type ModelProfileKind, type ModelRouting, type RendererModelProfileInput, type RendererModelSettingsInput } from '../shared/validation'
 import type { RegexFenceRule } from '../main/agent/regex-fence-service'
 import type { DirectSessionSummary } from '../main/ssh/direct-session-repository'
+import { chatPlanEditStepRequestSchema, chatPlanRemoveStepRequestSchema, chatPlanCancelRequestSchema, chatPlanExecuteRequestSchema, type ChatPlanEditStepRequest, type ChatPlanRemoveStepRequest, type ChatPlanCancelRequest, type ChatPlanExecuteRequest } from '../shared/chat-plan'
 
 export const terminalAgentNamespace = 'terminalAgent' as const
 
@@ -66,6 +67,12 @@ export type TerminalAgentApi = {
     send(request: ChatRunRequest): Promise<void>
     cancel(chatId: string): Promise<void>
     onEvent(listener: (event: ChatRuntimeEvent) => void): () => void
+    plans: {
+      editStep(request: ChatPlanEditStepRequest): Promise<ChatWorkspaceSnapshot>
+      removeStep(request: ChatPlanRemoveStepRequest): Promise<ChatWorkspaceSnapshot>
+      cancel(request: ChatPlanCancelRequest): Promise<ChatWorkspaceSnapshot>
+      execute(request: ChatPlanExecuteRequest): Promise<ChatWorkspaceSnapshot>
+    }
   }
   diagnostics: {
     openRendererDevTools(): Promise<void>
@@ -180,6 +187,12 @@ export function createTerminalAgentApi(ipcRenderer: {
         ipcRenderer.on('chat:event', handler)
         return () => ipcRenderer.removeListener('chat:event', handler)
       },
+      plans: Object.freeze({
+        editStep: (request: ChatPlanEditStepRequest) => ipcRenderer.invoke('chat:plan:edit-step', chatPlanEditStepRequestSchema.parse(request)) as Promise<ChatWorkspaceSnapshot>,
+        removeStep: (request: ChatPlanRemoveStepRequest) => ipcRenderer.invoke('chat:plan:remove-step', chatPlanRemoveStepRequestSchema.parse(request)) as Promise<ChatWorkspaceSnapshot>,
+        cancel: (request: ChatPlanCancelRequest) => ipcRenderer.invoke('chat:plan:cancel', chatPlanCancelRequestSchema.parse(request)) as Promise<ChatWorkspaceSnapshot>,
+        execute: (request: ChatPlanExecuteRequest) => ipcRenderer.invoke('chat:plan:execute', chatPlanExecuteRequestSchema.parse(request)) as Promise<ChatWorkspaceSnapshot>,
+      }),
     }),
     diagnostics: Object.freeze({
       openRendererDevTools: async () => { await ipcRenderer.invoke('diagnostics:open-renderer-devtools') },

@@ -1,20 +1,24 @@
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatCompletionResponseFormat } from '../model/chat-completions-client'
 import type { ProviderModelSettings } from '../model/model-provider-router'
+import type { ChatMessageContent } from '../../shared/chat-content'
+import type { AssistantPlanOutput } from '../../shared/chat-plan'
+import type { StructuredChatRequest } from './structured-chat-agent'
 import { estimateChatMessages } from './token-estimator'
 
-export type ChatRuntimeRequest = { chatId: string; runId: string; content: string; retry?: boolean }
+export type ChatRuntimeRequest = { chatId: string; runId: string; content: ChatMessageContent; retry?: boolean }
 export type ChatRuntimeEvent =
   | { kind: 'chat:delta'; chatId: string; runId: string; messageId: string; content: string }
   | { kind: 'chat:completed'; chatId: string; runId: string; messageId: string; content: string }
   | { kind: 'chat:error'; chatId: string; runId: string; messageId: string; error: string; retryable: boolean }
 
 type RuntimeDeps = {
-  appendMessage(request: { requestId: string; chatId: string; role: 'user' | 'assistant'; content: string; state: 'complete' | 'streaming' | 'error'; retryable?: boolean }): Promise<{ messageId?: string } | unknown>
-  updateMessage?(request: { requestId: string; chatId: string; messageId: string; content: string; state: 'complete' | 'streaming' | 'error'; retryable?: boolean }): Promise<unknown>
-  getRetryMessageId?(chatId: string, content: string): Promise<string | undefined>
-  getContext(chatId: string): Promise<ChatMessage[]>
-  resolveModel(): Promise<ProviderModelSettings>
+  appendMessage(request: any): Promise<{ messageId?: string } | unknown>
+  updateMessage?(request: any): Promise<unknown>
+  getRetryMessageId?(chatId: string, content: any): Promise<string | undefined>
+  getContext(chatId: string): Promise<ChatMessage[] | { messages: ChatMessage[]; hasImages: boolean; availableHostnames: string[] }>
+  resolveModel(input?: { hasImages: boolean }): Promise<ProviderModelSettings>
+  runStructured?(settings: ProviderModelSettings, input: StructuredChatRequest, signal: AbortSignal): Promise<AssistantPlanOutput>
   stream(settings: ProviderModelSettings, messages: ChatMessage[], onDelta: (content: string) => void, responseFormat?: ChatCompletionResponseFormat, signal?: AbortSignal): Promise<void>
   timeoutMs?: number
 }
@@ -78,12 +82,10 @@ export class ChatRuntime {
         await finalizeCancellationIfNeeded()
         return
       }
-      const settings = await this.deps.resolveModel()
-      if (!isLiveOwner()) {
-        await finalizeCancellationIfNeeded()
-        return
-      }
-      const context = await this.deps.getContext(request.chatId)
+      const contextResult = await this.deps.getContext(request.chatId)
+      const structuredContext = Array.isArray(contextResult) ? null : contextResult
+      const context = Array.isArray(contextResult) ? contextResult : contextResult.messages
+      const settings = await this.deps.resolveModel({ hasImages: structuredContext?.hasImages ?? false })
       if (!isLiveOwner()) {
         await finalizeCancellationIfNeeded()
         return
@@ -111,7 +113,12 @@ export class ChatRuntime {
       }
       const timeout = setTimeout(() => { timedOut = true; controller.abort() }, this.deps.timeoutMs ?? 120_000)
       try {
-        const providerStream = Promise.resolve().then(() => this.deps.stream(settings, context, delta => {
+        const providerStream = this.deps.runStructured
+          ? this.deps.runStructured(settings, {
+            messages: context,
+            availableHostnames: structuredContext?.availableHostnames ?? [],
+          }, controller.signal).then(result => { output = JSON.stringify(result) })
+          : Promise.resolve().then(() => this.deps.stream(settings, context, delta => {
           if (!isLiveOwner()) return
           output += delta
           if (persistedMessageId && this.deps.updateMessage) {
@@ -119,7 +126,7 @@ export class ChatRuntime {
             pendingUpdates.push(trackAssistantWrite(Promise.resolve().then(() => isLiveOwner() ? this.deps.updateMessage!(update) : undefined)))
           }
           publish({ kind: 'chat:delta', chatId: request.chatId, runId: request.runId, messageId, content: delta })
-        }, undefined, controller.signal))
+          }, undefined, controller.signal))
         await raceProviderStreamWithAbort(providerStream, controller.signal)
       } finally { clearTimeout(timeout) }
       if (!isOwner()) {

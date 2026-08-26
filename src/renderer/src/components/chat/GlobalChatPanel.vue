@@ -3,6 +3,7 @@ import { Bot, Circle, PanelRightClose, RefreshCw, Send, Square, UserRound } from
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatWorkspace } from '../../../../shared/contracts'
 import { createGlobalChatStore } from '../../stores/global-chat'
+import { chatContentText } from '../../../../shared/chat-content'
 
 const props = defineProps<{ chat: ChatWorkspace | null; readOnly?: boolean; canUpgrade?: boolean }>()
 const emit = defineEmits<{ upgrade: []; collapse: [] }>()
@@ -17,7 +18,7 @@ const draft = computed(() => chatId.value ? store.draft(chatId.value) : '')
 const running = computed(() => chatId.value ? Boolean(store.state.runs[chatId.value]) : false)
 const retryable = computed(() => chatId.value ? store.canRetry(chatId.value) : false)
 const mode = computed(() => props.chat?.mode ?? 'copilot')
-const contextUsed = computed(() => messages.value.reduce((total, message) => total + Math.ceil(message.content.length / 4) + 4, 0))
+const contextUsed = computed(() => messages.value.reduce((total, message) => total + Math.ceil(chatContentText(message.content).length / 4) + 4, 0))
 const contextPercent = computed(() => Math.min(100, Math.round((contextUsed.value / modelContextLimit.value) * 100)))
 function updateDraft(event: Event): void { if (chatId.value) store.setDraft(chatId.value, (event.target as HTMLTextAreaElement).value) }
 function send(): void { if (chatId.value) void store.send(chatId.value, draft.value) }

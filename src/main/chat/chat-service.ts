@@ -29,6 +29,7 @@ import {
   type ChatWorkspaceSnapshot,
 } from '../../shared/contracts'
 import type { ConnectedSession } from '../ssh/session-service'
+import type { ChatMessageContent } from '../../shared/chat-content'
 import { sanitizeShellHistoryDisplay } from '../shell-history/shell-history-contracts'
 import { createHash, randomUUID } from 'node:crypto'
 import type { ChatMutation, ChatRepository, ChatTransferMutation } from './chat-repository'
@@ -63,7 +64,7 @@ export class ChatService {
     }
   }
 
-  async findRetryMessage(chatId: string, content?: string): Promise<string | undefined> {
+  async findRetryMessage(chatId: string, content?: ChatMessageContent): Promise<string | undefined> {
     await this.waitForMutations()
     return this.repository.findRetryMessage(chatId, content)
   }

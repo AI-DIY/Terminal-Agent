@@ -3,7 +3,7 @@ import type { ChatMessageContent } from '../../shared/chat-content'
 
 export type ChatMessage = {
   role: 'system' | 'user' | 'assistant'
-  content: ChatMessageContent
+  content: ChatMessageContent | any
 }
 
 export type Fetcher = typeof fetch

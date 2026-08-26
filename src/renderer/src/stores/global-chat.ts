@@ -2,14 +2,14 @@ import { reactive } from 'vue'
 import type { ChatRuntimeEvent } from '../../../shared/contracts'
 
 type Api = {
-  send(request: { chatId: string; runId: string; content: string; retry?: boolean }): Promise<void>
+  send(request: { chatId: string; runId: string; content: any; retry?: boolean }): Promise<void>
   cancel(chatId: string): Promise<void>
   onEvent(listener: (event: ChatRuntimeEvent) => void): () => void
 }
 type Message = {
   id: string
   role: 'user' | 'assistant'
-  content: string
+  content: any
   state: 'streaming' | 'complete' | 'error'
   retryable?: boolean
 }
@@ -26,7 +26,7 @@ export function createGlobalChatStore(api: Api) {
     readOnly: {} as Record<string, boolean>,
     activeMessageIds: {} as Record<string, string | null>,
   })
-  const lastUserMessage = new Map<string, string>()
+  const lastUserMessage = new Map<string, any>()
   const cancelledRuns = new Map<string, string>()
 
   function apply(event: ChatRuntimeEvent): void {
@@ -87,7 +87,7 @@ export function createGlobalChatStore(api: Api) {
     hydrate(chatId: string, messages: readonly {
       id: string
       role: 'user' | 'assistant' | 'system'
-      content: string
+      content: any
       state: 'complete' | 'streaming' | 'error'
       retryable?: boolean
     }[], readOnly = false): void {
@@ -115,8 +115,8 @@ export function createGlobalChatStore(api: Api) {
       state.activeMessageIds[chatId] = null
       state.readOnly[chatId] = readOnly
     },
-    async send(chatId: string, content: string): Promise<void> {
-      const value = content.trim()
+    async send(chatId: string, content: any): Promise<void> {
+      const value = typeof content === 'string' ? content.trim() : content
       if (!value || state.readOnly[chatId]) return
       const runId = crypto.randomUUID()
       cancelledRuns.delete(chatId)
@@ -182,10 +182,10 @@ export function createGlobalChatStore(api: Api) {
 
 function retryableHydratedError(messages: readonly {
   role: 'user' | 'assistant' | 'system'
-  content: string
+  content: any
   state: 'streaming' | 'complete' | 'error'
   retryable?: boolean
-}[]): { user: { content: string }; assistant: { content: string } } | undefined {
+}[]): { user: { content: any }; assistant: { content: any } } | undefined {
   const assistant = messages.at(-1)
   const user = messages.at(-2)
   if (assistant?.role !== 'assistant' || assistant.state !== 'error' || assistant.retryable === false || assistant.content === terminalCancellationContent || user?.role !== 'user') return undefined
@@ -194,7 +194,7 @@ function retryableHydratedError(messages: readonly {
 
 function terminalHydratedError(messages: readonly {
   role: 'user' | 'assistant' | 'system'
-  content: string
+  content: any
   state: 'streaming' | 'complete' | 'error'
   retryable?: boolean
 }[]): { content: string } | undefined {

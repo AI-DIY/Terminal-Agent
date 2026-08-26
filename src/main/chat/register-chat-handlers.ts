@@ -16,13 +16,15 @@ import {
 import type { ChatService } from './chat-service'
 import type { ConnectedSession, SessionService } from '../ssh/session-service'
 import type { ChatRuntime } from './chat-runtime'
+import { chatPlanEditStepRequestSchema, chatPlanRemoveStepRequestSchema, chatPlanCancelRequestSchema, chatPlanExecuteRequestSchema } from '../../shared/chat-plan'
+import type { ExecutionPlanService } from './execution-plan-service'
 
 const channels = ['chats:list', 'chats:create', 'chats:get', 'chats:resolve-session', 'chats:set-mode', 'chats:update-title', 'chats:pin', 'chats:unpin', 'chats:remove', 'chats:bind-session', 'chats:transfer-sessions'] as const
 
 type ChatHandlerService = Pick<ChatService, 'list' | 'create' | 'get' | 'resolveSession' | 'setMode' | 'updateTitle' | 'pin' | 'unpin' | 'remove' | 'associateSession' | 'transferSessions' | 'closeSession' | 'reconcileSessions' | 'onChanged'>
 type SessionLookup = Pick<SessionService, 'snapshot' | 'onClosed'>
 
-export function registerChatHandlers(service: ChatHandlerService, trustedSender: WebContents, sessions: SessionLookup, runtime?: ChatRuntime): () => void {
+export function registerChatHandlers(service: ChatHandlerService, trustedSender: WebContents, sessions: SessionLookup, runtime?: ChatRuntime, plans?: ExecutionPlanService): () => void {
   ipcMain.handle('chats:list', async event => {
     assertTrustedSender(event, trustedSender)
     await service.reconcileSessions(() => sessions.snapshot())
@@ -101,6 +103,12 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
       await runtime.cancel(chatIdentifierSchema.parse(chatId))
     })
   }
+  if (plans) {
+    ipcMain.handle('chat:plan:edit-step', (event, request: unknown) => { assertTrustedSender(event, trustedSender); return plans.editStep(chatPlanEditStepRequestSchema.parse(request)) })
+    ipcMain.handle('chat:plan:remove-step', (event, request: unknown) => { assertTrustedSender(event, trustedSender); return plans.removeStep(chatPlanRemoveStepRequestSchema.parse(request)) })
+    ipcMain.handle('chat:plan:cancel', (event, request: unknown) => { assertTrustedSender(event, trustedSender); return plans.cancel(chatPlanCancelRequestSchema.parse(request)) })
+    ipcMain.handle('chat:plan:execute', (event, request: unknown) => { assertTrustedSender(event, trustedSender); return plans.execute(chatPlanExecuteRequestSchema.parse(request)) })
+  }
 
   const unsubscribeChanged = service.onChanged(event => trustedSender.send('chats:changed', event))
   const unsubscribeClosed = sessions.onClosed(event => {
@@ -116,6 +124,7 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
     unsubscribeClosed()
     for (const channel of channels) ipcMain.removeHandler(channel)
     if (runtime) for (const channel of ['chat:send', 'chat:cancel'] as const) ipcMain.removeHandler(channel)
+    if (plans) for (const channel of ['chat:plan:edit-step', 'chat:plan:remove-step', 'chat:plan:cancel', 'chat:plan:execute'] as const) ipcMain.removeHandler(channel)
   }
 }
 
