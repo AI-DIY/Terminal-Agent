@@ -108,6 +108,22 @@ describe('chat workspaces store', () => {
     expect(attached).toEqual(['captured-task'])
   })
 
+  it('invokes the registered opened-event handler and binds the captured task after selection changes', async () => {
+    const { createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const tracker = createWorkbenchSessionOwnershipTracker<{ id: string; chatId?: string }>()
+    const operation = tracker.begin('captured-task')
+    let selected = 'captured-task'
+    const attached: string[] = []
+    const handler = createWorkbenchOpenedSessionHandler({ tracker, currentChatId: () => selected, attach: async (_session, target) => { attached.push(target!) } })
+    const session = { id: 'session-runtime' }
+    const pending = handler(session)
+    selected = 'other-task'
+    tracker.resolve(operation, session)
+    await pending
+    await handler(session)
+    expect(attached).toEqual(['captured-task'])
+  })
+
   it('targets the selected history task when opening a new Shell', async () => {
     const { workbenchSessionAttachmentTarget, workbenchReconnectAttachmentTarget, workbenchOpenedAttachmentTarget } = await import('../../../src/renderer/src/stores/chat-workspaces')
 
@@ -1347,7 +1363,7 @@ describe('durable chat workbench components', () => {
     expect(attachSession).toContain('(activate || !chatStore.state.selectedId) && isCurrent()')
     expect(openedHandler).toContain('const visibleLiveChatId = isLiveChat.value ? chatStore.state.selectedId : null')
     expect(openedHandler).toContain('chatStore.state.selectedId === capturedTargetChatId')
-    expect(openedHandler).toContain('runWorkbenchOpenedSessionEvent({ tracker: sessionOwnership')
+    expect(openedHandler).toContain('handleOpenedSession(session)')
   })
 
   it('captures direct and bastion attachment targets before asynchronous open completes', () => {

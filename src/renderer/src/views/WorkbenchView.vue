@@ -21,7 +21,7 @@ import { reconcileVisiblePanes, selectVisiblePane } from '../stores/visible-pane
 import { getLayoutPreferencesStore, shellGridStyle } from '../stores/layout-preferences'
 import { createShellHistoryStore, filterHistoryByHosts, latestHistoryByHost, readOnlyHistoryTerminal, reconcileHistoryHostSelection, toggleHistoryHostSelection } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
-import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchOpenedSessionEvent, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
+import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 
 const emit = defineEmits<{ showSettings: [] }>()
 const store = createSessionsStore()
@@ -89,6 +89,7 @@ let bastionHostRequestId = 0
 const workbenchOperations = createWorkbenchOperationGate()
 let connectionFocusOrigin: HTMLElement | null = null
 const sessionOwnership = createWorkbenchSessionOwnershipTracker<{ id: string }>()
+let handleOpenedSession: (session: { id: string; chatId?: string }) => Promise<boolean>
 const connectionModal = ref<HTMLElement | null>(null)
 const shellCanvas = ref<{ openHistoryMenu(historyId: string): void } | null>(null)
 
@@ -699,6 +700,7 @@ watch(
 )
 
 onMounted(() => {
+  handleOpenedSession = createWorkbenchOpenedSessionHandler({ tracker: sessionOwnership, currentChatId: () => isLiveChat.value ? chatStore.state.selectedId : null, attach: (session, target) => attachSession(session as Omit<SessionView, 'buffer'>, true, () => true, target ?? undefined) })
   stopShellHistoryEligibilityRefresh = shellHistory.startEligibilityRefresh({
     setInterval: (callback, delay) => window.setInterval(callback, delay),
     clearInterval: handle => window.clearInterval(handle),
@@ -720,7 +722,7 @@ onMounted(() => {
     const isCurrent = () => capturedTargetChatId !== null
       ? chatStore.state.selectedId === capturedTargetChatId
       : chatStore.state.liveChatId === null
-    void runWorkbenchOpenedSessionEvent({ tracker: sessionOwnership, session, currentChatId: capturedTargetChatId, attach: (opened, target) => attachSession(opened as Omit<SessionView, 'buffer'>, shouldPromoteFallback, isCurrent, target ?? undefined) }).catch(error => {
+    void handleOpenedSession(session).catch(error => {
       if (isCurrent()) connectionError.value = error instanceof Error ? error.message : '无法关联终端会话。'
     })
   })

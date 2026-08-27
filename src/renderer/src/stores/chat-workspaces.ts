@@ -94,6 +94,14 @@ export async function runWorkbenchOpenedSessionEvent<TSession extends { id: stri
   return true
 }
 
+export function createWorkbenchOpenedSessionHandler<TSession extends { id: string; chatId?: string }>(options: {
+  tracker: ReturnType<typeof createWorkbenchSessionOwnershipTracker<TSession>>
+  currentChatId(): string | null
+  attach(session: TSession, targetChatId: string | null): Promise<void>
+}): (session: TSession) => Promise<boolean> {
+  return session => runWorkbenchOpenedSessionEvent({ tracker: options.tracker, session, currentChatId: options.currentChatId(), attach: options.attach })
+}
+
 export async function initializeWorkbenchTask<TResult>(options: {
   load(): Promise<void>
   restore(): Promise<TResult>
