@@ -136,9 +136,11 @@ describe('global chat store', () => {
     transport.cancel.mockRejectedValueOnce(new Error('disk full'))
     const store = createGlobalChatStore(transport)
     store.beginRun('c1', 'r1')
+    store.apply({ kind: 'chat:progress', chatId: 'c1', runId: 'r1', stage: 'thinking' })
 
     await store.cancel('c1')
     expect(store.state.runs.c1).toBeNull()
+    expect(store.state.progress.c1).toBeNull()
     expect(store.state.errors.c1).toBe('取消状态未能保存，请重新加载后确认。')
     expect(store.canRetry('c1')).toBe(false)
   })
@@ -175,8 +177,23 @@ describe('global chat store', () => {
   it('composes text-only content while retaining old image records for hydration', () => {
     const store = createGlobalChatStore(api())
     store.setDraft('c1', '  hello  ')
+    store.setPendingImages('c1', [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }])
     expect(store.composeUserContent('c1')).toBe('hello')
     store.hydrate('c1', [{ id: 'old', role: 'user', content: [{ type: 'text', text: 'old' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }], state: 'complete' }])
     expect(Array.isArray(store.state.messages.c1?.[0]?.content)).toBe(true)
+  })
+
+  it('does not send image parts through direct send or retry APIs', async () => {
+    const transport = api()
+    const store = createGlobalChatStore(transport)
+    await store.send('c1', [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }])
+    expect(transport.send).not.toHaveBeenCalled()
+
+    store.hydrate('c2', [
+      { id: 'user', role: 'user', content: [{ type: 'text', text: 'old' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }], state: 'complete' },
+      { id: 'assistant', role: 'assistant', content: 'failed', state: 'error', retryable: true },
+    ])
+    await store.retry('c2')
+    expect(transport.send).not.toHaveBeenCalled()
   })
 })

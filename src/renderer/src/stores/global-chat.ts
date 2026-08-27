@@ -108,10 +108,8 @@ export function createGlobalChatStore(api: Api) {
     setPendingImages(chatId: string, images: ChatImageUrlPart[]): void { state.pendingImages[chatId] = structuredClone(images) },
     removePendingImage(chatId: string, index: number): void { state.pendingImages[chatId] = (state.pendingImages[chatId] ?? []).filter((_, i) => i !== index) },
     composeUserContent(chatId: string): ChatMessageContent | null {
-      const text = (state.drafts[chatId] ?? '').trim(); const images = state.pendingImages[chatId] ?? []
-      if (!text && !images.length) return null
-      if (!images.length) return text
-      return [...(text ? [{ type: 'text' as const, text }] : []), ...structuredClone(images)]
+      const text = (state.drafts[chatId] ?? '').trim()
+      return text || null
     },
     hydrate(chatId: string, messages: readonly {
       id: string
@@ -150,7 +148,8 @@ export function createGlobalChatStore(api: Api) {
       state.readOnly[chatId] = readOnly
     },
     async send(chatId: string, content: any): Promise<void> {
-      const value = typeof content === 'string' ? content.trim() : content
+      if (typeof content !== 'string') return
+      const value = content.trim()
       if (!value || state.readOnly[chatId]) return
       const runId = crypto.randomUUID()
       cancelledRuns.delete(chatId)
@@ -167,7 +166,7 @@ export function createGlobalChatStore(api: Api) {
     async retry(chatId: string): Promise<void> {
       if (state.readOnly[chatId]) return
       const value = lastUserMessage.get(chatId)
-      if (!value || !state.errors[chatId] || !state.retryableErrors[chatId]) return
+      if (typeof value !== 'string' || !value || !state.errors[chatId] || !state.retryableErrors[chatId]) return
       const runId = crypto.randomUUID()
       cancelledRuns.delete(chatId)
       state.runs[chatId] = runId
@@ -191,6 +190,7 @@ export function createGlobalChatStore(api: Api) {
         if (cancelledRuns.get(chatId) === runId) cancelledRuns.delete(chatId)
         if (state.runs[chatId] === runId) {
           state.runs[chatId] = null
+          state.progress[chatId] = null
           state.activeMessageIds[chatId] = null
         }
         lastUserMessage.delete(chatId)
