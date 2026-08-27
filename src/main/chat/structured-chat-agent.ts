@@ -2,6 +2,7 @@ import { Annotation, END, START, StateGraph } from '@langchain/langgraph'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
 import type { ChatProgressStage } from '../../shared/contracts'
 import { assistantPlanOutputSchema, parseAssistantPlanOutput } from '../../shared/chat-plan'
+import { hostnameDisplayLabels } from '../../shared/shell-display-label'
 import type { ChatMessage, ChatCompletionResponseFormat } from '../model/chat-completions-client'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -45,15 +46,12 @@ export function buildStructuredShellContext(
       title: session.title ?? association.title ?? session.hostname,
     }]
   })
-  const totals = new Map<string, number>()
-  for (const entry of entries) totals.set(entry.hostname, (totals.get(entry.hostname) ?? 0) + 1)
-  const ordinals = new Map<string, number>()
-  return entries.map(entry => {
-    const ordinal = (ordinals.get(entry.hostname) ?? 0) + 1
-    ordinals.set(entry.hostname, ordinal)
+  const labels = hostnameDisplayLabels(entries)
+  return entries.map((entry, index) => {
+    const { displayLabel, ordinal } = labels[index]!
     return {
       ...entry,
-      displayLabel: totals.get(entry.hostname)! > 1 ? `${entry.hostname} #${ordinal}` : entry.hostname,
+      displayLabel,
       ordinal,
     }
   })

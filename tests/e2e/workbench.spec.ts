@@ -689,9 +689,13 @@ test('layout controls persist while hidden terminals remain mounted and online',
       rowHeightPercent: 48,
     })
     await page.evaluate(() => window.terminalAgent.settings.appearance.saveTheme('graphite'))
+    const activeTaskButton = page.locator('button.chat-select[aria-current="page"]')
+    const activeTaskName = await activeTaskButton.getAttribute('aria-label')
+    expect(activeTaskName).toBeTruthy()
     await page.reload()
 
     await expect(page.locator('.workbench-shell')).toHaveClass(/theme-graphite/)
+    await page.getByRole('button', { name: activeTaskName!, exact: true }).click()
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
     await expect(page.getByLabel('当前展示数量')).toHaveValue('2')
     await expect(page.getByLabel('每行数量')).toHaveValue('1')
@@ -729,7 +733,7 @@ test('layout controls persist while hidden terminals remain mounted and online',
       const shellToolbar = bounds('.shell-toolbar-content')
       const hostbarTools = bounds('.hostbar-tools')
       const chatPanel = bounds('.global-chat-panel')
-      const modeGroup = bounds('.ai-mode-group')
+       const safetyBadge = bounds('.ai-safety-badge')
       const chatInput = bounds('.global-chat-panel textarea')
       const sendButton = bounds('.global-chat-panel .send-button')
       const withinPanel = (item: DOMRect) => item.left >= chatPanel.left && item.right <= chatPanel.right
@@ -740,7 +744,7 @@ test('layout controls persist while hidden terminals remain mounted and online',
         appActionsClearControls: appActions.right <= window.innerWidth - controlsInset + 0.5,
         hostbarToolsOverflowPx: Math.max(0, hostbarTools.right - shellToolbar.right),
         chatPanelFitsViewport: chatPanel.left >= 0 && chatPanel.right <= window.innerWidth,
-        modeGroupFits: withinPanel(modeGroup),
+         safetyBadgeFits: withinPanel(safetyBadge),
         inputFits: withinPanel(chatInput),
         sendFits: withinPanel(sendButton),
         noPageOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -758,10 +762,61 @@ test('layout controls persist while hidden terminals remain mounted and online',
     expect(narrowGeometry.hostbarToolsOverflowPx, JSON.stringify(narrowGeometry, null, 2)).toBeLessThan(0.5)
     expect(narrowGeometry.sessionTabs.scrollWidth).toBeGreaterThan(narrowGeometry.sessionTabs.clientWidth)
     expect(narrowGeometry.chatPanelFitsViewport).toBe(true)
-    expect(narrowGeometry.modeGroupFits).toBe(true)
+    expect(narrowGeometry.safetyBadgeFits).toBe(true)
     expect(narrowGeometry.inputFits).toBe(true)
     expect(narrowGeometry.sendFits).toBe(true)
     expect(narrowGeometry.noPageOverflow).toBe(true)
+  } finally {
+    await app?.close()
+    await closeServer(sshServer.server)
+  }
+})
+
+test('opens terminal clipboard actions from a right click and routes them through xterm', async ({ launchApp }) => {
+  const sshServer = await startSshServer()
+  let app: ElectronApplication | undefined
+
+  try {
+    app = (await launchApp()).app
+    const page = await app.firstWindow()
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          readText: () => Promise.resolve('clipboard-paste\r'),
+          writeText: (value: string) => {
+            ;(window as Window & { __terminalAgentClipboardWrite?: string }).__terminalAgentClipboardWrite = value
+            return Promise.resolve()
+          },
+        },
+      })
+    })
+    await page.reload()
+    await connect(page, sshServer.port)
+
+    const pane = page.getByLabel('终端会话 127.0.0.1', { exact: true })
+    const menu = page.getByRole('menu', { name: '终端剪贴板操作', exact: true })
+    await pane.click({ button: 'right' })
+    await expect(menu).toBeVisible()
+    await expect(menu.getByRole('menuitem', { name: '复制', exact: true })).toBeDisabled()
+    await expect(menu.getByRole('menuitem', { name: '粘贴', exact: true })).toBeEnabled()
+    await expect(menu.getByRole('menuitem', { name: '全选', exact: true })).toBeEnabled()
+    await expect(menu.getByRole('menuitem', { name: '取消选择', exact: true })).toBeDisabled()
+
+    await menu.getByRole('menuitem', { name: '粘贴', exact: true }).click()
+    await expect(pane).toContainText('echo:clipboard-paste')
+
+    await pane.click({ button: 'right' })
+    await menu.getByRole('menuitem', { name: '全选', exact: true }).click()
+    await pane.click({ button: 'right' })
+    await expect(menu.getByRole('menuitem', { name: '复制', exact: true })).toBeEnabled()
+    await expect(menu.getByRole('menuitem', { name: '取消选择', exact: true })).toBeEnabled()
+    await menu.getByRole('menuitem', { name: '复制', exact: true }).click()
+    await expect.poll(() => page.evaluate(() => (window as Window & { __terminalAgentClipboardWrite?: string }).__terminalAgentClipboardWrite ?? '')).not.toBe('')
+
+    await pane.click({ button: 'right' })
+    await expect(menu.getByRole('menuitem', { name: '复制', exact: true })).toBeDisabled()
+    await expect(menu.getByRole('menuitem', { name: '取消选择', exact: true })).toBeDisabled()
   } finally {
     await app?.close()
     await closeServer(sshServer.server)

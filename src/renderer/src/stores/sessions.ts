@@ -1,4 +1,5 @@
 import type { SessionMode } from '../../../shared/contracts'
+import { hostnameDisplayLabels } from '../../../shared/shell-display-label'
 
 export const MAX_SESSION_BUFFER_CHARS = 200_000
 
@@ -17,11 +18,8 @@ export function sessionLabel(session: SessionView): string {
 }
 
 export function sessionDisplayLabel(session: SessionView, orderedSessions: readonly SessionView[]): string {
-  const label = session.hostname
-  const duplicates = orderedSessions.filter(item => item.hostname === session.hostname)
-  if (duplicates.length < 2) return label
-  const ordinal = duplicates.findIndex(item => item.id === session.id) + 1
-  return ordinal > 0 ? `${label} #${ordinal}` : label
+  const index = orderedSessions.findIndex(item => item.id === session.id)
+  return index < 0 ? session.hostname : hostnameDisplayLabels(orderedSessions)[index]!.displayLabel
 }
 
 export function createSessionsStore() {
