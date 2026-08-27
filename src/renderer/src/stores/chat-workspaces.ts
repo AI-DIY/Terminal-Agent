@@ -34,6 +34,13 @@ export function workbenchSessionAttachmentTarget(
   return selectedChatId ?? liveChatId
 }
 
+export function workbenchReconnectAttachmentTarget(
+  sessionChatId: string | null | undefined,
+  selectedChatId: string,
+): string {
+  return sessionChatId ?? selectedChatId
+}
+
 export async function initializeWorkbenchTask<TResult>(options: {
   load(): Promise<void>
   restore(): Promise<TResult>
@@ -57,8 +64,9 @@ export function createWorkbenchOperationGate() {
 
 export async function runWorkbenchSessionOpen<TSession>(options: {
   gate: Pick<ReturnType<typeof createWorkbenchOperationGate>, 'begin' | 'isCurrent'>
+  targetChatId?: string | null
   open(): Promise<TSession>
-  attach(session: TSession, isCurrent: () => boolean): Promise<void>
+  attach(session: TSession, isCurrent: () => boolean, targetChatId?: string | null): Promise<void>
   complete(): void
   fail(error: unknown): void
 }): Promise<void> {
@@ -67,7 +75,7 @@ export async function runWorkbenchSessionOpen<TSession>(options: {
   try {
     const session = await options.open()
     if (!isCurrent()) return
-    await options.attach(session, isCurrent)
+    await options.attach(session, isCurrent, options.targetChatId)
     if (isCurrent()) options.complete()
   } catch (error) {
     if (isCurrent()) options.fail(error)

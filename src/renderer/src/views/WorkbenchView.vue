@@ -21,7 +21,7 @@ import { reconcileVisiblePanes, selectVisiblePane } from '../stores/visible-pane
 import { getLayoutPreferencesStore, shellGridStyle } from '../stores/layout-preferences'
 import { createShellHistoryStore, filterHistoryByHosts, latestHistoryByHost, readOnlyHistoryTerminal, reconcileHistoryHostSelection, toggleHistoryHostSelection } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
-import { createChatWorkspacesStore, createWorkbenchOperationGate, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
+import { createChatWorkspacesStore, createWorkbenchOperationGate, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 
 const emit = defineEmits<{ showSettings: [] }>()
 const store = createSessionsStore()
@@ -363,7 +363,7 @@ async function reconnectShell(historyId: string): Promise<void> {
     await runWorkbenchSessionReconnect({
       targetChatId,
       reconnect: () => shellHistory.reconnect(historyId),
-      attach: (session, chatId, isCurrent) => attachSession(session, true, isCurrent, chatId),
+      attach: (session, chatId, isCurrent) => attachSession(session, true, isCurrent, workbenchReconnectAttachmentTarget(session.chatId, chatId)),
       isCurrent: isTargetCurrent,
     })
     if (isTargetCurrent()) closeShellHistory()
@@ -438,6 +438,7 @@ async function loadBastionHosts(systemId: string): Promise<void> {
 
 async function launchBastion(request: BastionLaunchRequest): Promise<void> {
   const operationGeneration = workbenchOperations.begin()
+  const targetChatId = activeWorkbenchChatId.value
   connectionError.value = ''
   bastionError.value = ''
   bastionLoading.value = true
@@ -452,7 +453,7 @@ async function launchBastion(request: BastionLaunchRequest): Promise<void> {
       const session = (await window.terminalAgent.sessions.list()).find(item => item.id === result.sessionId)
       if (!workbenchOperations.isCurrent(operationGeneration)) return
       if (!session) throw new Error('无法读取新建终端会话。')
-      await attachSession(session, true, () => workbenchOperations.isCurrent(operationGeneration))
+       await attachSession(session, true, () => workbenchOperations.isCurrent(operationGeneration), (session as SessionView & { chatId?: string }).chatId ?? targetChatId ?? undefined)
     } else {
       const focused = await focusOwnedWorkbenchSession({
         sessionId: result.sessionId,
@@ -490,8 +491,10 @@ function selectPrivateKey(accept: (selection: PrivateKeySelection | null) => voi
 async function connect(request: ConnectionDialogRequest): Promise<void> {
   bastionLoading.value = false
   connectionError.value = ''
+  const targetChatId = activeWorkbenchChatId.value
   await runWorkbenchSessionOpen({
     gate: workbenchOperations,
+    targetChatId,
     open: async () => {
       if (request.profile) {
         await window.terminalAgent.sessions.saveProfile(request.profile)
@@ -499,7 +502,7 @@ async function connect(request: ConnectionDialogRequest): Promise<void> {
       }
       return window.terminalAgent.sessions.connect(request.connection)
     },
-    attach: (session, current) => attachSession(session, true, current),
+    attach: (session, current, capturedTargetChatId) => attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined),
     complete: closeConnectionDialog,
     fail: error => { connectionError.value = error instanceof Error ? error.message : '无法建立 SSH 会话。' },
   })
@@ -579,10 +582,12 @@ function trapConnectionFocus(event: KeyboardEvent): void {
 
 async function openSavedProfile(id: string): Promise<void> {
   connectionError.value = ''
+  const targetChatId = activeWorkbenchChatId.value
   await runWorkbenchSessionOpen({
     gate: workbenchOperations,
+    targetChatId,
     open: () => window.terminalAgent.sessions.openProfile(id),
-    attach: (session, current) => attachSession(session, true, current),
+    attach: (session, current, capturedTargetChatId) => attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined),
     complete: closeSavedSessionsDialog,
     fail: error => { connectionError.value = error instanceof Error ? error.message : '无法打开已保存的 SSH 会话。' },
   })
