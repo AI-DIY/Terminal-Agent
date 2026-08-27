@@ -54,6 +54,31 @@ function api(chats: ChatSummary[], workspaces: ChatWorkspace[], revision = 4, li
 }
 
 describe('chat workspaces store', () => {
+  it('preserves operation ownership when opened events interleave before open promises resolve', async () => {
+    const { createWorkbenchSessionOwnershipTracker } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const tracker = createWorkbenchSessionOwnershipTracker<{ id: string }>()
+    const first = tracker.begin('history-task')
+    const second = tracker.begin('new-task')
+
+    expect(tracker.observe({ id: 'session-second' })).toEqual({ tracked: true })
+    expect(tracker.observe({ id: 'session-first' })).toEqual({ tracked: true })
+    expect(tracker.resolve(second, { id: 'session-second' })).toEqual({ targetChatId: 'new-task', queued: true })
+    expect(tracker.resolve(first, { id: 'session-first' })).toEqual({ targetChatId: 'history-task', queued: true })
+    expect(tracker.observe({ id: 'session-first' })).toEqual({ tracked: true, targetChatId: 'history-task' })
+    expect(tracker.observe({ id: 'session-second' })).toEqual({ tracked: true, targetChatId: 'new-task' })
+  })
+
+  it('keeps an early opened event operation-scoped until the open result supplies its session id', async () => {
+    const { createWorkbenchSessionOwnershipTracker } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const tracker = createWorkbenchSessionOwnershipTracker<{ id: string }>()
+    const operation = tracker.begin('selected-history')
+
+    expect(tracker.observe({ id: 'session-early' })).toEqual({ tracked: true })
+    expect(tracker.resolve(operation, { id: 'session-early' })).toEqual({ targetChatId: 'selected-history', queued: true })
+    expect(tracker.complete(operation)).toEqual([])
+    expect(tracker.observe({ id: 'session-early' })).toEqual({ tracked: true, targetChatId: 'selected-history' })
+  })
+
   it('targets the selected history task when opening a new Shell', async () => {
     const { workbenchSessionAttachmentTarget, workbenchReconnectAttachmentTarget, workbenchOpenedAttachmentTarget } = await import('../../../src/renderer/src/stores/chat-workspaces')
 

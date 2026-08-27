@@ -21,7 +21,7 @@ import { reconcileVisiblePanes, selectVisiblePane } from '../stores/visible-pane
 import { getLayoutPreferencesStore, shellGridStyle } from '../stores/layout-preferences'
 import { createShellHistoryStore, filterHistoryByHosts, latestHistoryByHost, readOnlyHistoryTerminal, reconcileHistoryHostSelection, toggleHistoryHostSelection } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
-import { createChatWorkspacesStore, createWorkbenchOperationGate, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchOpenedAttachmentTarget, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
+import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchOpenedAttachmentTarget, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 
 const emit = defineEmits<{ showSettings: [] }>()
 const store = createSessionsStore()
@@ -88,7 +88,7 @@ let stopShellHistoryEligibilityRefresh: (() => void) | undefined
 let bastionHostRequestId = 0
 const workbenchOperations = createWorkbenchOperationGate()
 let connectionFocusOrigin: HTMLElement | null = null
-let pendingOpenedTargetChatId: string | null = null
+const sessionOwnership = createWorkbenchSessionOwnershipTracker<{ id: string }>()
 const connectionModal = ref<HTMLElement | null>(null)
 const shellCanvas = ref<{ openHistoryMenu(historyId: string): void } | null>(null)
 
@@ -440,7 +440,7 @@ async function loadBastionHosts(systemId: string): Promise<void> {
 async function launchBastion(request: BastionLaunchRequest): Promise<void> {
   const operationGeneration = workbenchOperations.begin()
   const targetChatId = activeWorkbenchChatId.value
-  pendingOpenedTargetChatId = targetChatId
+  const ownershipOperation = sessionOwnership.begin(targetChatId ?? '')
   connectionError.value = ''
   bastionError.value = ''
   bastionLoading.value = true
@@ -455,7 +455,8 @@ async function launchBastion(request: BastionLaunchRequest): Promise<void> {
       const session = (await window.terminalAgent.sessions.list()).find(item => item.id === result.sessionId)
       if (!workbenchOperations.isCurrent(operationGeneration)) return
       if (!session) throw new Error('无法读取新建终端会话。')
-       await attachSession(session, true, () => workbenchOperations.isCurrent(operationGeneration), (session as SessionView & { chatId?: string }).chatId ?? targetChatId ?? undefined)
+      sessionOwnership.resolve(ownershipOperation, session)
+      await attachSession(session, true, () => workbenchOperations.isCurrent(operationGeneration), (session as SessionView & { chatId?: string }).chatId ?? targetChatId ?? undefined)
     } else {
       const focused = await focusOwnedWorkbenchSession({
         sessionId: result.sessionId,
@@ -477,7 +478,7 @@ async function launchBastion(request: BastionLaunchRequest): Promise<void> {
     bastionError.value = message
     connectionError.value = message
   } finally {
-    if (pendingOpenedTargetChatId === targetChatId) pendingOpenedTargetChatId = null
+    sessionOwnership.complete(ownershipOperation)
     if (workbenchOperations.isCurrent(operationGeneration)) bastionLoading.value = false
   }
 }
@@ -495,7 +496,7 @@ async function connect(request: ConnectionDialogRequest): Promise<void> {
   bastionLoading.value = false
   connectionError.value = ''
   const targetChatId = activeWorkbenchChatId.value
-  pendingOpenedTargetChatId = targetChatId
+  const ownershipOperation = sessionOwnership.begin(targetChatId ?? '')
   await runWorkbenchSessionOpen({
     gate: workbenchOperations,
     targetChatId,
@@ -506,8 +507,8 @@ async function connect(request: ConnectionDialogRequest): Promise<void> {
       }
       return window.terminalAgent.sessions.connect(request.connection)
     },
-    attach: (session, current, capturedTargetChatId) => attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined),
-    complete: () => { if (pendingOpenedTargetChatId === targetChatId) pendingOpenedTargetChatId = null; closeConnectionDialog() },
+    attach: (session, current, capturedTargetChatId) => { sessionOwnership.resolve(ownershipOperation, session); return attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined) },
+    complete: () => { sessionOwnership.complete(ownershipOperation); closeConnectionDialog() },
     fail: error => { connectionError.value = error instanceof Error ? error.message : '无法建立 SSH 会话。' },
   })
 }
@@ -587,11 +588,12 @@ function trapConnectionFocus(event: KeyboardEvent): void {
 async function openSavedProfile(id: string): Promise<void> {
   connectionError.value = ''
   const targetChatId = activeWorkbenchChatId.value
+  const ownershipOperation = sessionOwnership.begin(targetChatId ?? '')
   await runWorkbenchSessionOpen({
     gate: workbenchOperations,
     targetChatId,
     open: () => window.terminalAgent.sessions.openProfile(id),
-    attach: (session, current, capturedTargetChatId) => attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined),
+    attach: (session, current, capturedTargetChatId) => { sessionOwnership.resolve(ownershipOperation, session); return attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined) },
     complete: closeSavedSessionsDialog,
     fail: error => { connectionError.value = error instanceof Error ? error.message : '无法打开已保存的 SSH 会话。' },
   })
@@ -713,7 +715,8 @@ onMounted(() => {
       return
     }
     const visibleLiveChatId = isLiveChat.value ? chatStore.state.selectedId : null
-    const capturedTargetChatId = workbenchOpenedAttachmentTarget(session.chatId, pendingOpenedTargetChatId, visibleLiveChatId)
+    const observed = sessionOwnership.observe(session)
+    const capturedTargetChatId = workbenchOpenedAttachmentTarget(session.chatId, observed.targetChatId ?? null, visibleLiveChatId)
     const shouldPromoteFallback = visibleLiveChatId === null && chatStore.state.liveChatId === null
     const isCurrent = () => capturedTargetChatId !== null
       ? chatStore.state.selectedId === capturedTargetChatId

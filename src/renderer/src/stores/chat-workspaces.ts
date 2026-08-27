@@ -49,6 +49,38 @@ export function workbenchOpenedAttachmentTarget(
   return sessionChatId ?? capturedChatId ?? currentChatId
 }
 
+export function createWorkbenchSessionOwnershipTracker<TSession extends { id: string }>() {
+  let sequence = 0
+  const operations = new Map<number, { targetChatId: string; sessionId?: string }>()
+  const observed = new Set<string>()
+  const owners = new Map<string, string>()
+  return {
+    begin(targetChatId: string) {
+      const operation = ++sequence
+      operations.set(operation, { targetChatId })
+      return operation
+    },
+    observe(session: TSession): { tracked: true; targetChatId?: string } {
+      const targetChatId = owners.get(session.id)
+      if (targetChatId) return { tracked: true, targetChatId }
+      observed.add(session.id)
+      return { tracked: true }
+    },
+    resolve(operation: number, session: TSession): { targetChatId: string; queued: true } {
+      const entry = operations.get(operation)
+      if (!entry) throw new Error('Unknown workbench session operation.')
+      entry.sessionId = session.id
+      owners.set(session.id, entry.targetChatId)
+      observed.delete(session.id)
+      return { targetChatId: entry.targetChatId, queued: true }
+    },
+    complete(operation: number): TSession[] {
+      operations.delete(operation)
+      return []
+    },
+  }
+}
+
 export async function initializeWorkbenchTask<TResult>(options: {
   load(): Promise<void>
   restore(): Promise<TResult>
