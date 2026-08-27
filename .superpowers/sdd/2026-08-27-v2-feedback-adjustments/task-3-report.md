@@ -51,4 +51,4 @@ Correction verification:
 - Before the correction: the focused layout test timed out after reload while clicking `Shell 布局`, because the fresh startup task had no restored Shell sessions.
 - After the correction: `npx playwright test tests/e2e/workbench.spec.ts -g "layout controls persist while hidden terminals remain mounted and online|opens terminal clipboard actions from a right click and routes them through xterm"` — 2 passed.
 
-Correction commit: `c32a300 test: preserve layout task across reload`.
+Correction implementation commit: `c69f4b5 test: preserve layout task across reload`.
