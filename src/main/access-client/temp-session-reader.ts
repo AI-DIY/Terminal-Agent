@@ -28,17 +28,7 @@ export async function readTempSession(path: string, readFile: FileReader = readF
 
   const bytePreservingValues = parseTemporaryProfile(content.toString('latin1'))
   const declaredLineCodePage = bytePreservingValues.get('LineCodePage')?.trim()
-  const encoding = encodingForLineCodePage(declaredLineCodePage)
-  let values: Map<string, string>
-  if (encoding) {
-    try {
-      values = parseTemporaryProfile(new TextDecoder(encoding, { fatal: true }).decode(content))
-    } catch {
-      throw invalidTemporaryProfile()
-    }
-  } else {
-    values = parseTemporaryProfile(content.toString('utf8'))
-  }
+  const values = decodeTemporaryProfile(content, declaredLineCodePage)
 
   const host = values.get('HostName')?.trim() ?? ''
   const username = values.get('UserName')?.trim() ?? ''
@@ -66,6 +56,27 @@ export async function readTempSession(path: string, readFile: FileReader = readF
     columns,
     rows,
     ...(values.get('LineCodePage')?.trim() ? { lineCodePage: values.get('LineCodePage')?.trim() } : {}),
+  }
+}
+
+function decodeTemporaryProfile(content: Buffer, declaredLineCodePage: string | undefined): Map<string, string> {
+  const declaredEncoding = encodingForLineCodePage(declaredLineCodePage)
+  if (declaredEncoding) {
+    return decodeWithEncoding(content, declaredEncoding)
+  }
+
+  try {
+    return parseTemporaryProfile(new TextDecoder('utf-8', { fatal: true }).decode(content))
+  } catch {
+    return decodeWithEncoding(content, 'gb18030')
+  }
+}
+
+function decodeWithEncoding(content: Buffer, encoding: string): Map<string, string> {
+  try {
+    return parseTemporaryProfile(new TextDecoder(encoding, { fatal: true }).decode(content))
+  } catch {
+    throw invalidTemporaryProfile()
   }
 }
 
