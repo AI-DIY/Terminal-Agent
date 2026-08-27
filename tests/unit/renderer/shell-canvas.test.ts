@@ -82,4 +82,19 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(view).not.toContain('@upgrade=')
     expect(view).not.toContain('autonomous-upgrade-dialog')
   })
+
+  it('keeps clipboard actions in the terminal context menu and bounds the terminal grid', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+    const terminal = readFileSync(new URL('../../../src/renderer/src/components/TerminalPane.vue', import.meta.url), 'utf8')
+    const shell = readFileSync(new URL('../../../src/renderer/src/components/workbench/WorkbenchShell.vue', import.meta.url), 'utf8')
+
+    expect(terminal).toContain('复制')
+    expect(terminal).toContain('粘贴')
+    expect(terminal).toContain('全选')
+    expect(terminal).toContain('取消选择')
+    expect(terminal).toContain('navigator.clipboard')
+    expect(canvas).toContain('minmax(0, 1fr)')
+    expect(canvas).toContain('min-height: 0')
+    expect(shell).toContain('grid-template-rows: 48px minmax(0, 1fr)')
+  })
 })

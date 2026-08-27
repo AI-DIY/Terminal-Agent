@@ -17,8 +17,8 @@ export function sessionLabel(session: SessionView): string {
 }
 
 export function sessionDisplayLabel(session: SessionView, orderedSessions: readonly SessionView[]): string {
-  const label = sessionLabel(session)
-  const duplicates = orderedSessions.filter(item => sessionLabel(item) === label)
+  const label = session.hostname
+  const duplicates = orderedSessions.filter(item => item.hostname === session.hostname)
   if (duplicates.length < 2) return label
   const ordinal = duplicates.findIndex(item => item.id === session.id) + 1
   return ordinal > 0 ? `${label} #${ordinal}` : label

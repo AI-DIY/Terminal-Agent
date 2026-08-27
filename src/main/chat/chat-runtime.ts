@@ -3,7 +3,7 @@ import type { ChatMessage, ChatCompletionResponseFormat } from '../model/chat-co
 import type { ProviderModelSettings } from '../model/model-provider-router'
 import type { ChatMessageContent } from '../../shared/chat-content'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
-import type { StructuredChatRequest } from './structured-chat-agent'
+import type { StructuredChatRequest, StructuredChatShell } from './structured-chat-agent'
 import type { ChatProgressStage } from '../../shared/contracts'
 import { estimateChatMessages } from './token-estimator'
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -19,7 +19,7 @@ type RuntimeDeps = {
   appendMessage(request: any): Promise<{ messageId?: string } | unknown>
   updateMessage?(request: any): Promise<unknown>
   getRetryMessageId?(chatId: string, content: any): Promise<string | undefined>
-  getContext(chatId: string): Promise<ChatMessage[] | { messages: ChatMessage[]; hasImages: boolean; availableHostnames: string[] }>
+  getContext(chatId: string): Promise<ChatMessage[] | { messages: ChatMessage[]; hasImages: boolean; availableHostnames: string[]; availableShells?: StructuredChatShell[] }>
   resolveModel(input?: { hasImages: boolean }): Promise<ProviderModelSettings>
   runStructured?(settings: ProviderModelSettings, input: StructuredChatRequest, signal: AbortSignal, onStage?: (stage: ChatProgressStage) => void): Promise<AssistantPlanOutput>
   materializePlan?(plan: NonNullable<AssistantPlanOutput['plan']>): import('../../shared/chat-plan').ChatExecutionPlan
@@ -125,6 +125,7 @@ export class ChatRuntime {
           ? (publishProgress('thinking'), this.deps.runStructured(settings, {
             messages: context,
             availableHostnames: structuredContext?.availableHostnames ?? [],
+            ...(structuredContext?.availableShells ? { availableShells: structuredContext.availableShells } : {}),
           }, controller.signal, publishProgress)).then(result => { publishProgress('observing'); materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) }).catch(async error => {
             if (controller.signal.aborted) throw error
             await this.deps.stream(settings, context, delta => {

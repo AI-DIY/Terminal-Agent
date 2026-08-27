@@ -8,11 +8,82 @@ import type { SessionView } from '../stores/sessions'
 const props = defineProps<{ session: SessionView; active: boolean }>()
 const emit = defineEmits<{ activate: [] }>()
 const terminalElement = ref<HTMLElement>()
+const contextMenuOpen = ref(false)
+const contextMenuStyle = ref({ left: '8px', top: '8px' })
+const hasSelection = ref(false)
+const clipboardAvailable = typeof navigator !== 'undefined' && Boolean(navigator.clipboard)
 let terminal: Terminal | undefined
 let fit: FitAddon | undefined
 let observer: ResizeObserver | undefined
 let unsubscribe: (() => void) | undefined
 let inputSubscription: { dispose(): void } | undefined
+let selectionSubscription: { dispose(): void } | undefined
+
+function openContextMenu(event: MouseEvent): void {
+  const bounds = terminalElement.value?.getBoundingClientRect()
+  if (!bounds) return
+  const width = 158
+  const height = 148
+  const left = Math.max(6, Math.min(event.clientX - bounds.left, Math.max(6, bounds.width - width - 6)))
+  const top = Math.max(6, Math.min(event.clientY - bounds.top, Math.max(6, bounds.height - height - 6)))
+  contextMenuStyle.value = { left: `${left}px`, top: `${top}px` }
+  contextMenuOpen.value = true
+}
+
+function closeContextMenu(): void { contextMenuOpen.value = false }
+
+function fallbackCopy(value: string): boolean {
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.append(textarea)
+  textarea.select()
+  try { return document.execCommand('copy') } catch { return false } finally { textarea.remove() }
+}
+
+async function copySelection(): Promise<void> {
+  const value = terminal?.getSelection() ?? ''
+  if (!value) return
+  let copied = false
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(value)
+      copied = true
+    } else {
+      copied = fallbackCopy(value)
+    }
+  } catch { copied = fallbackCopy(value) }
+  if (!copied) {
+    closeContextMenu()
+    return
+  }
+  terminal?.clearSelection()
+  hasSelection.value = false
+  closeContextMenu()
+}
+
+async function pasteClipboard(): Promise<void> {
+  if (!terminal || !clipboardAvailable) return
+  try {
+    const value = await navigator.clipboard.readText()
+    if (value) terminal.paste(value)
+  } catch { /* Clipboard permissions are controlled by the host. */ }
+  closeContextMenu()
+}
+
+function selectAll(): void {
+  terminal?.selectAll()
+  hasSelection.value = terminal?.hasSelection() ?? false
+  closeContextMenu()
+}
+
+function clearSelection(): void {
+  terminal?.clearSelection()
+  hasSelection.value = false
+  closeContextMenu()
+}
 
 function resize(): void {
   if (!terminal || !fit) return
@@ -40,6 +111,7 @@ onMounted(() => {
   terminal.open(terminalElement.value!)
   terminal.write(props.session.buffer)
   inputSubscription = terminal.onData(data => { void window.terminalAgent.sessions.write(props.session.id, data) })
+  selectionSubscription = terminal.onSelectionChange(() => { hasSelection.value = terminal?.hasSelection() ?? false })
   unsubscribe = window.terminalAgent.sessions.onData(event => {
     if (event.sessionId === props.session.id) terminal?.write(event.data)
   })
@@ -51,10 +123,13 @@ onMounted(() => {
 onBeforeUnmount(() => {
   unsubscribe?.()
   inputSubscription?.dispose()
+  selectionSubscription?.dispose()
   observer?.disconnect()
   fit?.dispose()
   terminal?.dispose()
+  window.removeEventListener('pointerdown', closeContextMenu)
 })
+onMounted(() => window.addEventListener('pointerdown', closeContextMenu))
 </script>
 
 <template>
@@ -65,12 +140,23 @@ onBeforeUnmount(() => {
     :aria-label="`终端会话 ${session.hostname}`"
     role="region"
     @pointerdown="emit('activate')"
+    @contextmenu.stop.prevent="openContextMenu"
   >
     <div ref="terminalElement" class="terminal-element" />
+    <nav v-if="contextMenuOpen" class="terminal-context-menu" role="menu" aria-label="终端剪贴板操作" :style="contextMenuStyle" @pointerdown.stop>
+      <button type="button" role="menuitem" :disabled="!hasSelection" @click="copySelection">复制</button>
+      <button type="button" role="menuitem" :disabled="!clipboardAvailable" @click="pasteClipboard">粘贴</button>
+      <button type="button" role="menuitem" @click="selectAll">全选</button>
+      <button type="button" role="menuitem" :disabled="!hasSelection" @click="clearSelection">取消选择</button>
+    </nav>
   </section>
 </template>
 
 <style scoped>
-.terminal-pane { min-width: 0; min-height: 0; overflow: hidden; background: var(--terminal, #151a20); }
+.terminal-pane { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--terminal, #151a20); }
 .terminal-element { height: 100%; min-height: 0; padding: 11px 12px; }
+.terminal-context-menu { position: absolute; z-index: 9; display: grid; min-width: 154px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
+.terminal-context-menu button { min-height: 29px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 11px; text-align: left; }
+.terminal-context-menu button:hover,.terminal-context-menu button:focus-visible { background: var(--surface-soft); outline: 1px solid var(--accent); }
+.terminal-context-menu button:disabled { color: var(--muted); cursor: not-allowed; }
 </style>

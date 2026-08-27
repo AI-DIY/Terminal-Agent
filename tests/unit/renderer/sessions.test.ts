@@ -48,20 +48,31 @@ describe('sessions store', () => {
     })).toBe('127.0.0.1')
   })
 
-  it('preserves the existing display label when it occurs once', () => {
+  it('uses the hostname display label when it occurs once', () => {
     const session = { id: 'a', hostname: '10.0.0.12', title: '生产终端', mode: 'copilot' as const, buffer: '' }
 
-    expect(sessionDisplayLabel(session, [session])).toBe('生产终端')
+    expect(sessionDisplayLabel(session, [session])).toBe('10.0.0.12')
   })
 
-  it('adds stable connection-order ordinals to duplicate display labels', () => {
+  it('adds stable connection-order ordinals to duplicate hostnames', () => {
     const first = { id: 'a', hostname: '10.0.0.12', title: '生产终端', mode: 'copilot' as const, buffer: '' }
-    const second = { id: 'b', hostname: '10.0.0.13', title: '生产终端', mode: 'copilot' as const, buffer: '' }
+    const second = { id: 'b', hostname: '10.0.0.12', title: '备用终端', mode: 'copilot' as const, buffer: '' }
     const distinct = { id: 'c', hostname: '10.0.0.14', title: '审计终端', mode: 'copilot' as const, buffer: '' }
     const ordered = [first, second, distinct]
 
-    expect(sessionDisplayLabel(first, ordered)).toBe('生产终端 #1')
-    expect(sessionDisplayLabel(second, ordered)).toBe('生产终端 #2')
-    expect(sessionDisplayLabel(distinct, ordered)).toBe('审计终端')
+    expect(sessionDisplayLabel(first, ordered)).toBe('10.0.0.12 #1')
+    expect(sessionDisplayLabel(second, ordered)).toBe('10.0.0.12 #2')
+    expect(sessionDisplayLabel(distinct, ordered)).toBe('10.0.0.14')
+  })
+
+  it('uses hostname ordinals even when same-host titles differ', () => {
+    const first = {
+      id: 'first', hostname: 'web-01', title: 'primary', mode: 'copilot' as const, buffer: '',
+    }
+    const second = {
+      id: 'second', hostname: 'web-01', title: 'secondary', mode: 'copilot' as const, buffer: '',
+    }
+    expect(sessionDisplayLabel(first, [first, second])).toBe('web-01 #1')
+    expect(sessionDisplayLabel(second, [first, second])).toBe('web-01 #2')
   })
 })

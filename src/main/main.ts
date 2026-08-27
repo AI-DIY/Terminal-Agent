@@ -62,7 +62,7 @@ import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
 import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'
 import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { StructuredChatAgent } from './chat/structured-chat-agent'
+import { buildStructuredShellContext, StructuredChatAgent } from './chat/structured-chat-agent'
 import { ExecutionPlanService } from './chat/execution-plan-service'
 
 let mainWindow: BrowserWindow | undefined
@@ -119,6 +119,7 @@ const chatRuntime = new ChatRuntime({
   getRetryMessageId: (chatId, content) => chats.findRetryMessage(chatId, content),
   getContext: async chatId => {
     const snapshot = await chats.get(chatId)
+    const availableShells = buildStructuredShellContext(snapshot.chat.shells, sessions.snapshot())
     const facts = await Promise.all(snapshot.chat.shells.map(async shell => {
       if (shell.status !== 'open') return null
       const session = shell.sessionId ? sessions.snapshot().find(item => item.id === shell.sessionId) : undefined
@@ -135,11 +136,16 @@ const chatRuntime = new ChatRuntime({
     }))
     const context = buildChatContext({
       messages: snapshot.chat.messages,
-      shells: snapshot.chat.shells,
+      shells: availableShells.map(shell => ({ ...shell, status: 'open' as const })),
       facts: facts.filter((record): record is NonNullable<typeof record> => Boolean(record)),
       audit: approvedExecutionAudit.recent(snapshot.chat.shells.flatMap(shell => shell.sessionId ? [shell.sessionId] : [])),
     })
-    return { messages: context, hasImages: snapshot.chat.messages.some(message => Array.isArray(message.content)), availableHostnames: snapshot.chat.shells.filter(shell => shell.status === 'open').map(shell => shell.hostname) }
+    return {
+      messages: context,
+      hasImages: snapshot.chat.messages.some(message => Array.isArray(message.content)),
+      availableHostnames: availableShells.map(shell => shell.hostname),
+      availableShells,
+    }
   },
   resolveModel: async ({ hasImages = false }: { hasImages?: boolean } = {}) => {
     const profile = await modelProfiles.resolveRoute({ hasImages })

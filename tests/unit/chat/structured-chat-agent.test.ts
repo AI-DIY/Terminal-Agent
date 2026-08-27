@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { StructuredChatAgent } from '../../../src/main/chat/structured-chat-agent'
+import { buildStructuredShellContext, StructuredChatAgent } from '../../../src/main/chat/structured-chat-agent'
 
 const request = {
   messages: [{ role: 'user' as const, content: '检查服务' }],
@@ -7,6 +7,21 @@ const request = {
 }
 
 describe('StructuredChatAgent', () => {
+  it('projects online task associations in stored order with hostname display labels', () => {
+    expect(buildStructuredShellContext([
+      { sessionId: 'first', hostname: 'web-01', title: 'primary', status: 'open' },
+      { sessionId: 'second', hostname: 'web-01', title: 'secondary', status: 'open' },
+      { sessionId: 'closed', hostname: 'db-01', title: 'closed', status: 'closed' },
+    ], [
+      { id: 'second', hostname: 'web-01', title: 'secondary' },
+      { id: 'first', hostname: 'web-01', title: 'primary' },
+      { id: 'closed', hostname: 'db-01', title: 'closed' },
+    ])).toEqual([
+      { hostname: 'web-01', title: 'primary', displayLabel: 'web-01 #1', ordinal: 1 },
+      { hostname: 'web-01', title: 'secondary', displayLabel: 'web-01 #2', ordinal: 2 },
+    ])
+  })
+
   it('returns the first valid JSON response without exposing provider deltas', async () => {
     const complete = vi.fn().mockResolvedValue('{"version":1,"reply":"已准备。","plan":null}')
     await expect(new StructuredChatAgent({ complete }).run(request)).resolves.toMatchObject({ reply: '已准备。', plan: null })
@@ -36,5 +51,21 @@ describe('StructuredChatAgent', () => {
     expect(stages).toEqual(['thinking', 'repairing', 'thinking', 'observing'])
     expect(stages.every(stage => ['thinking', 'executing', 'observing', 'repairing'].includes(stage))).toBe(true)
     expect(stages.join(' ')).not.toContain('{')
+  })
+
+  it('gives the model hostname-based display labels while retaining hostname targets', async () => {
+    let system = ''
+    const complete = vi.fn(async messages => {
+      system = String(messages[0]?.content ?? '')
+      return '{"version":1,"reply":"完成","plan":{"title":"检查","steps":[{"target":"web-01","explanation":"检查","command":"pwd"}]}}'
+    })
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      availableHostnames: ['web-01'],
+      availableShells: [{ hostname: 'web-01', title: '10.54.98.34', displayLabel: 'web-01 #1', ordinal: 1 }],
+    })).resolves.toMatchObject({ plan: { steps: [{ target: 'web-01' }] } })
+    expect(system).toContain('web-01 #1')
+    expect(system).toContain('displayLabel')
+    expect(system).toContain('target')
   })
 })

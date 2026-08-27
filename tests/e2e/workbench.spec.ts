@@ -1554,7 +1554,7 @@ test('opens an AccessClient temporary SSH session with its title and initial ter
     const page = await app.firstWindow()
 
     await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(1)
-    await expect(page.getByRole('button', { name: '选择终端会话 生产终端' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1' })).toBeVisible()
     await expect.poll(() => sshServer.ptySizes).toContainEqual({ columns: 120, rows: 40 })
   } finally {
     await app?.close()
@@ -1586,7 +1586,7 @@ test('displays a CP936 AccessClient temporary session title without garbling', a
     const page = await app.firstWindow()
 
     await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(1)
-    await expect(page.getByRole('button', { name: '选择终端会话 AI中台_10.54.98.34' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1' })).toBeVisible()
     await expect.poll(() => sshServer.ptySizes).toContainEqual({ columns: 120, rows: 40 })
   } finally {
     await app?.close()

@@ -501,6 +501,26 @@ describe('chat runtime', () => {
     expect(events.some(event => event.kind === 'chat:delta')).toBe(false)
     expect(events.at(-1)).toMatchObject({ kind: 'chat:completed', content: '{"version":1,"reply":"完成","plan":null}' })
   })
+
+  it('passes the ordered shell display context into structured generation', async () => {
+    const availableShells = [{ hostname: 'web-01', title: '生产终端', displayLabel: 'web-01 #1', ordinal: 1 }]
+    const runStructured = vi.fn(async (_settings: unknown, input: { availableHostnames: string[]; availableShells?: typeof availableShells }) => {
+      expect(input.availableHostnames).toEqual(['web-01'])
+      expect(input.availableShells).toEqual(availableShells)
+      return { version: 1 as const, reply: '完成', plan: null }
+    })
+    const runtime = new ChatRuntime({
+      appendMessage: vi.fn(async (input: { requestId: string }) => ({ messageId: input.requestId })),
+      getContext: vi.fn(async () => ({ messages: [{ role: 'user' as const, content: 'check' }], hasImages: false, availableHostnames: ['web-01'], availableShells })),
+      resolveModel: vi.fn(async () => ({ endpoint: 'http://model', model: 'm', contextLimit: 100, apiKey: null })),
+      runStructured,
+      stream: vi.fn(async () => undefined),
+    })
+
+    await runtime.send({ chatId: 'c1', runId: '78787878-7878-4787-8787-787878787878', content: 'check' }, () => undefined)
+
+    expect(runStructured).toHaveBeenCalledTimes(1)
+  })
 })
 
 async function settlesWithin<T>(promise: Promise<T>, timeoutMs = 100): Promise<T> {
