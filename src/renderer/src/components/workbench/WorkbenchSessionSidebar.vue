@@ -104,7 +104,7 @@ function removeTask(chatId: string): void {
       <p v-if="!groups.length" class="empty">暂无任务</p>
       <section v-for="group in groups" :key="group.label" class="chat-group" :aria-label="group.label">
         <h2>{{ group.label }}</h2>
-        <div v-for="chat in group.chats" :key="chat.id" class="history-item" :class="{ active: chat.id === currentChatId }">
+        <div v-for="chat in group.chats" :key="chat.id" class="history-item" :data-chat-id="chat.id" :class="{ active: chat.id === currentChatId }">
           <div v-if="editingChatId === chat.id" class="chat-rename">
             <input
               :ref="element => setRenameInput(chat.id, element)"

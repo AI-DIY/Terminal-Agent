@@ -131,6 +131,16 @@ describe('global chat store', () => {
     expect(store.state.messages.c1?.[0]).toMatchObject({ content: '已取消。', state: 'error' })
   })
 
+  it('projects a structured error event when no assistant delta was published', () => {
+    const store = createGlobalChatStore(api())
+    store.beginRun('c1', 'r1')
+    store.apply({ kind: 'chat:error', chatId: 'c1', runId: 'r1', messageId: 'm1', error: '已取消。', retryable: false })
+
+    expect(store.state.messages.c1).toEqual([
+      expect.objectContaining({ id: 'm1', role: 'assistant', content: '已取消。', state: 'error', retryable: false }),
+    ])
+  })
+
   it('surfaces a terminal status when durable cancellation fails', async () => {
     const transport = api()
     transport.cancel.mockRejectedValueOnce(new Error('disk full'))

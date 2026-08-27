@@ -84,9 +84,8 @@ describe('chat workspaces store', () => {
     const tracker = createWorkbenchSessionOwnershipTracker<{ id: string }>()
     const operation = tracker.begin('history-task')
     const early = tracker.observe({ id: 'session-early' })
-    let selected = 'other-task'
+    const selected = 'third-task'
     const resolved = tracker.resolve(operation, { id: 'session-early' })
-    selected = 'third-task'
     const attached: string[] = []
     if (early.pending) attached.push(resolved.targetChatId)
     expect(attached).toEqual(['history-task'])
@@ -100,10 +99,9 @@ describe('chat workspaces store', () => {
     const early = { id: 'session-opened' }
     expect(await runWorkbenchOpenedSessionEvent({ tracker, session: early, currentChatId: 'captured-task', attach: async () => undefined })).toBe(false)
     const resolved = tracker.resolve(operation, early)
-    let selected = 'other-task'
+    const selected = 'other-task'
     const attached: string[] = []
     await runWorkbenchOpenedSessionEvent({ tracker, session: early, currentChatId: selected, attach: async (_session, target) => { attached.push(target!) } })
-    selected = 'third-task'
     expect(resolved.targetChatId).toBe('captured-task')
     expect(attached).toEqual(['captured-task'])
   })

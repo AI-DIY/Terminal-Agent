@@ -521,6 +521,50 @@ describe('chat runtime', () => {
 
     expect(runStructured).toHaveBeenCalledTimes(1)
   })
+
+  it('uses structured generation for Ollama instead of exposing raw stream deltas', async () => {
+    const events: ChatRuntimeEvent[] = []
+    const runStructured = vi.fn(async () => ({ version: 1 as const, reply: 'Ollama 完成', plan: null }))
+    const stream = vi.fn(async (_settings: unknown, _messages: unknown, onDelta: (content: string) => void) => {
+      onDelta('raw ollama delta')
+    })
+    const runtime = new ChatRuntime({
+      appendMessage: vi.fn(async (input: { requestId: string }) => ({ messageId: input.requestId })),
+      getContext: vi.fn(async () => ({ messages: [{ role: 'user' as const, content: 'check' }], hasImages: false, availableHostnames: [] })),
+      resolveModel: vi.fn(async () => ({ provider: 'ollama' as const, endpoint: 'http://model', model: 'm', contextLimit: 100, apiKey: null })),
+      runStructured,
+      stream,
+    })
+
+    await runtime.send({ chatId: 'c1', runId: '79797979-7979-4797-8797-797979797979', content: 'check' }, event => events.push(event))
+
+    expect(runStructured).toHaveBeenCalledTimes(1)
+    expect(stream).not.toHaveBeenCalled()
+    expect(events.some(event => event.kind === 'chat:delta')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: 'chat:completed', content: '{"version":1,"reply":"Ollama 完成","plan":null}' })
+  })
+
+  it('does not fall back to raw deltas when structured generation fails', async () => {
+    const events: ChatRuntimeEvent[] = []
+    const runStructured = vi.fn(async () => { throw new Error('structured unavailable') })
+    const stream = vi.fn(async (_settings: unknown, _messages: unknown, onDelta: (content: string) => void) => {
+      onDelta('raw fallback')
+    })
+    const runtime = new ChatRuntime({
+      appendMessage: vi.fn(async (input: { requestId: string }) => ({ messageId: input.requestId })),
+      getContext: vi.fn(async () => ({ messages: [{ role: 'user' as const, content: 'check' }], hasImages: false, availableHostnames: [] })),
+      resolveModel: vi.fn(async () => ({ provider: 'ollama' as const, endpoint: 'http://model', model: 'm', contextLimit: 100, apiKey: null })),
+      runStructured,
+      stream,
+    })
+
+    await runtime.send({ chatId: 'c1', runId: '80808080-8080-4808-8808-808080808080', content: 'check' }, event => events.push(event))
+
+    expect(runStructured).toHaveBeenCalledTimes(1)
+    expect(stream).not.toHaveBeenCalled()
+    expect(events.some(event => event.kind === 'chat:delta')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: 'chat:error', retryable: true })
+  })
 })
 
 async function settlesWithin<T>(promise: Promise<T>, timeoutMs = 100): Promise<T> {

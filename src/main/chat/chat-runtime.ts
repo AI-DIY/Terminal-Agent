@@ -121,19 +121,12 @@ export class ChatRuntime {
       }
       const timeout = setTimeout(() => { timedOut = true; controller.abort() }, this.deps.timeoutMs ?? 120_000)
       try {
-        const providerStream = this.deps.runStructured && settings.provider !== 'ollama'
+        const providerStream = this.deps.runStructured
           ? (publishProgress('thinking'), this.deps.runStructured(settings, {
             messages: context,
             availableHostnames: structuredContext?.availableHostnames ?? [],
             ...(structuredContext?.availableShells ? { availableShells: structuredContext.availableShells } : {}),
-          }, controller.signal, publishProgress)).then(result => { publishProgress('observing'); materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) }).catch(async error => {
-            if (controller.signal.aborted) throw error
-            await this.deps.stream(settings, context, delta => {
-              if (!isLiveOwner()) return
-              output += delta
-              publish({ kind: 'chat:delta', chatId: request.chatId, runId: request.runId, messageId, content: delta })
-            }, undefined, controller.signal)
-          })
+          }, controller.signal, publishProgress)).then(result => { publishProgress('observing'); materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) })
           : Promise.resolve().then(() => this.deps.stream(settings, context, delta => {
           if (!isLiveOwner()) return
           output += delta

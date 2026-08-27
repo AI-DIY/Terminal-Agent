@@ -44,6 +44,7 @@ const savedProfiles = ref<Awaited<ReturnType<typeof window.terminalAgent.session
 const chatStore = createChatWorkspacesStore(window.terminalAgent.chats)
 const shellHistory = createShellHistoryStore(window.terminalAgent.shellHistory)
 const layoutPreferences = getLayoutPreferencesStore()
+const workbenchReady = ref(false)
 type ShellViewSnapshot = { visibleSessionIds: string[]; activeSessionId: string | null }
 const shellViews = new Map<string, ShellViewSnapshot>()
 const bindingSessions = new Map<string, Promise<ChatWorkspace>>()
@@ -636,25 +637,29 @@ async function openNodeInspector(): Promise<void> {
 }
 
 async function initializeWorkbench(): Promise<void> {
-  const failures = await initializeWorkbenchTask({
-    load: () => chatStore.load(),
-    restore: async () => {
-      const selected = chatStore.state.selected
-      if (selected) restoreAssociatedShellView(selected)
-      const existingSessions = await window.terminalAgent.sessions.list()
-      return restoreWorkbenchSessionOwnership({
-        sessions: existingSessions,
-        add: session => addSession(session, false),
-        resolve: session => chatStore.resolveSession(session.id),
-        restore: restoreAssociatedShellView,
-        bind: (session, activate) => attachSession(session, activate),
-      })
-    },
-    create: () => createChat(false),
-  })
-  restoreSelectedShellView()
-  await refreshHistoryPlayback()
-  if (failures.length > 0) connectionError.value = `有 ${failures.length} 个终端会话无法恢复聊天归属。`
+  try {
+    const failures = await initializeWorkbenchTask({
+      load: () => chatStore.load(),
+      restore: async () => {
+        const selected = chatStore.state.selected
+        if (selected) restoreAssociatedShellView(selected)
+        const existingSessions = await window.terminalAgent.sessions.list()
+        return restoreWorkbenchSessionOwnership({
+          sessions: existingSessions,
+          add: session => addSession(session, false),
+          resolve: session => chatStore.resolveSession(session.id),
+          restore: restoreAssociatedShellView,
+          bind: (session, activate) => attachSession(session, activate),
+        })
+      },
+      create: () => createChat(false),
+    })
+    restoreSelectedShellView()
+    await refreshHistoryPlayback()
+    if (failures.length > 0) connectionError.value = `有 ${failures.length} 个终端会话无法恢复聊天归属。`
+  } finally {
+    workbenchReady.value = true
+  }
 }
 
 function restoreAssociatedShellView(workspace: ChatWorkspace): void {
@@ -766,6 +771,7 @@ onBeforeUnmount(() => {
 
 <template>
   <WorkbenchShell
+    :data-workbench-ready="workbenchReady ? 'true' : 'false'"
     :modal-open="showConnection || showSavedSessions || showHistoryDialog || pendingHostMemoryDisclosure !== null"
     :current-chat-title="chatStore.state.selected?.title ?? '未选择任务'"
     :current-chat-shell-count="chatStore.state.selected?.shellCount ?? 0"

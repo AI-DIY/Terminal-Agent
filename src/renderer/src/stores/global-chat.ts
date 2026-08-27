@@ -86,6 +86,14 @@ export function createGlobalChatStore(api: Api) {
     state.errors[event.chatId] = event.error
     state.retryableErrors[event.chatId] = event.retryable
     state.activeMessageIds[event.chatId] = event.messageId
+    const message = list.find(item => item.id === event.messageId)
+    if (message) {
+      message.content = event.error
+      message.state = 'error'
+      message.retryable = event.retryable
+    } else {
+      list.push({ id: event.messageId, role: 'assistant', content: event.error, state: 'error', retryable: event.retryable })
+    }
     cancelledRuns.delete(event.chatId)
   }
 
