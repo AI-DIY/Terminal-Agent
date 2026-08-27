@@ -1,3 +1,15 @@
+# Terminal-Agent v1.0.13
+
+Release date: 2026-08-27
+
+## 安装版依赖修复
+
+- 修复 Windows 安装版启动时缺少 `@langchain/core/singletons` 的问题：将 LangGraph 的非可选 peer 依赖 `@langchain/core` 显式纳入生产依赖。
+- 打包完成后自动检查 `app.asar` 中的全部直接生产依赖，以及 LangChain 的 `singletons` 运行时入口；任何缺失都会阻止发布集成校验继续执行。
+- 新安装包为 `Terminal-Agent-Setup-1.0.13.exe`，并随附匹配的 `putty.exe`、自动更新元数据和卸载清理 ZIP。
+
+---
+
 # Terminal-Agent v1.0.11
 
 Release date: 2026-08-25

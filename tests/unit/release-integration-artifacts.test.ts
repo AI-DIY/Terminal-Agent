@@ -8,6 +8,7 @@ type ReleaseArtifactInspection = {
   runtimePath: string
   bridgePath: string
   missingPaths: readonly string[]
+  missingRuntimeDependencies?: readonly string[]
 }
 
 type ReleaseArtifactGuard = {
@@ -15,6 +16,8 @@ type ReleaseArtifactGuard = {
     projectRoot: string
     platform?: NodeJS.Platform
     existsSync?: (path: string) => boolean
+    listPackage?: (path: string) => string[]
+    packageDependencies?: Record<string, string>
   }): ReleaseArtifactInspection
   formatReleaseIntegrationArtifactDiagnostic(inspection: ReleaseArtifactInspection): string
 }
@@ -95,5 +98,36 @@ describe('release integration artifact guard', () => {
     expect(inspection.skipped).toBe(true)
     expect(inspection.missingPaths).toEqual([])
     expect(fileChecks).toBe(0)
+  })
+
+  it('拒绝缺少生产依赖或 LangChain 运行时入口的 app.asar', () => {
+    const projectRoot = 'project'
+    const runtimePath = join(projectRoot, 'release', 'win-unpacked', 'Terminal-Agent-runtime.exe')
+    const bridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const asarPath = join(projectRoot, 'release', 'win-unpacked', 'resources', 'app.asar')
+    const guard = releaseArtifactGuard()
+    const inspection = guard.inspectReleaseIntegrationArtifacts({
+      projectRoot,
+      platform: 'win32',
+      existsSync: path => [runtimePath, bridgePath, asarPath].includes(path),
+      listPackage: () => [
+        '\\node_modules\\@langchain\\langgraph\\package.json',
+      ],
+      packageDependencies: {
+        '@langchain/core': '^1.2.9',
+        '@langchain/langgraph': '^1.4.12',
+        zod: '^4.4.3',
+      },
+    })
+    const diagnostic = guard.formatReleaseIntegrationArtifactDiagnostic(inspection)
+
+    expect(inspection.ready).toBe(false)
+    expect(inspection.missingRuntimeDependencies).toEqual([
+      '@langchain/core/package.json',
+      'zod/package.json',
+      '@langchain/core/singletons.cjs',
+      '@langchain/core/dist/singletons/index.cjs',
+    ])
+    expect(diagnostic).toContain('@langchain/core/singletons.cjs')
   })
 })

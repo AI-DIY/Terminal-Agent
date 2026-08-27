@@ -1,4 +1,4 @@
-# Terminal-Agent 1.0.12 发布说明
+# Terminal-Agent 1.0.13 发布说明
 
 ## 发布内容
 
@@ -6,14 +6,14 @@
 
 Windows 发布包应包含以下文件：
 
-- `Terminal-Agent-Setup-1.0.12.exe`：Windows x64 安装包。
+- `Terminal-Agent-Setup-1.0.13.exe`：Windows x64 安装包。
 - `putty.exe`：提供给 Assess/Access Client 或堡垒机映射的单文件桥接程序。
-- `Terminal-Agent-Uninstall-Cleanup-1.0.12.zip`：仅清理“已安装的应用”中的旧卸载条目，不会卸载程序或删除用户数据。
-- `Terminal-Agent-Setup-1.0.12.exe.blockmap` 和 `latest.yml`：用于 Electron 自动更新。
+- `Terminal-Agent-Uninstall-Cleanup-1.0.13.zip`：仅清理“已安装的应用”中的旧卸载条目，不会卸载程序或删除用户数据。
+- `Terminal-Agent-Setup-1.0.13.exe.blockmap` 和 `latest.yml`：用于 Electron 自动更新。
 
 ## 安装 Terminal-Agent
 
-1. 在 Windows x64 计算机上运行 `Terminal-Agent-Setup-1.0.12.exe`。
+1. 在 Windows x64 计算机上运行 `Terminal-Agent-Setup-1.0.13.exe`。
 2. 按安装向导选择安装目录并完成安装。安装程序需要写入当前用户的 Terminal-Agent 运行时登记信息，便于桥接程序定位运行时。
 3. 安装完成后手动启动一次 Terminal-Agent，确认主窗口能够打开，然后再配置堡垒机客户端。
 4. 若此前安装过旧版本，直接运行新安装包即可覆盖升级；不要把新旧版本的 `resources` 或运行时目录混合复制。
@@ -71,4 +71,3 @@ AI 可以根据文字和图片上下文生成候选命令或 Shell 整组计划�
 - 升级前保留旧版安装包和旧版 `putty.exe` 备份。
 - 若堡垒机跳转异常，先恢复旧 `putty.exe` 验证是否为桥接版本问题，再检查 `putty-bridge.log`。
 - 回滚应用版本时，应将安装运行时和 Assess/Access Client 映射的桥接程序一起回滚，避免两者参数协议不一致。
-
