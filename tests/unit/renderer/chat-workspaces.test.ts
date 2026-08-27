@@ -135,7 +135,7 @@ describe('chat workspaces store', () => {
     expect(workbenchOpenedAttachmentTarget('stored-owner', 'captured-task', 'newly-selected-task')).toBe('stored-owner')
   })
 
-  it('loads and restores existing ownership before selecting a fresh startup task', async () => {
+  it('creates and selects a fresh startup task before restoring existing ownership', async () => {
     const { initializeWorkbenchTask } = await import('../../../src/renderer/src/stores/chat-workspaces')
     const calls: string[] = []
 
@@ -145,7 +145,7 @@ describe('chat workspaces store', () => {
       create: async () => { calls.push('create'); return true },
     })
 
-    expect(calls).toEqual(['load', 'restore', 'create'])
+    expect(calls).toEqual(['load', 'create', 'restore'])
     expect(result).toEqual(['persisted-owner'])
   })
 

@@ -108,9 +108,8 @@ export async function initializeWorkbenchTask<TResult>(options: {
   create(): Promise<unknown>
 }): Promise<TResult> {
   await options.load()
-  const restored = await options.restore()
   await options.create()
-  return restored
+  return options.restore()
 }
 
 export function createWorkbenchOperationGate() {
