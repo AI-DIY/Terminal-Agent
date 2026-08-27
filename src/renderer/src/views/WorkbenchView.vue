@@ -21,7 +21,7 @@ import { reconcileVisiblePanes, selectVisiblePane } from '../stores/visible-pane
 import { getLayoutPreferencesStore, shellGridStyle } from '../stores/layout-preferences'
 import { createShellHistoryStore, filterHistoryByHosts, latestHistoryByHost, readOnlyHistoryTerminal, reconcileHistoryHostSelection, toggleHistoryHostSelection } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
-import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchOpenedAttachmentTarget, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
+import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchOpenedSessionEvent, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 
 const emit = defineEmits<{ showSettings: [] }>()
 const store = createSessionsStore()
@@ -715,14 +715,12 @@ onMounted(() => {
       return
     }
     const visibleLiveChatId = isLiveChat.value ? chatStore.state.selectedId : null
-    const observed = sessionOwnership.observe(session)
-    if (observed.pending && !session.chatId) return
-    const capturedTargetChatId = workbenchOpenedAttachmentTarget(session.chatId, observed.targetChatId ?? null, visibleLiveChatId)
+    const capturedTargetChatId = visibleLiveChatId
     const shouldPromoteFallback = visibleLiveChatId === null && chatStore.state.liveChatId === null
     const isCurrent = () => capturedTargetChatId !== null
       ? chatStore.state.selectedId === capturedTargetChatId
       : chatStore.state.liveChatId === null
-    void attachSession(session, shouldPromoteFallback, isCurrent, capturedTargetChatId ?? undefined).catch(error => {
+    void runWorkbenchOpenedSessionEvent({ tracker: sessionOwnership, session, currentChatId: capturedTargetChatId, attach: (opened, target) => attachSession(opened as Omit<SessionView, 'buffer'>, shouldPromoteFallback, isCurrent, target ?? undefined) }).catch(error => {
       if (isCurrent()) connectionError.value = error instanceof Error ? error.message : '无法关联终端会话。'
     })
   })

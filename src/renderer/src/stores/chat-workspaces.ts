@@ -81,6 +81,19 @@ export function createWorkbenchSessionOwnershipTracker<TSession extends { id: st
   }
 }
 
+export async function runWorkbenchOpenedSessionEvent<TSession extends { id: string; chatId?: string }>(options: {
+  tracker: ReturnType<typeof createWorkbenchSessionOwnershipTracker<TSession>>
+  session: TSession
+  currentChatId: string | null
+  attach(session: TSession, targetChatId: string | null): Promise<void>
+}): Promise<boolean> {
+  const observed = options.tracker.observe(options.session)
+  if (observed.pending && !options.session.chatId) return false
+  const target = workbenchOpenedAttachmentTarget(options.session.chatId, observed.targetChatId ?? null, options.currentChatId)
+  await options.attach(options.session, target)
+  return true
+}
+
 export async function initializeWorkbenchTask<TResult>(options: {
   load(): Promise<void>
   restore(): Promise<TResult>

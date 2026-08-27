@@ -93,6 +93,21 @@ describe('chat workspaces store', () => {
     expect(selected).toBe('third-task')
   })
 
+  it('runs the opened-event decision path and keeps the captured owner after selection changes', async () => {
+    const { createWorkbenchSessionOwnershipTracker, runWorkbenchOpenedSessionEvent } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const tracker = createWorkbenchSessionOwnershipTracker<{ id: string; chatId?: string }>()
+    const operation = tracker.begin('captured-task')
+    const early = { id: 'session-opened' }
+    expect(await runWorkbenchOpenedSessionEvent({ tracker, session: early, currentChatId: 'captured-task', attach: async () => undefined })).toBe(false)
+    const resolved = tracker.resolve(operation, early)
+    let selected = 'other-task'
+    const attached: string[] = []
+    await runWorkbenchOpenedSessionEvent({ tracker, session: early, currentChatId: selected, attach: async (_session, target) => { attached.push(target!) } })
+    selected = 'third-task'
+    expect(resolved.targetChatId).toBe('captured-task')
+    expect(attached).toEqual(['captured-task'])
+  })
+
   it('targets the selected history task when opening a new Shell', async () => {
     const { workbenchSessionAttachmentTarget, workbenchReconnectAttachmentTarget, workbenchOpenedAttachmentTarget } = await import('../../../src/renderer/src/stores/chat-workspaces')
 
@@ -1332,7 +1347,7 @@ describe('durable chat workbench components', () => {
     expect(attachSession).toContain('(activate || !chatStore.state.selectedId) && isCurrent()')
     expect(openedHandler).toContain('const visibleLiveChatId = isLiveChat.value ? chatStore.state.selectedId : null')
     expect(openedHandler).toContain('chatStore.state.selectedId === capturedTargetChatId')
-    expect(openedHandler).toContain('void attachSession(session, shouldPromoteFallback, isCurrent, capturedTargetChatId ?? undefined).catch')
+    expect(openedHandler).toContain('runWorkbenchOpenedSessionEvent({ tracker: sessionOwnership')
   })
 
   it('captures direct and bastion attachment targets before asynchronous open completes', () => {
