@@ -30,7 +30,7 @@ Terminal-Agent 是面向日常运维与企业堡垒机场景的 Windows SSH 工�
 
 ### 1. 安装 Terminal-Agent
 
-在 Windows 环境完成 `npm run make:win` 打包或发布 `v1.0.11` 后，可使用生成的 `Terminal-Agent-Setup-1.0.11.exe` 安装包；发布后也可从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 获取。安装完成后，先启动一次 Terminal-Agent。
+在 Windows 环境完成 `npm run make:win` 打包或发布 `v1.0.12` 后，可使用生成的 `Terminal-Agent-Setup-1.0.12.exe` 安装包；发布后也可从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 获取。安装完成后，先启动一次 Terminal-Agent。完整的安装、`putty.exe` 替换和堡垒机跳转步骤见 [v1.0.12 发布说明](docs/Terminal-Agent-1.0.12-发布说明.md)。
 
 工作台内选择“新建 SSH 连接”，可使用以下入口：
 
@@ -130,9 +130,9 @@ Assess/Access Client / 堡垒机
 
 | 文件 | 用途 |
 | --- | --- |
-| `Terminal-Agent-Setup-1.0.11.exe` | Windows x64 安装包。 |
+| `Terminal-Agent-Setup-1.0.12.exe` | Windows x64 安装包。 |
 | `putty.exe` | 提供给 Assess/Access Client 或堡垒机映射的单文件桥接程序。 |
-| `Terminal-Agent-Uninstall-Cleanup-1.0.11.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
+| `Terminal-Agent-Uninstall-Cleanup-1.0.12.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
 | `latest.yml` 与 `.blockmap` | 更新元数据；部署自动更新时使用。 |
 
 生成清理工具后，解压 ZIP 并以管理员权限运行 `清理 Terminal-Agent 卸载残留.cmd`。工具会先列出匹配项，并要求明确输入 `Y`；删除前会导出相应的 `.reg` 备份。
