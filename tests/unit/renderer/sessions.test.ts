@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSessionsStore, MAX_SESSION_BUFFER_CHARS, sessionLabel } from '../../../src/renderer/src/stores/sessions'
+import { createSessionsStore, MAX_SESSION_BUFFER_CHARS, sessionDisplayLabel, sessionLabel } from '../../../src/renderer/src/stores/sessions'
 
 describe('sessions store', () => {
   it('keeps terminal data isolated by session id', () => {
@@ -46,5 +46,22 @@ describe('sessions store', () => {
     expect(sessionLabel({
       id: 'c', hostname: '127.0.0.1', mode: 'copilot', buffer: '',
     })).toBe('127.0.0.1')
+  })
+
+  it('preserves the existing display label when it occurs once', () => {
+    const session = { id: 'a', hostname: '10.0.0.12', title: '生产终端', mode: 'copilot' as const, buffer: '' }
+
+    expect(sessionDisplayLabel(session, [session])).toBe('生产终端')
+  })
+
+  it('adds stable connection-order ordinals to duplicate display labels', () => {
+    const first = { id: 'a', hostname: '10.0.0.12', title: '生产终端', mode: 'copilot' as const, buffer: '' }
+    const second = { id: 'b', hostname: '10.0.0.13', title: '生产终端', mode: 'copilot' as const, buffer: '' }
+    const distinct = { id: 'c', hostname: '10.0.0.14', title: '审计终端', mode: 'copilot' as const, buffer: '' }
+    const ordered = [first, second, distinct]
+
+    expect(sessionDisplayLabel(first, ordered)).toBe('生产终端 #1')
+    expect(sessionDisplayLabel(second, ordered)).toBe('生产终端 #2')
+    expect(sessionDisplayLabel(distinct, ordered)).toBe('审计终端')
   })
 })

@@ -61,7 +61,7 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(titleRule).not.toContain('align-items: baseline;')
   })
 
-  it('keeps upgrade control in the AI workspace and removes save and upgrade controls from Shell workspace', () => {
+  it('removes autonomous upgrade controls from the workbench while preserving compatibility modules', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const chat = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
@@ -70,8 +70,11 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(canvas).not.toContain('升级为全自动驾驶')
     expect(chat).toContain('AI工作区')
     expect(chat).toContain('辅助驾驶')
-    expect(chat).toContain('全自动驾驶')
-    expect(chat).toContain("emit('upgrade')")
-    expect(view).toContain('@upgrade="requestAutonomousUpgrade"')
+    expect(view).not.toContain('createAutonomousUpgradeStore')
+    expect(view).not.toContain('requestAutonomousUpgrade')
+    expect(view).not.toContain('confirmAutonomousUpgrade')
+    expect(view).not.toContain(':can-upgrade=')
+    expect(view).not.toContain('@upgrade=')
+    expect(view).not.toContain('autonomous-upgrade-dialog')
   })
 })

@@ -19,10 +19,9 @@ import { createFrameBatcher } from '../stores/data-batcher'
 import { createSessionsStore, type SessionView } from '../stores/sessions'
 import { reconcileVisiblePanes, selectVisiblePane } from '../stores/visible-panes'
 import { getLayoutPreferencesStore, shellGridStyle } from '../stores/layout-preferences'
-import { createAutonomousUpgradeStore } from '../stores/autonomous-upgrade'
 import { createShellHistoryStore, filterHistoryByHosts, latestHistoryByHost, readOnlyHistoryTerminal, reconcileHistoryHostSelection, toggleHistoryHostSelection } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
-import { createChatWorkspacesStore, createWorkbenchOperationGate, ensureWorkbenchShellView, focusOwnedWorkbenchSession, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect } from '../stores/chat-workspaces'
+import { createChatWorkspacesStore, createWorkbenchOperationGate, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 
 const emit = defineEmits<{ showSettings: [] }>()
 const store = createSessionsStore()
@@ -42,7 +41,6 @@ const bastionError = ref('')
 const openedCmdbHostIds = ref<Set<string>>(new Set())
 const cmdbSessionHostIds = new Map<string, string>()
 const savedProfiles = ref<Awaited<ReturnType<typeof window.terminalAgent.sessions.listProfiles>>>([])
-const autonomousUpgrade = createAutonomousUpgradeStore()
 const chatStore = createChatWorkspacesStore(window.terminalAgent.chats)
 const shellHistory = createShellHistoryStore(window.terminalAgent.shellHistory)
 const layoutPreferences = getLayoutPreferencesStore()
@@ -54,7 +52,7 @@ const isLiveChat = computed(() => isInteractiveWorkbenchWorkspace(
   chatStore.state.liveChatId,
 ))
 const activeWorkbenchChatId = computed(() => (
-  isLiveChat.value ? chatStore.state.selectedId : chatStore.state.liveChatId
+  workbenchSessionAttachmentTarget(chatStore.state.selectedId, chatStore.state.liveChatId)
 ))
 const currentChatSessionIds = computed(() => new Set(
   isLiveChat.value
@@ -62,7 +60,6 @@ const currentChatSessionIds = computed(() => new Set(
     : [],
 ))
 const currentChatSessions = computed(() => sessions.value.filter(session => currentChatSessionIds.value.has(session.id)))
-const activeSession = computed(() => isLiveChat.value && activeSessionId.value ? currentChatSessions.value.find(session => session.id === activeSessionId.value) ?? null : null)
 const historyHosts = computed(() => latestHistoryByHost(shellHistory.state.records))
 const selectedHistoryHosts = ref<string[]>([])
 const historyPlaybackRecords = computed(() => filterHistoryByHosts(historyHosts.value, selectedHistoryHosts.value, layoutPreferences.state.visibleCount))
@@ -601,34 +598,11 @@ async function deleteSavedProfile(id: string): Promise<void> {
   }
 }
 
-function requestAutonomousUpgrade(): void {
-  if (!activeSession.value) return
-  autonomousUpgrade.request(activeSession.value.id)
-}
-
-async function confirmAutonomousUpgrade(): Promise<void> {
-  const sessionId = autonomousUpgrade.confirm()
-  if (!sessionId) return
-  try {
-    const result = await window.terminalAgent.sessionModes.upgrade(sessionId)
-    const session = sessions.value.find(item => item.id === sessionId)
-    if (session) addSession({ ...session, mode: result.mode }, false)
-    const chatId = chatStore.state.selectedId
-    if (chatId) {
-      const snapshot = await window.terminalAgent.chats.setMode({ requestId: crypto.randomUUID(), chatId, mode: result.mode })
-      chatStore.merge(snapshot)
-    }
-  } catch (error) {
-    connectionError.value = error instanceof Error ? error.message : '无法升级当前会话。'
-  }
-}
-
 function onWindowKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
   if (showConnection.value) closeConnectionDialog()
   else if (showSavedSessions.value) closeSavedSessionsDialog()
   else if (showHistoryDialog.value) closeShellHistory()
-  else if (autonomousUpgrade.state.visible) autonomousUpgrade.cancel()
 }
 
 async function openRendererDevTools(): Promise<void> {
@@ -650,16 +624,21 @@ async function openNodeInspector(): Promise<void> {
 }
 
 async function initializeWorkbench(): Promise<void> {
-  await chatStore.load()
-  const selected = chatStore.state.selected
-  if (selected) restoreAssociatedShellView(selected)
-  const existingSessions = await window.terminalAgent.sessions.list()
-  const failures = await restoreWorkbenchSessionOwnership({
-    sessions: existingSessions,
-    add: session => addSession(session, false),
-    resolve: session => chatStore.resolveSession(session.id),
-    restore: restoreAssociatedShellView,
-    bind: (session, activate) => attachSession(session, activate),
+  const failures = await initializeWorkbenchTask({
+    load: () => chatStore.load(),
+    restore: async () => {
+      const selected = chatStore.state.selected
+      if (selected) restoreAssociatedShellView(selected)
+      const existingSessions = await window.terminalAgent.sessions.list()
+      return restoreWorkbenchSessionOwnership({
+        sessions: existingSessions,
+        add: session => addSession(session, false),
+        resolve: session => chatStore.resolveSession(session.id),
+        restore: restoreAssociatedShellView,
+        bind: (session, activate) => attachSession(session, activate),
+      })
+    },
+    create: () => createChat(false),
   })
   restoreSelectedShellView()
   await refreshHistoryPlayback()
@@ -773,7 +752,7 @@ onBeforeUnmount(() => {
 
 <template>
   <WorkbenchShell
-    :modal-open="showConnection || showSavedSessions || showHistoryDialog || autonomousUpgrade.state.visible || pendingHostMemoryDisclosure !== null"
+    :modal-open="showConnection || showSavedSessions || showHistoryDialog || pendingHostMemoryDisclosure !== null"
     :current-chat-title="chatStore.state.selected?.title ?? '未选择任务'"
     :current-chat-shell-count="chatStore.state.selected?.shellCount ?? 0"
   >
@@ -866,8 +845,6 @@ onBeforeUnmount(() => {
       <GlobalChatPanel
         :chat="chatStore.state.selected"
         :read-only="!isLiveChat"
-        :can-upgrade="activeSession?.mode === 'copilot'"
-        @upgrade="requestAutonomousUpgrade"
         @collapse="collapse"
       />
     </template>
@@ -912,18 +889,6 @@ onBeforeUnmount(() => {
         @reconnect="reconnectShell"
       />
       <HostMemoryConsentDialog v-if="pendingHostMemoryDisclosure" :host-identity="pendingHostMemoryDisclosure.hostIdentity" :submitting="hostMemorySubmitting" @close="dismissHostMemory" @acknowledge="acknowledgeHostMemory" />
-      <div v-if="autonomousUpgrade.state.visible" class="connection-modal" role="dialog" aria-modal="true" aria-labelledby="autonomous-upgrade-title">
-        <section class="autonomous-upgrade-dialog">
-          <h2 id="autonomous-upgrade-title">确认升级为全自动驾驶</h2>
-          <p>全自动驾驶允许 AI 自动发送候选命令到终端。</p>
-          <p>仅用于已验证的低风险维护或测试任务；不适用于未经确认的生产变更。</p>
-          <p>本次升权只对当前会话生效。</p>
-          <div class="autonomous-upgrade-actions">
-            <button type="button" class="cancel-button" @click="autonomousUpgrade.cancel">取消</button>
-            <button type="button" class="confirm-upgrade-button" @click="confirmAutonomousUpgrade">确认升级</button>
-          </div>
-        </section>
-      </div>
     </template>
   </WorkbenchShell>
 </template>
@@ -947,9 +912,4 @@ onBeforeUnmount(() => {
 .connection-error { max-width: min(42vw, 480px); margin: 0; overflow: hidden; color: var(--red); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .diagnostic-error { max-width: min(30vw, 320px); min-width: 0; margin: 0; overflow: hidden; color: var(--red); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .connection-modal { position: fixed; z-index: 10; inset: 57px 9px 9px; display: grid; align-content: center; justify-content: center; padding: 16px; overflow: auto; border-radius: 0 0 7px 7px; background: rgb(20 24 29 / 52%); backdrop-filter: blur(1px); }
-.autonomous-upgrade-dialog { display: grid; gap: 12px; width: min(460px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 18px 48px rgb(16 24 40 / 18%); }
-.autonomous-upgrade-dialog h2,.autonomous-upgrade-dialog p { margin: 0; }
-.autonomous-upgrade-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.cancel-button,.confirm-upgrade-button { min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); }
-.confirm-upgrade-button { border-color: var(--green); background: var(--green); color: #fff; }
 </style>

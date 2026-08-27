@@ -54,6 +54,27 @@ function api(chats: ChatSummary[], workspaces: ChatWorkspace[], revision = 4, li
 }
 
 describe('chat workspaces store', () => {
+  it('targets the selected history task when opening a new Shell', async () => {
+    const { workbenchSessionAttachmentTarget } = await import('../../../src/renderer/src/stores/chat-workspaces')
+
+    expect(workbenchSessionAttachmentTarget('selected-history', 'live-task')).toBe('selected-history')
+    expect(workbenchSessionAttachmentTarget(null, 'live-task')).toBe('live-task')
+  })
+
+  it('loads and restores existing ownership before selecting a fresh startup task', async () => {
+    const { initializeWorkbenchTask } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const calls: string[] = []
+
+    const result = await initializeWorkbenchTask({
+      load: async () => { calls.push('load') },
+      restore: async () => { calls.push('restore'); return ['persisted-owner'] },
+      create: async () => { calls.push('create'); return true },
+    })
+
+    expect(calls).toEqual(['load', 'restore', 'create'])
+    expect(result).toEqual(['persisted-owner'])
+  })
+
   it('keeps a fresh workbench interactive before its first chat is created', async () => {
     const { isInteractiveWorkbenchWorkspace } = await import('../../../src/renderer/src/stores/chat-workspaces')
 
@@ -1122,7 +1143,7 @@ describe('durable chat workbench components', () => {
 
     expect(view).toContain(':sessions="sessions"')
     expect(view).toContain(':current-sessions="currentChatSessions"')
-    expect(view).toContain('currentChatSessions.value.find(session => session.id === activeSessionId.value)')
+    expect(view).toContain('workbenchSessionAttachmentTarget(chatStore.state.selectedId, chatStore.state.liveChatId)')
     expect(view).toContain('if (!currentChatSessionIds.value.has(sessionId) || !store.byId(sessionId)) return')
     expect(view).toContain('const available = new Set(currentChatSessions.value.map(session => session.id))')
     expect(view).toContain('addSession(session, false)')
@@ -1268,6 +1289,16 @@ describe('durable chat workbench components', () => {
     expect(openedHandler).toContain('const visibleLiveChatId = isLiveChat.value ? chatStore.state.selectedId : null')
     expect(openedHandler).toContain('chatStore.state.selectedId === visibleLiveChatId')
     expect(openedHandler).toContain('void attachSession(session, shouldPromoteFallback, isCurrent).catch')
+  })
+
+  it('starts the workbench on a fresh task after restoring persisted Shell ownership', () => {
+    const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
+    const initialize = view.slice(view.indexOf('async function initializeWorkbench'), view.indexOf('function restoreAssociatedShellView'))
+
+    expect(initialize).toContain('initializeWorkbenchTask({')
+    expect(initialize).toContain('load: () => chatStore.load()')
+    expect(initialize).toContain('restore: async () =>')
+    expect(initialize).toContain('create: () => createChat(false)')
   })
 
   it('makes the left sidebar a task-only navigation surface with task actions', () => {

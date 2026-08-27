@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Circle, X } from '@lucide/vue'
-import { sessionLabel, type SessionView } from '../stores/sessions'
+import { sessionDisplayLabel, type SessionView } from '../stores/sessions'
 
 defineProps<{ sessions: SessionView[]; activeSessionId: string | null }>()
 const emit = defineEmits<{ select: [sessionId: string]; close: [sessionId: string] }>()
@@ -14,12 +14,12 @@ const emit = defineEmits<{ select: [sessionId: string]; close: [sessionId: strin
       class="session-tab"
       :class="{ active: session.id === activeSessionId }"
     >
-      <button type="button" class="select" :aria-label="`选择终端会话 ${sessionLabel(session)}`" :aria-current="session.id === activeSessionId ? 'page' : undefined" @click="emit('select', session.id)">
+      <button type="button" class="select" :aria-label="`选择终端会话 ${sessionDisplayLabel(session, sessions)}`" :aria-current="session.id === activeSessionId ? 'page' : undefined" @click="emit('select', session.id)">
         <Circle :size="7" :stroke-width="0" fill="currentColor" aria-hidden="true" />
-        <strong>{{ sessionLabel(session) }}</strong>
+        <strong>{{ sessionDisplayLabel(session, sessions) }}</strong>
         <small>已连接</small>
       </button>
-      <button type="button" class="close" :aria-label="`关闭终端会话 ${sessionLabel(session)}`" title="关闭 Shell" @click="emit('close', session.id)"><X :size="13" aria-hidden="true" /></button>
+      <button type="button" class="close" :aria-label="`关闭终端会话 ${sessionDisplayLabel(session, sessions)}`" title="关闭 Shell" @click="emit('close', session.id)"><X :size="13" aria-hidden="true" /></button>
     </div>
   </nav>
 </template>

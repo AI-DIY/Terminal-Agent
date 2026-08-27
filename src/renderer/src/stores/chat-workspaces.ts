@@ -27,6 +27,24 @@ export function isInteractiveWorkbenchWorkspace(
   )
 }
 
+export function workbenchSessionAttachmentTarget(
+  selectedChatId: string | null,
+  liveChatId: string | null,
+): string | null {
+  return selectedChatId ?? liveChatId
+}
+
+export async function initializeWorkbenchTask<TResult>(options: {
+  load(): Promise<void>
+  restore(): Promise<TResult>
+  create(): Promise<unknown>
+}): Promise<TResult> {
+  await options.load()
+  const restored = await options.restore()
+  await options.create()
+  return restored
+}
+
 export function createWorkbenchOperationGate() {
   let generation = 0
   return {

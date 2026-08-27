@@ -4,7 +4,7 @@ import { computed, ref, watch } from 'vue'
 import type { ShellHistorySummary } from '../../../../shared/contracts'
 import SessionTabs from '../SessionTabs.vue'
 import TerminalPane from '../TerminalPane.vue'
-import { sessionLabel, type SessionView } from '../../stores/sessions'
+import { sessionDisplayLabel, type SessionView } from '../../stores/sessions'
 import {
   createShellCanvasState,
   getLayoutPreferencesStore,
@@ -235,21 +235,21 @@ watch(
           @contextmenu.prevent="openTerminalMenu(session.id)"
         >
           <header>
-            <strong>{{ sessionLabel(session) }}</strong>
+            <strong>{{ sessionDisplayLabel(session, currentSessions) }}</strong>
             <span>已连接</span>
             <div class="terminal-actions">
-              <button type="button" :aria-label="`查看 Shell 历史 ${sessionLabel(session)}`" title="历史会话" @click="openSessionHistory(session)"><History :size="14" aria-hidden="true" /></button>
+              <button type="button" :aria-label="`查看 Shell 历史 ${sessionDisplayLabel(session, currentSessions)}`" title="历史会话" @click="openSessionHistory(session)"><History :size="14" aria-hidden="true" /></button>
               <button
                 type="button"
-                :aria-label="`${canvas.maximizedSessionId.value === session.id ? '还原' : '最大化'}终端会话 ${sessionLabel(session)}`"
+                :aria-label="`${canvas.maximizedSessionId.value === session.id ? '还原' : '最大化'}终端会话 ${sessionDisplayLabel(session, currentSessions)}`"
                 :title="canvas.maximizedSessionId.value === session.id ? '还原' : '最大化'"
                 @click="toggleMaximize(session.id)"
               ><Minimize2 v-if="canvas.maximizedSessionId.value === session.id" :size="14" aria-hidden="true" /><Maximize2 v-else :size="14" aria-hidden="true" /></button>
-              <button type="button" :aria-label="`终端操作 ${sessionLabel(session)}`" title="终端操作" @click="openTerminalMenu(session.id)"><MoreHorizontal :size="15" aria-hidden="true" /></button>
-              <button type="button" :aria-label="`关闭画布终端会话 ${sessionLabel(session)}`" title="关闭 Shell" class="close-terminal" @click="closeSession(session.id)"><X :size="15" aria-hidden="true" /></button>
+              <button type="button" :aria-label="`终端操作 ${sessionDisplayLabel(session, currentSessions)}`" title="终端操作" @click="openTerminalMenu(session.id)"><MoreHorizontal :size="15" aria-hidden="true" /></button>
+              <button type="button" :aria-label="`关闭画布终端会话 ${sessionDisplayLabel(session, currentSessions)}`" title="关闭 Shell" class="close-terminal" @click="closeSession(session.id)"><X :size="15" aria-hidden="true" /></button>
             </div>
           </header>
-          <section v-if="menuSessionId === session.id" class="terminal-context-menu" role="menu" :aria-label="`终端操作 ${sessionLabel(session)}`">
+          <section v-if="menuSessionId === session.id" class="terminal-context-menu" role="menu" :aria-label="`终端操作 ${sessionDisplayLabel(session, currentSessions)}`">
             <button type="button" role="menuitem" @click="duplicateSession(session.id)">复制 SSH 通道</button>
             <button type="button" role="menuitem" disabled title="仅已关闭且仍保留安全连接描述的 Shell 可以重新连接">重新连接</button>
             <button type="button" role="menuitem" @click="openSessionHistory(session)">查看 Shell 历史</button>
