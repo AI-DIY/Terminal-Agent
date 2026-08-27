@@ -236,7 +236,11 @@ export const chatRunRequestSchema = z.object({
 }).strict()
 export type ChatRunRequest = z.infer<typeof chatRunRequestSchema>
 
+export const chatProgressStageSchema = z.enum(['thinking', 'executing', 'observing', 'repairing'])
+export type ChatProgressStage = z.infer<typeof chatProgressStageSchema>
+
 export const chatRuntimeEventSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('chat:progress'), chatId: chatIdentifierSchema, runId: z.string().uuid(), stage: chatProgressStageSchema }).strict(),
   z.object({ kind: z.literal('chat:delta'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, content: z.string().max(100_000) }).strict(),
   z.object({ kind: z.literal('chat:completed'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, content: z.string().max(1_000_000), executionPlan: chatExecutionPlanSchema.optional() }).strict(),
   z.object({ kind: z.literal('chat:error'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, error: z.string().max(4_000), retryable: z.boolean() }).strict(),

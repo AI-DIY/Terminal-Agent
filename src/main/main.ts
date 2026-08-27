@@ -145,7 +145,7 @@ const chatRuntime = new ChatRuntime({
     const profile = await modelProfiles.resolveRoute({ hasImages })
     return { ...profile, contextLimit: profile.contextLimit ?? 1_024 }
   },
-  runStructured: (settings, input, signal) => structuredAgent.run(input, signal),
+  runStructured: (settings, input, signal, onStage) => structuredAgent.run(input, signal, onStage),
   materializePlan: plan => executionPlans.materialize(plan),
   stream: (settings, messages, onDelta, format, signal) => chatCompletions.stream(settings, messages, onDelta, format, signal),
 })

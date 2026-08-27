@@ -4,13 +4,15 @@ import type { ProviderModelSettings } from '../model/model-provider-router'
 import type { ChatMessageContent } from '../../shared/chat-content'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
 import type { StructuredChatRequest } from './structured-chat-agent'
+import type { ChatProgressStage } from '../../shared/contracts'
 import { estimateChatMessages } from './token-estimator'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export type ChatRuntimeRequest = { chatId: string; runId: string; content: ChatMessageContent; retry?: boolean }
 export type ChatRuntimeEvent =
+  | { kind: 'chat:progress'; chatId: string; runId: string; stage: ChatProgressStage }
   | { kind: 'chat:delta'; chatId: string; runId: string; messageId: string; content: string }
-  | { kind: 'chat:completed'; chatId: string; runId: string; messageId: string; content: string }
+  | { kind: 'chat:completed'; chatId: string; runId: string; messageId: string; content: string; executionPlan?: import('../../shared/chat-plan').ChatExecutionPlan }
   | { kind: 'chat:error'; chatId: string; runId: string; messageId: string; error: string; retryable: boolean }
 
 type RuntimeDeps = {
@@ -19,7 +21,7 @@ type RuntimeDeps = {
   getRetryMessageId?(chatId: string, content: any): Promise<string | undefined>
   getContext(chatId: string): Promise<ChatMessage[] | { messages: ChatMessage[]; hasImages: boolean; availableHostnames: string[] }>
   resolveModel(input?: { hasImages: boolean }): Promise<ProviderModelSettings>
-  runStructured?(settings: ProviderModelSettings, input: StructuredChatRequest, signal: AbortSignal): Promise<AssistantPlanOutput>
+  runStructured?(settings: ProviderModelSettings, input: StructuredChatRequest, signal: AbortSignal, onStage?: (stage: ChatProgressStage) => void): Promise<AssistantPlanOutput>
   materializePlan?(plan: NonNullable<AssistantPlanOutput['plan']>): import('../../shared/chat-plan').ChatExecutionPlan
   stream(settings: ProviderModelSettings, messages: ChatMessage[], onDelta: (content: string) => void, responseFormat?: ChatCompletionResponseFormat, signal?: AbortSignal): Promise<void>
   timeoutMs?: number
@@ -58,6 +60,9 @@ export class ChatRuntime {
       return current?.controller === controller && current.generation === generation
     }
     const isLiveOwner = () => isOwner() && !controller.signal.aborted
+    const publishProgress = (stage: ChatProgressStage): void => {
+      if (isLiveOwner()) publish({ kind: 'chat:progress', chatId: request.chatId, runId: request.runId, stage })
+    }
     const trackAssistantWrite = <T>(operation: Promise<T>): Promise<T> => {
       return this.trackAssistantWrite(run, operation)
     }
@@ -117,10 +122,10 @@ export class ChatRuntime {
       const timeout = setTimeout(() => { timedOut = true; controller.abort() }, this.deps.timeoutMs ?? 120_000)
       try {
         const providerStream = this.deps.runStructured && settings.provider !== 'ollama'
-          ? this.deps.runStructured(settings, {
+          ? (publishProgress('thinking'), this.deps.runStructured(settings, {
             messages: context,
             availableHostnames: structuredContext?.availableHostnames ?? [],
-          }, controller.signal).then(result => { materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) }).catch(async error => {
+          }, controller.signal, publishProgress)).then(result => { publishProgress('observing'); materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) }).catch(async error => {
             if (controller.signal.aborted) throw error
             await this.deps.stream(settings, context, delta => {
               if (!isLiveOwner()) return
@@ -167,7 +172,7 @@ export class ChatRuntime {
         await finalizeCancellationIfNeeded()
         return
       }
-      publish({ kind: 'chat:completed', chatId: request.chatId, runId: request.runId, messageId, content: output })
+      publish({ kind: 'chat:completed', chatId: request.chatId, runId: request.runId, messageId, content: output, ...(materializedPlan ? { executionPlan: materializedPlan } : {}) })
     } catch (error) {
       if (!isOwner()) return
       if (controller.signal.aborted) {

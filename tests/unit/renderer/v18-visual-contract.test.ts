@@ -20,8 +20,13 @@ describe('V18 production visual contract', () => {
     expect(sessionTabs).not.toContain('辅助驾驶')
     expect(sessionTabs).not.toContain('全自动驾驶')
     expect(chat).toContain('AI工作区')
-    expect(chat).toContain('辅助驾驶')
-    expect(chat).toContain('全自动驾驶')
+    expect(chat).not.toContain('辅助驾驶')
+    expect(chat).not.toContain('全自动驾驶')
+    expect(chat).not.toContain('type="file"')
+    expect(chat).not.toContain('添加图片')
+    expect(chat).not.toContain('重试')
+    expect(chat).toContain('确认并执行')
+    expect(chat).toContain('待确认')
   })
 
   it('uses the approved desktop frame and settings information architecture', () => {

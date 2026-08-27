@@ -1,5 +1,6 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
+import type { ChatProgressStage } from '../../shared/contracts'
 import { assistantPlanOutputSchema, parseAssistantPlanOutput } from '../../shared/chat-plan'
 import type { ChatMessage, ChatCompletionResponseFormat } from '../model/chat-completions-client'
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -12,6 +13,7 @@ export type StructuredChatRequest = {
 export type StructuredChatAgentDeps = {
   complete: (messages: ChatMessage[], responseFormat?: ChatCompletionResponseFormat, signal?: AbortSignal) => Promise<string>
   responseFormat?: ChatCompletionResponseFormat
+  onStage?: (stage: ChatProgressStage) => void
 }
 
 type GraphState = {
@@ -37,7 +39,8 @@ const GraphAnnotation = Annotation.Root({
 export class StructuredChatAgent {
   constructor(private readonly deps: StructuredChatAgentDeps) {}
 
-  async run(request: StructuredChatRequest, signal?: AbortSignal): Promise<AssistantPlanOutput> {
+  async run(request: StructuredChatRequest, signal?: AbortSignal, onStage?: (stage: ChatProgressStage) => void): Promise<AssistantPlanOutput> {
+    const reportStage = onStage ?? this.deps.onStage
     const graph = new StateGraph({ state: GraphAnnotation })
       .addNode('generate', async (state: GraphState) => {
         const raw = await this.deps.complete(state.messages, this.deps.responseFormat, state.signal)
@@ -80,15 +83,18 @@ export class StructuredChatAgent {
     let lastError = ''
     for (let attempts = 0; attempts < 3; attempts += 1) {
       if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+      reportStage?.('thinking')
       lastRaw = await this.deps.complete(messages, this.deps.responseFormat, signal)
       try {
         const result = parseAssistantPlanOutput(lastRaw)
         const unknownTarget = result.plan?.steps.find(step => !request.availableHostnames.includes(step.target))
         if (unknownTarget) throw new Error(`目标主机不在线：${unknownTarget.target}`)
+        reportStage?.('observing')
         return assistantPlanOutputSchema.parse(result)
       } catch (error) {
         lastError = error instanceof Error ? error.message : '输出校验失败'
         if (attempts < 2) {
+          reportStage?.('repairing')
           messages = [...messages, { role: 'user', content: `上一次输出：${lastRaw}\n校验错误：${lastError}\n请仅返回完整 JSON，禁止 Markdown 围栏和解释文字。` }]
         }
       }

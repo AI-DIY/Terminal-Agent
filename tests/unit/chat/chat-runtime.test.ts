@@ -486,6 +486,21 @@ describe('chat runtime', () => {
     await expect(runtime.send({ chatId: 'c1', runId: '27272727-2727-4272-8272-272727272727', content: 'timeout' }, event => events.push(event))).resolves.toBeUndefined()
     expect(events).toContainEqual(expect.objectContaining({ kind: 'chat:error', retryable: true, error: '聊天请求超时。' }))
   })
+
+  it('publishes transient structured progress and no deltas before the final JSON event', async () => {
+    const events: ChatRuntimeEvent[] = []
+    const runtime = new ChatRuntime({
+      appendMessage: vi.fn(async (input: { requestId: string }) => ({ messageId: input.requestId })),
+      getContext: vi.fn(async () => ({ messages: [{ role: 'user' as const, content: 'check' }], hasImages: false, availableHostnames: ['web-02'] })),
+      resolveModel: vi.fn(async () => ({ endpoint: 'http://model', model: 'm', contextLimit: 100, apiKey: null })),
+      runStructured: vi.fn(async () => ({ version: 1 as const, reply: '完成', plan: null })),
+      stream: vi.fn(async () => undefined),
+    })
+    await runtime.send({ chatId: 'c1', runId: '77777777-7777-4777-8777-777777777777', content: 'check' }, event => events.push(event))
+    expect(events.some(event => event.kind === 'chat:progress')).toBe(true)
+    expect(events.some(event => event.kind === 'chat:delta')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: 'chat:completed', content: '{"version":1,"reply":"完成","plan":null}' })
+  })
 })
 
 async function settlesWithin<T>(promise: Promise<T>, timeoutMs = 100): Promise<T> {

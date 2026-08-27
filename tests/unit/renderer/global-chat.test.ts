@@ -153,4 +153,30 @@ describe('global chat store', () => {
     expect(transport.onEvent).toHaveBeenCalledOnce()
     expect(unsubscribe).toHaveBeenCalledOnce()
   })
+
+  it('keeps structured progress transient and projects completed plans and audits', () => {
+    const store = createGlobalChatStore(api())
+    store.beginRun('c1', 'r1')
+    store.apply({ kind: 'chat:progress', chatId: 'c1', runId: 'r1', stage: 'thinking' })
+    expect(store.state.progress.c1).toBe('thinking')
+
+    const plan = {
+      id: 'EP-1', title: '检查服务', status: 'pending_review' as const,
+      steps: [{ id: 'step-1', target: 'web-02', explanation: '查看状态', originalCommand: 'systemctl status api', sendState: 'pending' as const }],
+    }
+    store.apply({ kind: 'chat:completed', chatId: 'c1', runId: 'r1', messageId: 'm1', content: '{"version":1,"reply":"准备执行","plan":null}', executionPlan: plan })
+    expect(store.state.progress.c1).toBeNull()
+    expect(store.state.messages.c1?.[0]?.executionPlan).toEqual(plan)
+
+    store.hydrate('c2', [{ id: 'audit', role: 'user', content: '【执行审计】计划 EP-1 已发送。', state: 'complete', messageType: 'execution_audit' }])
+    expect(store.state.messages.c2?.[0]?.messageType).toBe('execution_audit')
+  })
+
+  it('composes text-only content while retaining old image records for hydration', () => {
+    const store = createGlobalChatStore(api())
+    store.setDraft('c1', '  hello  ')
+    expect(store.composeUserContent('c1')).toBe('hello')
+    store.hydrate('c1', [{ id: 'old', role: 'user', content: [{ type: 'text', text: 'old' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }], state: 'complete' }])
+    expect(Array.isArray(store.state.messages.c1?.[0]?.content)).toBe(true)
+  })
 })

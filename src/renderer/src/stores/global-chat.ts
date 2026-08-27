@@ -1,13 +1,19 @@
 import { reactive } from 'vue'
-import type { ChatRuntimeEvent } from '../../../shared/contracts'
+import type { ChatRuntimeEvent, ChatProgressStage, ChatWorkspaceSnapshot } from '../../../shared/contracts'
 import type { ChatMessageContent, ChatImageUrlPart } from '../../../shared/chat-content'
-import type { ChatExecutionPlan } from '../../../shared/chat-plan'
+import type { ChatExecutionPlan, ChatPlanEditStepRequest, ChatPlanRemoveStepRequest, ChatPlanCancelRequest, ChatPlanExecuteRequest } from '../../../shared/chat-plan'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 type Api = {
   send(request: { chatId: string; runId: string; content: any; retry?: boolean }): Promise<void>
   cancel(chatId: string): Promise<void>
   onEvent(listener: (event: ChatRuntimeEvent) => void): () => void
+  plans?: {
+    editStep(request: ChatPlanEditStepRequest): Promise<ChatWorkspaceSnapshot>
+    removeStep(request: ChatPlanRemoveStepRequest): Promise<ChatWorkspaceSnapshot>
+    cancel(request: ChatPlanCancelRequest): Promise<ChatWorkspaceSnapshot>
+    execute(request: ChatPlanExecuteRequest): Promise<ChatWorkspaceSnapshot>
+  }
 }
 type Message = {
   id: string
@@ -31,6 +37,7 @@ export function createGlobalChatStore(api: Api) {
     readOnly: {} as Record<string, boolean>,
     activeMessageIds: {} as Record<string, string | null>,
     pendingImages: {} as Record<string, ChatImageUrlPart[]>,
+    progress: {} as Record<string, ChatProgressStage | null>,
   })
   const lastUserMessage = new Map<string, any>()
   const cancelledRuns = new Map<string, string>()
@@ -40,6 +47,10 @@ export function createGlobalChatStore(api: Api) {
       && !event.retryable
       && cancelledRuns.get(event.chatId) === event.runId
     if (state.runs[event.chatId] !== event.runId && !acceptsCancelledRun) return
+    if (event.kind === 'chat:progress') {
+      state.progress[event.chatId] = event.stage
+      return
+    }
     const list = state.messages[event.chatId] ?? (state.messages[event.chatId] = [])
     const activeMessageId = state.activeMessageIds[event.chatId]
     if (activeMessageId && event.messageId !== activeMessageId) return
@@ -55,6 +66,7 @@ export function createGlobalChatStore(api: Api) {
 
     if (event.kind === 'chat:completed') {
       state.runs[event.chatId] = null
+      state.progress[event.chatId] = null
       state.errors[event.chatId] = ''
       state.retryableErrors[event.chatId] = false
       state.activeMessageIds[event.chatId] = null
@@ -70,6 +82,7 @@ export function createGlobalChatStore(api: Api) {
     }
 
     state.runs[event.chatId] = null
+    state.progress[event.chatId] = null
     state.errors[event.chatId] = event.error
     state.retryableErrors[event.chatId] = event.retryable
     state.activeMessageIds[event.chatId] = event.messageId
@@ -83,6 +96,7 @@ export function createGlobalChatStore(api: Api) {
     beginRun(chatId: string, runId: string): void {
       cancelledRuns.delete(chatId)
       state.runs[chatId] = runId
+      state.progress[chatId] = null
       state.activeMessageIds[chatId] = null
     },
     setDraft(chatId: string, value: string): void {
@@ -120,6 +134,7 @@ export function createGlobalChatStore(api: Api) {
         ...(message.messageType ? { messageType: message.messageType } : {}),
         ...(message.executionPlan ? { executionPlan: structuredClone(message.executionPlan) } : {}),
       }))
+      state.progress[chatId] = null
       const retryTarget = retryableHydratedError(visible)
       if (retryTarget) {
         lastUserMessage.set(chatId, retryTarget.user.content)
@@ -142,6 +157,7 @@ export function createGlobalChatStore(api: Api) {
       state.drafts[chatId] = ''
       state.pendingImages[chatId] = []
       state.runs[chatId] = runId
+      state.progress[chatId] = null
       state.activeMessageIds[chatId] = null
       lastUserMessage.set(chatId, value)
       const userId = `user:${runId}`
@@ -155,6 +171,7 @@ export function createGlobalChatStore(api: Api) {
       const runId = crypto.randomUUID()
       cancelledRuns.delete(chatId)
       state.runs[chatId] = runId
+      state.progress[chatId] = null
       state.errors[chatId] = ''
       state.retryableErrors[chatId] = false
       state.activeMessageIds[chatId] = null
@@ -183,6 +200,7 @@ export function createGlobalChatStore(api: Api) {
       }
       if (state.runs[chatId] === runId) {
         state.runs[chatId] = null
+        state.progress[chatId] = null
         state.activeMessageIds[chatId] = null
         state.errors[chatId] = ''
       }
@@ -193,6 +211,30 @@ export function createGlobalChatStore(api: Api) {
           message.state = 'error'
         }
       }
+    },
+    async editPlanStep(chatId: string, messageId: string, stepId: string, command: string): Promise<ChatWorkspaceSnapshot> {
+      if (!api.plans) throw new Error('计划操作不可用')
+      const snapshot = await api.plans.editStep({ requestId: crypto.randomUUID(), chatId, messageId, stepId, command })
+      this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+      return snapshot
+    },
+    async removePlanStep(chatId: string, messageId: string, stepId: string): Promise<ChatWorkspaceSnapshot> {
+      if (!api.plans) throw new Error('计划操作不可用')
+      const snapshot = await api.plans.removeStep({ requestId: crypto.randomUUID(), chatId, messageId, stepId })
+      this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+      return snapshot
+    },
+    async cancelPlan(chatId: string, messageId: string): Promise<ChatWorkspaceSnapshot> {
+      if (!api.plans) throw new Error('计划操作不可用')
+      const snapshot = await api.plans.cancel({ requestId: crypto.randomUUID(), chatId, messageId })
+      this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+      return snapshot
+    },
+    async executePlan(chatId: string, messageId: string): Promise<ChatWorkspaceSnapshot> {
+      if (!api.plans) throw new Error('计划操作不可用')
+      const snapshot = await api.plans.execute({ requestId: crypto.randomUUID(), chatId, messageId })
+      this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+      return snapshot
     },
     dispose(): void {
       unsubscribe()
