@@ -11,7 +11,7 @@ Traditional terminals connect to hosts well, but they do not put the bastion ent
 1. An enterprise Assess/Access Client or bastion host invokes the single-file `putty.exe` bridge.
 2. The bridge starts the installed Terminal-Agent and hands temporary SSH/Raw bastion connections to the same workbench.
 3. An operator asks AI to analyze, troubleshoot, or plan the next step for the associated Shells as a work task.
-4. In the default Copilot mode, AI only presents a command candidate; an operator reviews and confirms it before the command is sent.
+4. AI produces a text reply or a structured Shell plan; an operator reviews the target, impact, and commands before one group confirmation sends them.
 5. Default safety fences intercept unconfirmed high-risk or interactive commands; the rules can be inspected, tested, and maintained in Settings.
 
 This is not a way for AI to bypass established operations controls. It is a controlled Shell collaboration assistant.
@@ -21,16 +21,16 @@ This is not a way for AI to bypass established operations controls. It is a cont
 - **Compatible with existing bastion entry points**: map only the release `putty.exe` to Assess/Access Client. No Electron runtime directory needs to be copied into the mapping location.
 - **Native Windows window controls**: Electron's hidden title bar removes the standalone top title strip while the native Windows minimize, maximize/restore, and close controls remain in the application header.
 - **Connections and tasks in one workbench**: CMDB bastion launches, named bastion targets, password SSH, and private-key SSH are available in one place; multiple Shells can be viewed side by side.
-- **Human-in-the-loop by default**: in Copilot mode, AI provides analysis, evidence steps, and a command candidate. The command is not sent until an operator confirms it.
+- **Human-in-the-loop by default**: every AI plan requires one explicit group confirmation, and no command is sent before that confirmation.
 - **Explicit guardrails before risky actions**: first-run regex rules cover process termination, interactive editors, file removal, service state changes, power actions, and disk partitioning or formatting.
-- **Local credential protection and execution boundaries**: model keys are stored through Windows-protected storage and never returned to the renderer; SSH credentials, temporary bridge passwords, Shell-history protections, regex fences, and one-command confirmation remain locally enforced.
+- **Local credential protection and execution boundaries**: model keys are stored through Windows-protected storage and never returned to the renderer; SSH credentials, temporary bridge passwords, Shell-history protections, regex fences, and group-plan confirmation remain locally enforced.
 - **Built for ongoing operations**: task workspaces, Shell history, connection layout, and consented local host memory can be restored locally for handoffs and follow-up work.
 
 ## Quick Start
 
 ### 1. Install Terminal-Agent
 
-After completing Windows packaging with `npm run make:win` or publishing `v1.0.11`, use the generated `Terminal-Agent-Setup-1.0.11.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
+After completing Windows packaging with `npm run make:win` or publishing `v2.0.0`, use the generated `Terminal-Agent-Setup-2.0.0.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
 
 Inside the workbench, choose **New SSH connection** and select one of these entry points:
 
@@ -65,7 +65,7 @@ Each bridge launch appends a `putty-bridge.log` file beside `putty.exe`. It cont
 1. Open **Settings** from the workbench header.
 2. Under **LLM profiles**, create an available Ollama, OpenAI-compatible, or llama.cpp profile.
 3. Enter the API key directly in the model connection form, select **Test connection**, then save and activate the profile.
-4. For image-based work, configure a VLM profile and the routing mode under **Model selection**.
+4. Existing image messages remain readable; new messages in this version use text input only and do not expose an image-upload control.
 
 Model keys are sent to the main process only while testing or saving, then stored through Windows-protected storage. The UI shows configuration state but never backfills a saved key. File-based key input and LLM-to-VLM key sharing have been removed; an existing VLM key reference is migrated to a protected key owned by that profile.
 
@@ -78,7 +78,7 @@ Model keys are sent to the main process only while testing or saving, then store
 - `DevTools` opens detached renderer-process Chrome DevTools. `Node Inspector` opens a separate Electron debugging window already attached to the current application's Node.js main process. Both can be focused again and reopened after closing, without external Chrome, `chrome://inspect`, or a copied WebSocket address.
 - Version-1 task data is not migrated automatically. When the application reports `任务数据版本不兼容，请清空旧任务数据后重试。`, clear the old task data before continuing.
 
-### 5. Use Task-Oriented AI Copilot for Shell Work
+### 5. Use Task-Oriented AI Plan Approval for Shell Work
 
 Describe the goal for the current work task and associated Shells. For example:
 
@@ -90,10 +90,10 @@ Use this operating rhythm:
 
 1. Ask AI to explain its analysis and evidence-gathering steps first.
 2. Inspect the command candidate and verify the host, session, arguments, and expected impact.
-3. In **Copilot** mode, choose **Confirm and execute**. The confirmation marker is bound to the current session and exact command, expires after five minutes, and is single-use.
-4. Observe the result in the Shell, then continue the task or ask AI to adapt its recommendation.
+3. In the plan card, verify hostname targets, step order, original commands, and any edited final commands, then choose **Confirm and execute N steps**. Every plan requires one group confirmation.
+4. Observe the result in the Shell; an execution audit is appended to the task, and executed plans do not expose a re-run action.
 
-Copilot is the default mode. An AI-generated command is never automatically executed in this mode.
+AI plans never run automatically. When the same hostname has multiple connections, execution binds to the earliest still-online task-associated connection; visible labels use the hostname and stable ordinals.
 
 ### 6. Configure and Use Safety Fences
 
@@ -106,13 +106,7 @@ Open **Settings -> Safety fences** to view, enable, disable, test, and save rule
 - `shutdown`, `reboot`, `poweroff`, `halt`
 - `mkfs`, `fdisk`, `parted`
 
-An unapproved command matching a fence is not sent to the SSH Shell. Review the candidate first, then grant a one-time confirmation for that specific candidate. The confirmation does not extend to another host, session, or command.
-
-### 7. Use Autonomous Mode Only for Explicitly Authorized Low-Risk Sessions
-
-When automation is genuinely required, select **Upgrade autonomous mode** in the **AI workspace** and confirm again in the dialog. The authorization applies only to that session.
-
-Autonomous mode skips per-candidate human review. It is not appropriate for unvalidated production changes and must not replace change tickets, bastion authorization, two-person review, or rollback planning. Keep production work in the default Copilot mode.
+An unapproved command matching a fence is not sent to the SSH Shell. Review the complete plan first, then grant one group confirmation. The confirmation does not extend to another host, session, or command. This version exposes no autonomous-driving or re-run path.
 
 ## Enterprise Boundaries and Safety Notes
 
@@ -126,13 +120,13 @@ Autonomous mode skips per-candidate human review. It is not appropriate for unva
 
 ## Release Assets
 
-A Windows package made with `npm run make:win` or a published `v1.0.11` Release will generate:
+A Windows package made with `npm run make:win` or a published `v2.0.0` Release will generate:
 
 | File | Purpose |
 | --- | --- |
-| `Terminal-Agent-Setup-1.0.11.exe` | Windows x64 installer. |
+| `Terminal-Agent-Setup-2.0.0.exe` | Windows x64 installer. |
 | `putty.exe` | Single-file bridge for Assess/Access Client or bastion mapping. |
-| `Terminal-Agent-Uninstall-Cleanup-1.0.11.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
+| `Terminal-Agent-Uninstall-Cleanup-2.0.0.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
 | `latest.yml` and `.blockmap` | Update metadata for deployments that use auto-update. |
 
 After the cleanup tool has been generated, extract the ZIP and run `清理 Terminal-Agent 卸载残留.cmd` as an administrator. It lists matching entries, requires an explicit `Y`, and exports `.reg` backups before deletion.

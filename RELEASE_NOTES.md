@@ -1,3 +1,22 @@
+# Terminal-Agent v2.0.0
+
+Release date: 2026-08-27
+
+## AI workspace plan approval
+
+- The AI workspace now accepts text-only new messages. Existing persisted image messages remain readable, but the workbench exposes no new image-upload control.
+- AI replies use a validated structured JSON contract. Human-readable replies, execution plans, and execution audits render separately; model JSON does not stream into the conversation.
+- Every plan requires one explicit `确认并执行 N 步` group confirmation. The v2 workbench exposes no autonomous-driving, upgrade, single-command confirmation, or re-run path.
+- Same-host terminal labels and AI context now use canonical hostnames with stable ordinals. A plan target remains the raw hostname and binds to the first still-online task-associated Shell in stored association order.
+- Terminal right-click operations now include copy, paste, select all, and clear selection while retaining the existing terminal keyboard input behavior.
+
+## AccessClient and Windows release
+
+- AccessClient temporary profiles preserve declared UTF-8/CP936/GBK/GB2312/GB18030 decoding. Missing or unknown declarations try strict UTF-8 and then GB18030, independent of the Windows UTF-8 locale setting.
+- `npm run make:win` produces `Terminal-Agent-Setup-2.0.0.exe`, its matching blockmap and `latest.yml`, the standalone `putty.exe` bridge, and `Terminal-Agent-Uninstall-Cleanup-2.0.0.zip`.
+
+---
+
 # Terminal-Agent v1.0.13
 
 Release date: 2026-08-27
