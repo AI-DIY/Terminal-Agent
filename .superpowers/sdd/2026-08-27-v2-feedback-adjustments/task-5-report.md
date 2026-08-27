@@ -98,4 +98,4 @@ The user-owned `docs/superpowers/plans/2026-08-27-v2-feedback-adjustments.md` an
 
 ## Commit
 
-Task 5 commit id: `426bd6f` (`release: prepare Terminal-Agent 2.0.0`).
+Task 5 commit id: `caf7cea` (`release: prepare Terminal-Agent 2.0.0`).
