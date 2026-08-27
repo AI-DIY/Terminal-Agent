@@ -21,7 +21,7 @@ import { reconcileVisiblePanes, selectVisiblePane } from '../stores/visible-pane
 import { getLayoutPreferencesStore, shellGridStyle } from '../stores/layout-preferences'
 import { createShellHistoryStore, filterHistoryByHosts, latestHistoryByHost, readOnlyHistoryTerminal, reconcileHistoryHostSelection, toggleHistoryHostSelection } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
-import { createChatWorkspacesStore, createWorkbenchOperationGate, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
+import { createChatWorkspacesStore, createWorkbenchOperationGate, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchOpenedAttachmentTarget, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 
 const emit = defineEmits<{ showSettings: [] }>()
 const store = createSessionsStore()
@@ -88,6 +88,7 @@ let stopShellHistoryEligibilityRefresh: (() => void) | undefined
 let bastionHostRequestId = 0
 const workbenchOperations = createWorkbenchOperationGate()
 let connectionFocusOrigin: HTMLElement | null = null
+let pendingOpenedTargetChatId: string | null = null
 const connectionModal = ref<HTMLElement | null>(null)
 const shellCanvas = ref<{ openHistoryMenu(historyId: string): void } | null>(null)
 
@@ -439,6 +440,7 @@ async function loadBastionHosts(systemId: string): Promise<void> {
 async function launchBastion(request: BastionLaunchRequest): Promise<void> {
   const operationGeneration = workbenchOperations.begin()
   const targetChatId = activeWorkbenchChatId.value
+  pendingOpenedTargetChatId = targetChatId
   connectionError.value = ''
   bastionError.value = ''
   bastionLoading.value = true
@@ -475,6 +477,7 @@ async function launchBastion(request: BastionLaunchRequest): Promise<void> {
     bastionError.value = message
     connectionError.value = message
   } finally {
+    if (pendingOpenedTargetChatId === targetChatId) pendingOpenedTargetChatId = null
     if (workbenchOperations.isCurrent(operationGeneration)) bastionLoading.value = false
   }
 }
@@ -492,6 +495,7 @@ async function connect(request: ConnectionDialogRequest): Promise<void> {
   bastionLoading.value = false
   connectionError.value = ''
   const targetChatId = activeWorkbenchChatId.value
+  pendingOpenedTargetChatId = targetChatId
   await runWorkbenchSessionOpen({
     gate: workbenchOperations,
     targetChatId,
@@ -503,7 +507,7 @@ async function connect(request: ConnectionDialogRequest): Promise<void> {
       return window.terminalAgent.sessions.connect(request.connection)
     },
     attach: (session, current, capturedTargetChatId) => attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined),
-    complete: closeConnectionDialog,
+    complete: () => { if (pendingOpenedTargetChatId === targetChatId) pendingOpenedTargetChatId = null; closeConnectionDialog() },
     fail: error => { connectionError.value = error instanceof Error ? error.message : '无法建立 SSH 会话。' },
   })
 }
@@ -709,11 +713,12 @@ onMounted(() => {
       return
     }
     const visibleLiveChatId = isLiveChat.value ? chatStore.state.selectedId : null
+    const capturedTargetChatId = workbenchOpenedAttachmentTarget(session.chatId, pendingOpenedTargetChatId, visibleLiveChatId)
     const shouldPromoteFallback = visibleLiveChatId === null && chatStore.state.liveChatId === null
-    const isCurrent = () => visibleLiveChatId !== null
-      ? chatStore.state.selectedId === visibleLiveChatId
+    const isCurrent = () => capturedTargetChatId !== null
+      ? chatStore.state.selectedId === capturedTargetChatId
       : chatStore.state.liveChatId === null
-    void attachSession(session, shouldPromoteFallback, isCurrent).catch(error => {
+    void attachSession(session, shouldPromoteFallback, isCurrent, capturedTargetChatId ?? undefined).catch(error => {
       if (isCurrent()) connectionError.value = error instanceof Error ? error.message : '无法关联终端会话。'
     })
   })

@@ -41,6 +41,14 @@ export function workbenchReconnectAttachmentTarget(
   return sessionChatId ?? selectedChatId
 }
 
+export function workbenchOpenedAttachmentTarget(
+  sessionChatId: string | null | undefined,
+  capturedChatId: string | null,
+  currentChatId: string | null,
+): string | null {
+  return sessionChatId ?? capturedChatId ?? currentChatId
+}
+
 export async function initializeWorkbenchTask<TResult>(options: {
   load(): Promise<void>
   restore(): Promise<TResult>
