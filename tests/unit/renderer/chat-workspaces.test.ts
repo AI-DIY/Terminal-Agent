@@ -60,8 +60,8 @@ describe('chat workspaces store', () => {
     const first = tracker.begin('history-task')
     const second = tracker.begin('new-task')
 
-    expect(tracker.observe({ id: 'session-second' })).toEqual({ tracked: true })
-    expect(tracker.observe({ id: 'session-first' })).toEqual({ tracked: true })
+    expect(tracker.observe({ id: 'session-second' })).toMatchObject({ tracked: true, pending: true })
+    expect(tracker.observe({ id: 'session-first' })).toMatchObject({ tracked: true, pending: true })
     expect(tracker.resolve(second, { id: 'session-second' })).toEqual({ targetChatId: 'new-task', queued: true })
     expect(tracker.resolve(first, { id: 'session-first' })).toEqual({ targetChatId: 'history-task', queued: true })
     expect(tracker.observe({ id: 'session-first' })).toEqual({ tracked: true, targetChatId: 'history-task' })
@@ -73,10 +73,24 @@ describe('chat workspaces store', () => {
     const tracker = createWorkbenchSessionOwnershipTracker<{ id: string }>()
     const operation = tracker.begin('selected-history')
 
-    expect(tracker.observe({ id: 'session-early' })).toEqual({ tracked: true })
+    expect(tracker.observe({ id: 'session-early' })).toMatchObject({ tracked: true, pending: true })
     expect(tracker.resolve(operation, { id: 'session-early' })).toEqual({ targetChatId: 'selected-history', queued: true })
     expect(tracker.complete(operation)).toEqual([])
     expect(tracker.observe({ id: 'session-early' })).toEqual({ tracked: true, targetChatId: 'selected-history' })
+  })
+
+  it('holds an event before its open result so attach uses the resolved captured owner', async () => {
+    const { createWorkbenchSessionOwnershipTracker } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const tracker = createWorkbenchSessionOwnershipTracker<{ id: string }>()
+    const operation = tracker.begin('history-task')
+    const early = tracker.observe({ id: 'session-early' })
+    let selected = 'other-task'
+    const resolved = tracker.resolve(operation, { id: 'session-early' })
+    selected = 'third-task'
+    const attached: string[] = []
+    if (early.pending) attached.push(resolved.targetChatId)
+    expect(attached).toEqual(['history-task'])
+    expect(selected).toBe('third-task')
   })
 
   it('targets the selected history task when opening a new Shell', async () => {

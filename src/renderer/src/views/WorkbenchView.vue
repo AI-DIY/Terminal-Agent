@@ -595,7 +595,7 @@ async function openSavedProfile(id: string): Promise<void> {
     open: () => window.terminalAgent.sessions.openProfile(id),
     attach: (session, current, capturedTargetChatId) => { sessionOwnership.resolve(ownershipOperation, session); return attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined) },
     complete: closeSavedSessionsDialog,
-    fail: error => { connectionError.value = error instanceof Error ? error.message : '无法打开已保存的 SSH 会话。' },
+    fail: error => { sessionOwnership.complete(ownershipOperation); connectionError.value = error instanceof Error ? error.message : '无法打开已保存的 SSH 会话。' },
   })
 }
 
@@ -716,6 +716,7 @@ onMounted(() => {
     }
     const visibleLiveChatId = isLiveChat.value ? chatStore.state.selectedId : null
     const observed = sessionOwnership.observe(session)
+    if (observed.pending && !session.chatId) return
     const capturedTargetChatId = workbenchOpenedAttachmentTarget(session.chatId, observed.targetChatId ?? null, visibleLiveChatId)
     const shouldPromoteFallback = visibleLiveChatId === null && chatStore.state.liveChatId === null
     const isCurrent = () => capturedTargetChatId !== null

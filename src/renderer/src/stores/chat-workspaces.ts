@@ -60,11 +60,11 @@ export function createWorkbenchSessionOwnershipTracker<TSession extends { id: st
       operations.set(operation, { targetChatId })
       return operation
     },
-    observe(session: TSession): { tracked: true; targetChatId?: string } {
+    observe(session: TSession): { tracked: true; targetChatId?: string; pending?: boolean } {
       const targetChatId = owners.get(session.id)
       if (targetChatId) return { tracked: true, targetChatId }
       observed.add(session.id)
-      return { tracked: true }
+      return { tracked: true, pending: [...operations.values()].some(entry => !entry.sessionId) }
     },
     resolve(operation: number, session: TSession): { targetChatId: string; queued: true } {
       const entry = operations.get(operation)
