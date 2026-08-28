@@ -27,6 +27,10 @@ type LaunchedTerminalAgent = {
   mainEntry: string
 }
 
+async function removeUserDataDir(directory: string): Promise<void> {
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+}
+
 const test = base.extend<{
   launchApp: (appArguments?: string[]) => Promise<LaunchedTerminalAgent>
 }>({
@@ -44,13 +48,13 @@ const test = base.extend<{
         launches.push(launched)
         return launched
       } catch (error) {
-        await rm(userDataDir, { recursive: true, force: true })
+        await removeUserDataDir(userDataDir)
         throw error
       }
     })
     for (const launch of launches.reverse()) {
       await launch.app.close().catch(() => undefined)
-      await rm(launch.userDataDir, { recursive: true, force: true })
+      await removeUserDataDir(launch.userDataDir)
     }
   },
 })
@@ -1127,7 +1131,7 @@ test('validates the private-key mode without exposing a file path in renderer te
     await expect(page.getByRole('button', { name: '选择私钥文件', exact: true })).toBeVisible()
     await expect(page.getByLabel('私钥密码短语')).toBeVisible()
     await page.getByRole('button', { name: '连接', exact: true }).click()
-    await expect(page.getByRole('alert')).toHaveText('请选择私钥文件。')
+    await expect(page.getByRole('alert').filter({ hasText: '请选择私钥文件。' })).toHaveText('请选择私钥文件。')
     await expect(page.locator('body')).not.toContainText('temporaryProfilePath')
   } finally {
     await app?.close()
@@ -1300,8 +1304,9 @@ test('cancels a streaming global AI chat and restores its durable cancelled stat
     await page.getByRole('button', { name: '取消', exact: true }).click()
     await expect(page.getByRole('button', { name: '取消', exact: true })).toHaveCount(0)
     await expect(input).toBeEnabled()
-    await expect(page.locator('.message.assistant')).toContainText('已取消。')
-    await expect(page.getByRole('alert')).toContainText('已取消。')
+    await expect(page.locator('.message.assistant').filter({ hasText: '已取消。' })).toHaveCount(1)
+    await expect(page.locator('.messages > p.error')).toHaveCount(0)
+    await expect(page.getByRole('alert').filter({ hasText: '已取消。' })).toHaveCount(1)
     await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(0)
     await expect.poll(async () => page.evaluate(async id => (await window.terminalAgent.chats.get(id)).chat.messages, chatId)).toContainEqual(
       expect.objectContaining({ role: 'assistant', content: '已取消。', state: 'error', retryable: false }),
@@ -1310,8 +1315,9 @@ test('cancels a streaming global AI chat and restores its durable cancelled stat
     await page.reload()
     await waitForWorkbenchReady(page)
     await chatItem(page, chatId).getByRole('button', { name: '选择任务 AI 取消 E2E', exact: true }).click()
-    await expect(page.locator('.message.assistant')).toContainText('已取消。')
-    await expect(page.getByRole('alert')).toContainText('已取消。')
+    await expect(page.locator('.message.assistant').filter({ hasText: '已取消。' })).toHaveCount(1)
+    await expect(page.locator('.messages > p.error')).toHaveCount(0)
+    await expect(page.getByRole('alert').filter({ hasText: '已取消。' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(0)
   } finally {
     fakeModel.release()
@@ -1611,7 +1617,7 @@ test('shows a sanitized local error for an invalid AccessClient startup without 
     app = (await launchApp(['--', '-load', `tmp:${temporaryPath}`, '-pw', temporaryPassword])).app
     const page = await app.firstWindow()
 
-    await expect(page.getByRole('alert')).toHaveText('无法读取堡垒机临时配置。')
+    await expect(page.getByRole('alert').filter({ hasText: '无法读取堡垒机临时配置。' })).toHaveText('无法读取堡垒机临时配置。')
     await expect(page.locator('body')).not.toContainText(temporaryPassword)
     await expect(page.locator('body')).not.toContainText(temporaryPath)
   } finally {

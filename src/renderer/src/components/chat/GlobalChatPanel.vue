@@ -2,7 +2,7 @@
 import { Bot, Check, CircleAlert, PanelRightClose, Send, Square, Trash2, UserRound, X } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { ChatWorkspace } from '../../../../shared/contracts'
-import { createGlobalChatStore } from '../../stores/global-chat'
+import { createGlobalChatStore, hasVisibleAssistantError } from '../../stores/global-chat'
 import { chatContentText } from '../../../../shared/chat-content'
 
 const props = defineProps<{ chat: ChatWorkspace | null; readOnly?: boolean }>()
@@ -10,14 +10,39 @@ const emit = defineEmits<{ collapse: [] }>()
 const store = createGlobalChatStore(window.terminalAgent.chat)
 const modelContextLimit = ref(12_000)
 const chatId = computed(() => props.chat?.id ?? '')
+const assertiveError = ref<{ id: number; content: string } | null>(null)
+const assistantResponse = ref<{ id: number; content: string } | null>(null)
+let assertiveErrorId = 0
+let assistantResponseId = 0
+function announceAssertiveError(content: string): void {
+  assertiveError.value = { id: ++assertiveErrorId, content }
+}
+function announceAssistantResponse(content: string): void {
+  assistantResponse.value = { id: ++assistantResponseId, content }
+}
+const disposeErrorAnnouncement = store.onErrorAnnouncement(announcement => {
+  if (announcement.chatId !== chatId.value) return
+  announceAssertiveError(announcement.content)
+})
+const disposeAssistantAnnouncement = store.onAssistantAnnouncement(announcement => {
+  if (announcement.chatId !== chatId.value) return
+  announceAssistantResponse(assistantReply(announcement.content))
+})
 watch(() => props.chat, value => {
   if (value && !store.state.runs[value.id]) store.hydrate(value.id, value.messages, Boolean(props.readOnly))
 }, { immediate: true })
+watch(chatId, () => { assertiveError.value = null; assistantResponse.value = null })
 const messages = computed(() => chatId.value ? store.state.messages[chatId.value] ?? [] : [])
 const draft = computed(() => chatId.value ? store.draft(chatId.value) : '')
 const running = computed(() => chatId.value ? Boolean(store.state.runs[chatId.value]) : false)
 const progress = computed(() => chatId.value ? store.state.progress[chatId.value] ?? null : null)
-const actionError = ref('')
+const standaloneError = computed(() => {
+  const error = chatId.value ? store.state.errors[chatId.value] ?? '' : ''
+  if (!error || hasVisibleAssistantError(messages.value, error)) return ''
+  return error
+})
+const actionErrors = reactive<Record<string, string>>({})
+const actionError = computed(() => chatId.value ? actionErrors[chatId.value] ?? '' : '')
 const stepDrafts = reactive<Record<string, string>>({})
 const contextUsed = computed(() => messages.value.reduce((total, message) => total + Math.ceil(chatContentText(message.content).length / 4) + 4, 0))
 const contextPercent = computed(() => Math.min(100, Math.round((contextUsed.value / modelContextLimit.value) * 100)))
@@ -46,6 +71,11 @@ function setStepDraft(messageId: string, stepId: string, event: Event): void { s
 function stepDraftValue(messageId: string, stepId: string, step: { finalCommand?: string; originalCommand: string }): string {
   return stepDrafts[stepDraftKey(messageId, stepId)] ?? stepCommand(step)
 }
+function reportActionError(actionChatId: string, error: unknown, fallback: string): void {
+  actionErrors[actionChatId] = error instanceof Error ? error.message : fallback
+  if (actionChatId !== chatId.value) return
+  announceAssertiveError(actionErrors[actionChatId])
+}
 async function saveStep(messageId: string, stepId: string, fallbackCommand: string): Promise<void> {
   const key = stepDraftKey(messageId, stepId)
   const command = (stepDrafts[key] ?? fallbackCommand).trim()
@@ -53,31 +83,35 @@ async function saveStep(messageId: string, stepId: string, fallbackCommand: stri
   await editStep(messageId, stepId, command)
 }
 async function editStep(messageId: string, stepId: string, command: string): Promise<void> {
-  if (!chatId.value || props.readOnly || !command.trim()) return
-  actionError.value = ''
-  try { await store.editPlanStep(chatId.value, messageId, stepId, command.trim()) } catch (error) { actionError.value = error instanceof Error ? error.message : '计划更新失败' }
+  const actionChatId = chatId.value
+  if (!actionChatId || props.readOnly || !command.trim()) return
+  actionErrors[actionChatId] = ''
+  try { await store.editPlanStep(actionChatId, messageId, stepId, command.trim()) } catch (error) { reportActionError(actionChatId, error, '计划更新失败') }
 }
 async function removeStep(messageId: string, stepId: string): Promise<void> {
-  if (!chatId.value || props.readOnly) return
-  actionError.value = ''
-  try { await store.removePlanStep(chatId.value, messageId, stepId) } catch (error) { actionError.value = error instanceof Error ? error.message : '计划更新失败' }
+  const actionChatId = chatId.value
+  if (!actionChatId || props.readOnly) return
+  actionErrors[actionChatId] = ''
+  try { await store.removePlanStep(actionChatId, messageId, stepId) } catch (error) { reportActionError(actionChatId, error, '计划更新失败') }
 }
 async function cancelPlan(messageId: string): Promise<void> {
-  if (!chatId.value || props.readOnly) return
-  actionError.value = ''
-  try { await store.cancelPlan(chatId.value, messageId) } catch (error) { actionError.value = error instanceof Error ? error.message : '计划取消失败' }
+  const actionChatId = chatId.value
+  if (!actionChatId || props.readOnly) return
+  actionErrors[actionChatId] = ''
+  try { await store.cancelPlan(actionChatId, messageId) } catch (error) { reportActionError(actionChatId, error, '计划取消失败') }
 }
 async function executePlan(messageId: string): Promise<void> {
-  if (!chatId.value || props.readOnly) return
-  actionError.value = ''
-  try { await store.executePlan(chatId.value, messageId) } catch (error) { actionError.value = error instanceof Error ? error.message : '计划执行失败' }
+  const actionChatId = chatId.value
+  if (!actionChatId || props.readOnly) return
+  actionErrors[actionChatId] = ''
+  try { await store.executePlan(actionChatId, messageId) } catch (error) { reportActionError(actionChatId, error, '计划执行失败') }
 }
 onMounted(() => {
   void window.terminalAgent.settings.getModel()
     .then(model => { if (model?.contextLimit) modelContextLimit.value = model.contextLimit })
     .catch(() => undefined)
 })
-onBeforeUnmount(() => store.dispose())
+onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement(); store.dispose() })
 </script>
 
 <template>
@@ -94,7 +128,7 @@ onBeforeUnmount(() => store.dispose())
       </section>
     </header>
 
-    <div class="messages" aria-live="polite">
+    <div class="messages">
       <section v-if="progress" class="progress-item" role="status" aria-live="polite"><CircleAlert :size="14" aria-hidden="true" /><span>{{ progressLabel(progress) }}</span><span class="progress-dots" aria-hidden="true">...</span></section>
       <article v-for="message in messages" :key="message.id" :class="['message', message.role, { audit: message.messageType === 'execution_audit' }]">
         <span class="message-avatar" aria-hidden="true"><UserRound v-if="message.role === 'user'" :size="14" /><Bot v-else :size="14" /></span>
@@ -123,9 +157,11 @@ onBeforeUnmount(() => store.dispose())
         </div>
       </article>
       <section v-if="!messages.length" class="empty"><Bot :size="24" aria-hidden="true" /><strong>{{ readOnly ? '此任务没有 AI 记录' : '开始协作' }}</strong><span>{{ readOnly ? 'Shell 历史仍可在中间工作区查看' : '输入目标，AI 会结合当前任务中的 Shell 信息回答' }}</span></section>
-      <p v-if="chatId && store.state.errors[chatId]" class="error" role="alert">{{ store.state.errors[chatId] }}</p>
-      <p v-if="actionError" class="error" role="alert">{{ actionError }}</p>
+      <p v-if="standaloneError" class="error">{{ standaloneError }}</p>
+      <p v-if="actionError" class="error">{{ actionError }}</p>
     </div>
+    <p class="visually-hidden-alert" role="status" aria-live="polite" aria-atomic="true"><span :key="assistantResponse?.id">{{ assistantResponse?.content ?? '' }}</span></p>
+    <p class="visually-hidden-alert" role="alert" aria-atomic="true"><span :key="assertiveError?.id">{{ assertiveError?.content ?? '' }}</span></p>
 
     <footer class="composer">
       <div class="composer-shell">
@@ -145,6 +181,7 @@ onBeforeUnmount(() => store.dispose())
 .ai-safety-badge { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--accent); font-size: 10px; font-weight: 650; }
 .context-meter { grid-column: 1 / -1; min-width: 0; padding-top: 7px; border-top: 1px solid var(--line-soft); }.context-meter-head { display: flex; align-items: baseline; gap: 6px; }.context-meter-head strong { color: var(--text-strong); font-size: 10px; }.context-meter-head span { color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }.context-meter-head b { margin-left: auto; color: var(--text-strong); font-size: 9px; }.context-progress { height: 5px; margin-top: 6px; overflow: hidden; border-radius: 3px; background: var(--line); }.context-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }.context-meter-foot { margin-top: 6px; color: var(--muted); font-size: 8.5px; }
 .messages { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 12px 12px 16px; scrollbar-gutter: stable; }
+.visually-hidden-alert { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .progress-item { display: flex; align-items: center; gap: 7px; min-height: 32px; margin-bottom: 8px; padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 10px; }.progress-item svg { color: var(--accent); }.progress-dots { letter-spacing: 2px; color: var(--accent); }
 .message { display: grid; grid-template-columns: 29px minmax(0, 1fr); align-items: start; gap: 8px; min-width: 0; padding: 8px 0; }.message-avatar { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); }.message.assistant .message-avatar { border-color: var(--text-strong); background: var(--text-strong); color: var(--surface); }.message-content { position: relative; min-width: 0; max-width: 100%; padding: 10px 11px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow-wrap: anywhere; }.message.assistant .message-content::before { position: absolute; top: 10px; bottom: 10px; left: -1px; width: 2px; border-radius: 0 2px 2px 0; background: var(--accent); content: ""; }.message.user { grid-template-columns: minmax(0, 1fr) 29px; padding-left: 38px; }.message.user .message-avatar { grid-column: 2; grid-row: 1; background: var(--panel); color: var(--text-strong); }.message.user .message-content { grid-column: 1; grid-row: 1; background: var(--surface-soft); }.message-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }.message-meta strong { color: var(--text-strong); font-size: 10px; }.message.assistant .message-meta strong { color: var(--accent); }.message-meta span { margin-left: auto; }.message p { margin: 0; color: var(--text); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }.message.audit .message-content { border-color: var(--amber-line); background: var(--amber-soft); }.message.audit .message-avatar { color: var(--amber); }
 .execution-plan { display: grid; gap: 8px; margin-top: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }.plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); }.plan-head > div { display: grid; gap: 3px; min-width: 0; }.plan-head strong { color: var(--text-strong); font-size: 11px; overflow-wrap: anywhere; }.plan-head span { color: var(--muted); font-size: 9px; }.plan-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent) !important; font-weight: 650; }.plan-step { display: grid; gap: 5px; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }.plan-step:last-of-type { border-bottom: 0; }.plan-step-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; }.plan-step-head strong { color: var(--text-strong); font-size: 10px; }.plan-step-head span { color: var(--muted); font-size: 9px; }.plan-step p { color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-risk { display: flex; align-items: flex-start; gap: 5px; color: var(--amber); font-size: 9px; line-height: 1.45; }.plan-risk svg { flex: 0 0 auto; margin-top: 1px; }.plan-command { display: grid; gap: 3px; min-width: 0; }.plan-command span { color: var(--faint); font-size: 8px; }.plan-command code { display: block; min-width: 0; overflow: auto; padding: 5px 6px; border: 1px solid var(--line-soft); background: var(--surface-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-step-actions,.plan-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }.plan-step-actions { margin-top: 2px; }.plan-edit-input { min-width: 0; flex: 1; height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; }.icon-button,.secondary-action,.primary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; white-space: nowrap; }.icon-button { width: 27px; padding: 0; }.icon-button:hover,.secondary-action:hover { border-color: var(--focus); color: var(--text-strong); }.primary-action { border-color: var(--accent); background: var(--accent); color: #fff; }.plan-actions { justify-content: flex-end; padding-top: 2px; }.plan-actions button:disabled { cursor: not-allowed; opacity: .55; }

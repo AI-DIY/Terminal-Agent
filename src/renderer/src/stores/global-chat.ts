@@ -24,8 +24,15 @@ type Message = {
   messageType?: 'execution_audit'
   executionPlan?: ChatExecutionPlan
 }
+type ErrorAnnouncement = { chatId: string; content: string }
+type AssistantAnnouncement = { chatId: string; content: string }
 
 const terminalCancellationContent = '已取消。'
+
+export function hasVisibleAssistantError(messages: readonly Pick<Message, 'role' | 'state' | 'content'>[], error: string): boolean {
+  if (!error) return false
+  return messages.some(message => message.role === 'assistant' && message.state === 'error' && message.content === error)
+}
 
 export function createGlobalChatStore(api: Api) {
   const state = reactive({
@@ -41,6 +48,16 @@ export function createGlobalChatStore(api: Api) {
   })
   const lastUserMessage = new Map<string, any>()
   const cancelledRuns = new Map<string, string>()
+  const errorAnnouncementListeners = new Set<(announcement: ErrorAnnouncement) => void>()
+  const assistantAnnouncementListeners = new Set<(announcement: AssistantAnnouncement) => void>()
+
+  function announceError(chatId: string, content: string): void {
+    for (const listener of errorAnnouncementListeners) listener({ chatId, content })
+  }
+
+  function announceAssistant(chatId: string, content: string): void {
+    for (const listener of assistantAnnouncementListeners) listener({ chatId, content })
+  }
 
   function apply(event: ChatRuntimeEvent): void {
     const acceptsCancelledRun = event.kind === 'chat:error'
@@ -78,6 +95,7 @@ export function createGlobalChatStore(api: Api) {
       } else {
         list.push({ id: event.messageId, role: 'assistant', content: event.content, state: 'complete', ...(event.executionPlan ? { executionPlan: structuredClone(event.executionPlan) } : {}) })
       }
+      announceAssistant(event.chatId, event.content)
       return
     }
 
@@ -95,6 +113,7 @@ export function createGlobalChatStore(api: Api) {
       list.push({ id: event.messageId, role: 'assistant', content: event.error, state: 'error', retryable: event.retryable })
     }
     cancelledRuns.delete(event.chatId)
+    announceError(event.chatId, event.error)
   }
 
   const unsubscribe = api.onEvent(apply)
@@ -187,6 +206,14 @@ export function createGlobalChatStore(api: Api) {
     canRetry(chatId: string): boolean {
       return !state.readOnly[chatId] && Boolean(state.errors[chatId]) && state.retryableErrors[chatId]
     },
+    onErrorAnnouncement(listener: (announcement: ErrorAnnouncement) => void): () => void {
+      errorAnnouncementListeners.add(listener)
+      return () => errorAnnouncementListeners.delete(listener)
+    },
+    onAssistantAnnouncement(listener: (announcement: AssistantAnnouncement) => void): () => void {
+      assistantAnnouncementListeners.add(listener)
+      return () => assistantAnnouncementListeners.delete(listener)
+    },
     async cancel(chatId: string): Promise<void> {
       const runId = state.runs[chatId]
       if (!runId) return
@@ -204,6 +231,7 @@ export function createGlobalChatStore(api: Api) {
         lastUserMessage.delete(chatId)
         state.errors[chatId] = '取消状态未能保存，请重新加载后确认。'
         state.retryableErrors[chatId] = false
+        announceError(chatId, state.errors[chatId])
         return
       }
       if (state.runs[chatId] === runId) {
@@ -246,6 +274,8 @@ export function createGlobalChatStore(api: Api) {
     },
     dispose(): void {
       unsubscribe()
+      errorAnnouncementListeners.clear()
+      assistantAnnouncementListeners.clear()
     },
   }
 }

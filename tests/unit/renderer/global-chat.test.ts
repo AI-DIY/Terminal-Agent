@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { createGlobalChatStore } from '../../../src/renderer/src/stores/global-chat'
+import { createGlobalChatStore, hasVisibleAssistantError } from '../../../src/renderer/src/stores/global-chat'
 
 function api() {
   return {
@@ -10,6 +11,87 @@ function api() {
 }
 
 describe('global chat store', () => {
+  it('identifies an assistant error already rendered in the message list', () => {
+    const messages = [
+      { role: 'user' as const, content: 'request', state: 'complete' as const },
+      { role: 'assistant' as const, content: '已取消。', state: 'error' as const },
+    ]
+
+    expect(hasVisibleAssistantError(messages, '已取消。')).toBe(true)
+    expect(hasVisibleAssistantError(messages, '另一个错误')).toBe(false)
+  })
+
+  it('does not suppress a standalone error for matching non-error message content', () => {
+    const error = '取消状态未能保存，请重新加载后确认。'
+
+    expect(hasVisibleAssistantError([{ role: 'user', content: error, state: 'complete' }], error)).toBe(false)
+    expect(hasVisibleAssistantError([{ role: 'assistant', content: error, state: 'complete' }], error)).toBe(false)
+    expect(hasVisibleAssistantError([{ role: 'assistant', content: error, state: 'streaming' }], error)).toBe(false)
+    expect(hasVisibleAssistantError([], error)).toBe(false)
+  })
+
+  it('announces newly delivered error events without reannouncing hydrated history', () => {
+    const store = createGlobalChatStore(api())
+    const announcements: Array<{ chatId: string; content: string }> = []
+    store.onErrorAnnouncement(announcement => announcements.push(announcement))
+
+    store.hydrate('c1', [
+      { id: 'saved', role: 'assistant', content: '历史错误', state: 'error', retryable: false },
+    ])
+    expect(announcements).toEqual([])
+
+    store.beginRun('c1', 'r1')
+    store.apply({ kind: 'chat:error', chatId: 'c1', runId: 'r1', messageId: 'm1', error: '新的运行时错误', retryable: false })
+    expect(announcements).toEqual([{ chatId: 'c1', content: '新的运行时错误' }])
+
+    store.hydrate('c1', [
+      { id: 'saved', role: 'assistant', content: '新的运行时错误', state: 'error', retryable: false },
+    ])
+    expect(announcements).toEqual([{ chatId: 'c1', content: '新的运行时错误' }])
+  })
+
+  it('announces newly completed assistant replies without reannouncing hydrated history', () => {
+    const store = createGlobalChatStore(api())
+    const announcements: Array<{ chatId: string; content: string }> = []
+    store.onAssistantAnnouncement(announcement => announcements.push(announcement))
+
+    store.hydrate('c1', [
+      { id: 'saved', role: 'assistant', content: '历史回复', state: 'complete' },
+    ])
+    expect(announcements).toEqual([])
+
+    store.beginRun('c1', 'r1')
+    store.apply({ kind: 'chat:completed', chatId: 'c1', runId: 'r1', messageId: 'm1', content: '{"version":1,"reply":"新的回复","plan":null}' })
+    expect(announcements).toEqual([{ chatId: 'c1', content: '{"version":1,"reply":"新的回复","plan":null}' }])
+
+    store.hydrate('c1', [
+      { id: 'saved', role: 'assistant', content: '新的回复', state: 'complete' },
+    ])
+    expect(announcements).toEqual([{ chatId: 'c1', content: '{"version":1,"reply":"新的回复","plan":null}' }])
+  })
+
+  it('uses pre-mounted current-task live announcers while preserving visible task-scoped errors', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+
+    expect(panel).toContain("const disposeErrorAnnouncement = store.onErrorAnnouncement(announcement => {")
+    expect(panel).toContain('if (announcement.chatId !== chatId.value) return')
+    expect(panel).toContain("const disposeAssistantAnnouncement = store.onAssistantAnnouncement(announcement => {")
+    expect(panel).toContain('if (announcement.chatId !== chatId.value) return\n  announceAssistantResponse(assistantReply(announcement.content))')
+    expect(panel).toContain('<div class="messages">')
+    expect(panel).not.toContain(':aria-live="message.role === \'assistant\' && message.state !== \'error\' ? \'polite\' : undefined"')
+    expect(panel).toContain('<p class="visually-hidden-alert" role="status" aria-live="polite" aria-atomic="true"><span :key="assistantResponse?.id">{{ assistantResponse?.content ?? \'\' }}</span></p>')
+    expect(panel).toContain('<p class="visually-hidden-alert" role="alert" aria-atomic="true"><span :key="assertiveError?.id">{{ assertiveError?.content ?? \'\' }}</span></p>')
+    expect(panel).toContain('if (!error || hasVisibleAssistantError(messages.value, error)) return \'\'')
+    expect(panel).toContain('const actionErrors = reactive<Record<string, string>>({})')
+    expect(panel).toContain('const actionError = computed(() => chatId.value ? actionErrors[chatId.value] ?? \'\' : \'\')')
+    expect(panel).toContain('function reportActionError(actionChatId: string, error: unknown, fallback: string): void {')
+    expect(panel).toContain('if (actionChatId !== chatId.value) return')
+    expect(panel).toContain('<p v-if="standaloneError" class="error">{{ standaloneError }}</p>')
+    expect(panel).toContain('<p v-if="actionError" class="error">{{ actionError }}</p>')
+    expect(panel).not.toContain('<p v-if="standaloneError" class="error" role="alert">')
+    expect(panel).not.toContain('<p v-if="actionError" class="error" role="alert">')
+  })
+
   it('keeps drafts per task and applies only matching stream events', () => {
     const transport = api()
     const store = createGlobalChatStore(transport)
@@ -145,6 +227,8 @@ describe('global chat store', () => {
     const transport = api()
     transport.cancel.mockRejectedValueOnce(new Error('disk full'))
     const store = createGlobalChatStore(transport)
+    const announcements: Array<{ chatId: string; content: string }> = []
+    store.onErrorAnnouncement(announcement => announcements.push(announcement))
     store.beginRun('c1', 'r1')
     store.apply({ kind: 'chat:progress', chatId: 'c1', runId: 'r1', stage: 'thinking' })
 
@@ -153,6 +237,7 @@ describe('global chat store', () => {
     expect(store.state.progress.c1).toBeNull()
     expect(store.state.errors.c1).toBe('取消状态未能保存，请重新加载后确认。')
     expect(store.canRetry('c1')).toBe(false)
+    expect(announcements).toEqual([{ chatId: 'c1', content: '取消状态未能保存，请重新加载后确认。' }])
   })
 
   it('subscribes once and disposes the event listener', () => {
