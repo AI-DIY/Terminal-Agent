@@ -17,6 +17,7 @@ export type StructuredChatShell = {
   title: string
   displayLabel: string
   ordinal: number
+  recentLines?: string[]
 }
 
 type StructuredShellAssociation = {
@@ -30,6 +31,7 @@ type StructuredOnlineSession = {
   id: string
   hostname: string
   title?: string
+  recentLines?: string[]
 }
 
 export function buildStructuredShellContext(
@@ -44,9 +46,10 @@ export function buildStructuredShellContext(
     return [{
       hostname: session.hostname,
       title: session.title ?? association.title ?? session.hostname,
+      ...(session.recentLines ? { recentLines: [...session.recentLines] } : {}),
     }]
   })
-  const labels = hostnameDisplayLabels(entries)
+  const labels = hostnameDisplayLabels(entries.map(entry => ({ hostname: entry.hostname, displayName: entry.title })))
   return entries.map((entry, index) => {
     const { displayLabel, ordinal } = labels[index]!
     return {

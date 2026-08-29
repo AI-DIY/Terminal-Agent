@@ -269,6 +269,15 @@ describe('global chat store', () => {
     expect(store.state.messages.c2?.[0]?.messageType).toBe('execution_audit')
   })
 
+  it('renders plan targets from the same user-facing Shell labels as the terminal', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+
+    expect(panel).toContain('function planTargetLabel(target: string)')
+    expect(panel).toContain('{{ planTargetLabel(step.target) }}')
+    expect(panel).toContain('hostnameDisplayLabels')
+    expect(panel).toContain('个在线 Shell')
+  })
+
   it('composes text-only content while retaining old image records for hydration', () => {
     const store = createGlobalChatStore(api())
     store.setDraft('c1', '  hello  ')

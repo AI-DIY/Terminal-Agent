@@ -145,7 +145,7 @@ watch(
         @select="selectSession"
         @close="closeSession"
       />
-      <div v-else class="history-toolbar-title"><strong>Shell 历史回放</strong><span>{{ historyHosts.length }} 台主机 · {{ shellCount }} 条记录</span></div>
+       <div v-else class="history-toolbar-title"><strong>Shell 历史回放</strong><span>{{ historyHosts.length }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
       <div class="hostbar-tools">
         <div v-if="isLive" class="shell-title">
           <strong>Shell</strong>

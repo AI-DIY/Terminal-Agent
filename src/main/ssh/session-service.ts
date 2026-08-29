@@ -71,7 +71,10 @@ type ActiveSession = {
   supportsReadOnlyObservation: boolean
   reconnectReference: string
   connectionIp?: string
+  recentOutput: string
 }
+
+export const MAX_RECENT_SHELL_LINES = 200
 
 export type TerminalWriteEvent = TerminalDataEvent
 
@@ -249,7 +252,7 @@ export class SessionService {
       ...(chatId ? { chatId } : {}),
     }
     const connectionIp = safeConnectionIp(connection.remoteAddress)
-    this.sessions.set(id, { connection, shell, decoder, summary, connectionType, supportsReadOnlyObservation, reconnectReference, ...(connectionIp ? { connectionIp } : {}) })
+    this.sessions.set(id, { connection, shell, decoder, summary, connectionType, supportsReadOnlyObservation, reconnectReference, recentOutput: '', ...(connectionIp ? { connectionIp } : {}) })
     const historySession: HistoryConnectedSession = { ...summary, connectionType, reconnectReference }
     for (const listener of this.historyOpenedListeners) {
       listener(historySession)
@@ -315,6 +318,14 @@ export class SessionService {
   clearObservedHostname(sessionId: string): void { this.observedHostnames.delete(sessionId) }
 
   connectionIp(sessionId: string): string | undefined { return this.sessions.get(sessionId)?.connectionIp }
+
+  recentLines(sessionId: string): string[] {
+    const output = this.sessions.get(sessionId)?.recentOutput
+    if (output === undefined) return []
+    const lines = output.split(/\r?\n|\r/)
+    if (lines.at(-1) === '') lines.pop()
+    return lines.slice(-MAX_RECENT_SHELL_LINES)
+  }
 
   supportsReadOnlyObservation(sessionId: string): boolean {
     const session = this.sessions.get(sessionId)
@@ -410,6 +421,8 @@ export class SessionService {
 
   private publishData(sessionId: string, data: string): void {
     if (!data) return
+    const session = this.sessions.get(sessionId)
+    if (session) session.recentOutput = appendRecentShellOutput(session.recentOutput, data)
     const event = { sessionId, data }
     for (const listener of this.dataListeners) {
       listener(event)
@@ -425,6 +438,13 @@ export class SessionService {
     const privateKey = await this.privateKeyLoader.load(request.auth.key)
     return { ...common, privateKey, passphrase: request.auth.key.passphrase }
   }
+}
+
+function appendRecentShellOutput(previous: string, data: string): string {
+  const combined = `${previous}${data}`
+  const lines = combined.split(/\r\n|\r|\n/)
+  const keepCount = MAX_RECENT_SHELL_LINES + (/(?:\r\n|\r|\n)$/.test(combined) ? 1 : 0)
+  return lines.length <= keepCount ? combined : lines.slice(-keepCount).join('\n')
 }
 
 function safeConnectionIp(value: string | undefined): string | undefined {

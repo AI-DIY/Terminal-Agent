@@ -394,6 +394,41 @@ describe('SessionService', () => {
     expect(() => service.write(session.id, 'whoami\n')).toThrow('Unknown terminal session')
   })
 
+  it('keeps only the latest 200 logical shell output lines for main-process context', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    const output = Array.from({ length: 205 }, (_, index) => `line-${index}\n`).join('')
+    shell.emitData(Buffer.from(output.slice(0, 617), 'utf8'))
+    shell.emitData(Buffer.from(output.slice(617), 'utf8'))
+
+    expect((service as SessionService & { recentLines(sessionId: string): string[] }).recentLines(session.id)).toEqual(
+      Array.from({ length: 200 }, (_, index) => `line-${index + 5}`),
+    )
+    expect(service.snapshot()[0]).not.toHaveProperty('recentLines')
+  })
+
+  it('keeps the latest 200 lines even when their combined output exceeds the character budget', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    const output = Array.from({ length: 205 }, (_, index) => `line-${index}-${'x'.repeat(2_000)}\n`).join('')
+    shell.emitData(Buffer.from(output, 'utf8'))
+
+    const recent = (service as SessionService & { recentLines(sessionId: string): string[] }).recentLines(session.id)
+    expect(recent).toHaveLength(200)
+    expect(recent[0]).toBe(`line-5-${'x'.repeat(2_000)}`)
+    expect(recent.at(-1)).toBe(`line-204-${'x'.repeat(2_000)}`)
+  })
+
   it('closes the shell and connection once, then announces the closed session', async () => {
     const shell = createShell()
     const connection = { close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }

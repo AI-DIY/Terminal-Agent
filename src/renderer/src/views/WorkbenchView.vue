@@ -774,7 +774,7 @@ onBeforeUnmount(() => {
     :data-workbench-ready="workbenchReady ? 'true' : 'false'"
     :modal-open="showConnection || showSavedSessions || showHistoryDialog || pendingHostMemoryDisclosure !== null"
     :current-chat-title="chatStore.state.selected?.title ?? '未选择任务'"
-    :current-chat-shell-count="chatStore.state.selected?.shellCount ?? 0"
+    :current-chat-shell-count="isLiveChat ? currentChatSessions.length : 0"
   >
     <template #app-actions>
       <p v-if="connectionError" class="connection-error" role="alert">{{ connectionError }}</p>
@@ -807,7 +807,7 @@ onBeforeUnmount(() => {
         :current-sessions="currentChatSessions"
         :visible-session-ids="visibleSessionIds"
         :active-session-id="activeSessionId"
-        :shell-count="chatStore.state.selected?.shellCount ?? 0"
+        :shell-count="isLiveChat ? currentChatSessions.length : 0"
         :is-live="isLiveChat"
         :live-chat-available="Boolean(chatStore.state.liveChatId)"
         :history-hosts="historyHosts"
@@ -865,6 +865,7 @@ onBeforeUnmount(() => {
       <GlobalChatPanel
         :chat="chatStore.state.selected"
         :read-only="!isLiveChat"
+        :shell-count="isLiveChat ? currentChatSessions.length : 0"
         @collapse="collapse"
       />
     </template>

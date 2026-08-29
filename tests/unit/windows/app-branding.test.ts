@@ -16,10 +16,10 @@ describe('Terminal-Agent branding', () => {
     const appHeaderActionsChildrenRule = /\.app-header-actions\s+:deep\(\*\)\s*\{([^}]*)\}/.exec(shell)?.[1] ?? ''
 
     expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
-    expect(packageJson.version).toBe('2.0.0')
+    expect(packageJson.version).toBe('2.0.1')
     expect(packageLock.version).toBe(packageJson.version)
     expect(packageLock.packages[''].version).toBe(packageJson.version)
-    expect(packageJson.build.nsis.artifactName.replace('${version}', packageJson.version).replace('${ext}', 'exe')).toBe('Terminal-Agent-Setup-2.0.0.exe')
+    expect(packageJson.build.nsis.artifactName.replace('${version}', packageJson.version).replace('${ext}', 'exe')).toBe('Terminal-Agent-Setup-2.0.1.exe')
     expect(packageJson.build.win.icon).toBe('build-resources/ta-icon.ico')
     expect(existsSync(icon)).toBe(true)
     expect(readFileSync(icon).subarray(0, 4)).toEqual(Buffer.from([0, 0, 1, 0]))

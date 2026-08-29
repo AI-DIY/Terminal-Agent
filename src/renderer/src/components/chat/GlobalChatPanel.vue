@@ -4,8 +4,9 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { ChatWorkspace } from '../../../../shared/contracts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../stores/global-chat'
 import { chatContentText } from '../../../../shared/chat-content'
+import { hostnameDisplayLabels } from '../../../../shared/shell-display-label'
 
-const props = defineProps<{ chat: ChatWorkspace | null; readOnly?: boolean }>()
+const props = defineProps<{ chat: ChatWorkspace | null; readOnly?: boolean; shellCount?: number }>()
 const emit = defineEmits<{ collapse: [] }>()
 const store = createGlobalChatStore(window.terminalAgent.chat)
 const modelContextLimit = ref(12_000)
@@ -66,6 +67,14 @@ function planStatusLabel(status: string): string {
   return status === 'pending_review' ? '待确认' : status === 'executing' ? '执行中' : status === 'executed' ? '已执行' : status === 'partially_executed' ? '部分执行' : status === 'execution_failed' ? '执行失败' : '已取消'
 }
 function stepCommand(step: { finalCommand?: string; originalCommand: string }): string { return step.finalCommand ?? step.originalCommand }
+function planTargetLabel(target: string): string {
+  const allShells = props.chat?.shells ?? []
+  const liveShells = allShells.filter(shell => shell.status === 'open')
+  const shells = liveShells.length > 0 ? liveShells : allShells
+  const index = shells.findIndex(shell => shell.hostname === target)
+  if (index < 0) return target
+  return hostnameDisplayLabels(shells.map(shell => ({ hostname: shell.hostname, displayName: shell.title })))[index]?.displayLabel ?? target
+}
 function stepDraftKey(messageId: string, stepId: string): string { return `${messageId}:${stepId}` }
 function setStepDraft(messageId: string, stepId: string, event: Event): void { stepDrafts[stepDraftKey(messageId, stepId)] = (event.target as HTMLInputElement).value }
 function stepDraftValue(messageId: string, stepId: string, step: { finalCommand?: string; originalCommand: string }): string {
@@ -138,15 +147,15 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
           <section v-if="message.executionPlan" class="execution-plan" :data-status="message.executionPlan.status">
             <header class="plan-head"><div><strong>{{ message.executionPlan.title }}</strong><span>{{ message.executionPlan.steps.length }} 步 · {{ planStatusLabel(message.executionPlan.status) }}</span></div><span class="plan-badge">{{ planStatusLabel(message.executionPlan.status) }}</span></header>
             <div v-for="step in message.executionPlan.steps" :key="step.id" class="plan-step">
-               <div class="plan-step-head"><strong>{{ step.target }}</strong><span>{{ step.sendState }}</span></div>
+               <div class="plan-step-head"><strong>{{ planTargetLabel(step.target) }}</strong><span>{{ step.sendState }}</span></div>
                <p>{{ step.explanation }}</p>
                <div v-if="step.fence" class="plan-risk"><CircleAlert :size="12" aria-hidden="true" /><span>安全围栏：{{ step.fence.ruleName }}（{{ step.fence.ruleId }}）</span></div>
                <label class="plan-command"><span>原始命令</span><code>{{ step.originalCommand }}</code></label>
                <label v-if="step.finalCommand" class="plan-command"><span>确认命令</span><code>{{ step.finalCommand }}</code></label>
                <div v-if="message.executionPlan.status === 'pending_review' && !readOnly" class="plan-step-actions">
-                 <input class="plan-edit-input" :value="stepDraftValue(message.id, step.id, step)" :aria-label="`编辑 ${step.target} 命令`" @input="setStepDraft(message.id, step.id, $event)">
-                 <button type="button" class="icon-button" :aria-label="`保存 ${step.target} 命令`" title="保存命令" @click="saveStep(message.id, step.id, stepCommand(step))"><Check :size="13" aria-hidden="true" /></button>
-                <button type="button" class="icon-button" :aria-label="`删除 ${step.target} 步骤`" title="删除步骤" @click="removeStep(message.id, step.id)"><Trash2 :size="13" aria-hidden="true" /></button>
+                 <input class="plan-edit-input" :value="stepDraftValue(message.id, step.id, step)" :aria-label="`编辑 ${planTargetLabel(step.target)} 命令`" @input="setStepDraft(message.id, step.id, $event)">
+                 <button type="button" class="icon-button" :aria-label="`保存 ${planTargetLabel(step.target)} 命令`" title="保存命令" @click="saveStep(message.id, step.id, stepCommand(step))"><Check :size="13" aria-hidden="true" /></button>
+                <button type="button" class="icon-button" :aria-label="`删除 ${planTargetLabel(step.target)} 步骤`" title="删除步骤" @click="removeStep(message.id, step.id)"><Trash2 :size="13" aria-hidden="true" /></button>
               </div>
             </div>
             <footer v-if="message.executionPlan.status === 'pending_review' && !readOnly" class="plan-actions">
@@ -166,7 +175,7 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
     <footer class="composer">
       <div class="composer-shell">
         <textarea :value="draft" :disabled="readOnly || !chatId" aria-label="聊天输入" placeholder="告诉 AI 要完成什么；AI 会根据当前任务的 Shell 信息回答。" @input="updateDraft" @keydown="onKeydown" />
-        <div class="composer-foot"><span>{{ readOnly ? '历史聊天只读' : `${chat?.shellCount ?? 0} 个关联 Shell` }}</span><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="send-button" :disabled="readOnly || !chatId || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
+        <div class="composer-foot"><span>{{ readOnly ? '历史聊天只读' : `${props.shellCount ?? chat?.shellCount ?? 0} 个在线 Shell` }}</span><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="send-button" :disabled="readOnly || !chatId || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
       </div>
     </footer>
   </section>

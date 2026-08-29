@@ -68,6 +68,22 @@ describe('chat context builder', () => {
     expect(systemContent).not.toContain('Closed Shell')
   })
 
+  it('serializes recent output only for live Shells', () => {
+    const context = buildChatContext({
+      messages: [],
+      shells: [
+        { hostname: 'live-host', title: 'Live Shell', displayLabel: 'Live Shell #1', ordinal: 1, recentLines: ['latest prompt', 'latest output'], status: 'open' },
+        { hostname: 'closed-host', title: 'Closed Shell', recentLines: ['old output'], status: 'closed' },
+      ],
+    })
+    const systemContent = context[0]?.content ?? ''
+
+    expect(systemContent).toContain('latest prompt')
+    expect(systemContent).toContain('latest output')
+    expect(systemContent).not.toContain('old output')
+    expect(systemContent).toContain('Live Shell #1')
+  })
+
   it('does not recursively strip authorized fact field names before model serialization', () => {
     const context = buildChatContext({
       messages: [],

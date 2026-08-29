@@ -42,4 +42,24 @@ describe('ExecutionPlanService', () => {
     expect(write).toHaveBeenCalledWith('session-first', 'systemctl status api\n')
     expect(write).not.toHaveBeenCalledWith('session-second', 'systemctl status api\n')
   })
+
+  it('persists execution phases with distinct request ids and does not append a result message', async () => {
+    const write = vi.fn()
+    const updateMessage = vi.fn(async () => undefined)
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: plan() }],
+        shells: [{ sessionId: 'session-1', hostname: 'web-01', status: 'open' }],
+      } })),
+      updateMessage,
+    }, {
+      snapshot: () => [{ id: 'session-1', hostname: 'web-01' }],
+      write,
+    }, { match: () => null })
+
+    await expect(service.execute({ requestId: 'request-1', chatId: 'chat-1', messageId: 'message-1' })).resolves.toBeUndefined()
+
+    expect(write).toHaveBeenCalledWith('session-1', 'systemctl status api\n')
+    expect(updateMessage.mock.calls.map(call => ((call as unknown as [{ requestId: string }])[0]).requestId)).toEqual(['request-1:executing', 'request-1:result'])
+  })
 })

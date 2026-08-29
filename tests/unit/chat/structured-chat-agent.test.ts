@@ -7,7 +7,7 @@ const request = {
 }
 
 describe('StructuredChatAgent', () => {
-  it('projects online task associations in stored order with hostname display labels', () => {
+  it('projects online task associations in stored order with connection-title display labels', () => {
     expect(buildStructuredShellContext([
       { sessionId: 'first', hostname: 'web-01', title: 'primary', status: 'open' },
       { sessionId: 'second', hostname: 'web-01', title: 'secondary', status: 'open' },
@@ -17,8 +17,24 @@ describe('StructuredChatAgent', () => {
       { id: 'first', hostname: 'web-01', title: 'primary' },
       { id: 'closed', hostname: 'db-01', title: 'closed' },
     ])).toEqual([
-      { hostname: 'web-01', title: 'primary', displayLabel: 'web-01 #1', ordinal: 1 },
-      { hostname: 'web-01', title: 'secondary', displayLabel: 'web-01 #2', ordinal: 2 },
+      { hostname: 'web-01', title: 'primary', displayLabel: 'primary #1', ordinal: 1 },
+      { hostname: 'web-01', title: 'secondary', displayLabel: 'secondary #2', ordinal: 2 },
+    ])
+  })
+
+  it('carries recent output lines into each matching online Shell context entry', () => {
+    expect(buildStructuredShellContext([
+      { sessionId: 'first', hostname: 'web-01', title: 'primary', status: 'open' },
+    ], [
+      { id: 'first', hostname: 'web-01', title: 'primary', recentLines: ['last command', 'result'] },
+    ])).toEqual([
+      {
+        hostname: 'web-01',
+        title: 'primary',
+        displayLabel: 'primary',
+        ordinal: 1,
+        recentLines: ['last command', 'result'],
+      },
     ])
   })
 

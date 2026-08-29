@@ -119,10 +119,11 @@ const chatRuntime = new ChatRuntime({
   getRetryMessageId: (chatId, content) => chats.findRetryMessage(chatId, content),
   getContext: async chatId => {
     const snapshot = await chats.get(chatId)
-    const availableShells = buildStructuredShellContext(snapshot.chat.shells, sessions.snapshot())
+    const onlineSessions = sessions.snapshot().map(session => ({ ...session, recentLines: sessions.recentLines(session.id) }))
+    const availableShells = buildStructuredShellContext(snapshot.chat.shells, onlineSessions)
     const facts = await Promise.all(snapshot.chat.shells.map(async shell => {
       if (shell.status !== 'open') return null
-      const session = shell.sessionId ? sessions.snapshot().find(item => item.id === shell.sessionId) : undefined
+      const session = shell.sessionId ? onlineSessions.find(item => item.id === shell.sessionId) : undefined
       const observedHostname = shell.sessionId ? sessions.observedHostname(shell.sessionId) : undefined
       if (!session || !observedHostname) return null
       const allowed = await Promise.resolve()

@@ -19,7 +19,8 @@ export function sessionLabel(session: SessionView): string {
 
 export function sessionDisplayLabel(session: SessionView, orderedSessions: readonly SessionView[]): string {
   const index = orderedSessions.findIndex(item => item.id === session.id)
-  return index < 0 ? session.hostname : hostnameDisplayLabels(orderedSessions)[index]!.displayLabel
+  if (index < 0) return sessionLabel(session)
+  return hostnameDisplayLabels(orderedSessions.map(item => ({ hostname: item.hostname, displayName: item.title })))[index]!.displayLabel
 }
 
 export function createSessionsStore() {
