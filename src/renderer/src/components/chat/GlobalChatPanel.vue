@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { ChatWorkspace } from '../../../../shared/contracts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../stores/global-chat'
 import { chatContentText } from '../../../../shared/chat-content'
-import { hostnameDisplayLabels } from '../../../../shared/shell-display-label'
+import { hostnameDisplayLabels, resolvedHostnames } from '../../../../shared/shell-display-label'
 
 const props = defineProps<{ chat: ChatWorkspace | null; readOnly?: boolean; shellCount?: number }>()
 const emit = defineEmits<{ collapse: [] }>()
@@ -71,9 +71,16 @@ function planTargetLabel(target: string): string {
   const allShells = props.chat?.shells ?? []
   const liveShells = allShells.filter(shell => shell.status === 'open')
   const shells = liveShells.length > 0 ? liveShells : allShells
-  const index = shells.findIndex(shell => shell.hostname === target)
+  const resolved = resolvedHostnames(shells.map(shell => ({
+    hostname: shell.hostname,
+    observedHostname: shell.observedHostname,
+    displayName: shell.title,
+  })))
+  const index = shells.findIndex((shell, shellIndex) => [
+    resolved[shellIndex], shell.observedHostname, shell.title, shell.hostname,
+  ].some(identity => identity?.trim() === target.trim()))
   if (index < 0) return target
-  return hostnameDisplayLabels(shells.map(shell => ({ hostname: shell.hostname, displayName: shell.title })))[index]?.displayLabel ?? target
+  return hostnameDisplayLabels(shells.map(shell => ({ hostname: shell.hostname, observedHostname: shell.observedHostname, displayName: shell.title })))[index]?.displayLabel ?? target
 }
 function stepDraftKey(messageId: string, stepId: string): string { return `${messageId}:${stepId}` }
 function setStepDraft(messageId: string, stepId: string, event: Event): void { stepDrafts[stepDraftKey(messageId, stepId)] = (event.target as HTMLInputElement).value }

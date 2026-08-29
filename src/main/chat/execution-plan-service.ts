@@ -1,8 +1,10 @@
 import type { AssistantPlanOutput, ChatExecutionPlan, ChatPlanEditStepRequest, ChatPlanRemoveStepRequest, ChatPlanCancelRequest, ChatPlanExecuteRequest } from '../../shared/chat-plan'
+import type { ChatMessageContent } from '../../shared/chat-content'
+import { resolvedHostnames } from '../../shared/shell-display-label'
 
 type FenceMatcher = { match(command: string): { id: string; name: string } | null }
-type Sessions = { snapshot(): Array<{ id: string; hostname: string }>; write(sessionId: string, data: string): void | Promise<void> }
-type Chats = { get(chatId: string): Promise<{ chat: { messages: Array<{ id: string; role: string; state: string; content: string; executionPlan?: ChatExecutionPlan }>; shells: Array<{ sessionId?: string; hostname: string; status: string }> } }>; updateMessage(request: { requestId: string; chatId: string; messageId: string; content: string; state: 'complete'; executionPlan?: ChatExecutionPlan }): Promise<unknown>; appendMessage?: (request: { requestId: string; chatId: string; role: 'user'; state: 'complete'; content: string; messageType: 'execution_audit' }) => Promise<unknown> }
+type Sessions = { snapshot(): Array<{ id: string; hostname: string; observedHostname?: string; title?: string }>; write(sessionId: string, data: string): void | Promise<void> }
+type Chats = { get(chatId: string): Promise<{ chat: { messages: Array<{ id: string; role: string; state: string; content: ChatMessageContent; executionPlan?: ChatExecutionPlan }>; shells: Array<{ sessionId?: string; hostname: string; observedHostname?: string; title?: string; status: string }> } }>; updateMessage(request: { requestId: string; chatId: string; messageId: string; content: ChatMessageContent; state: 'complete'; executionPlan?: ChatExecutionPlan }): Promise<unknown>; appendMessage?: (request: { requestId: string; chatId: string; role: 'user'; state: 'complete'; content: string; messageType: 'execution_audit' }) => Promise<unknown> }
 
 export class ExecutionPlanService {
   private readonly active = new Set<string>()
@@ -27,7 +29,7 @@ export class ExecutionPlanService {
       if (current.status !== 'pending_review') throw new Error('计划不可执行')
       const workspace = await this.chats.get(request.chatId)
       const online = this.sessions.snapshot()
-      const steps = current.steps.map(step => ({ ...step, sessionId: workspace.chat.shells.find(shell => shell.status === 'open' && shell.hostname === step.target && shell.sessionId && online.some(session => session.id === shell.sessionId))?.sessionId }))
+      const steps = current.steps.map(step => ({ ...step, sessionId: findSessionForTarget(step.target, workspace.chat.shells, online) }))
       current.status = 'executing'; current.steps = steps
       await this.save(request, current, 'executing')
       let sent = 0
@@ -45,6 +47,36 @@ export class ExecutionPlanService {
   private async mutate(request: { chatId: string; messageId: string; requestId: string }, change: (plan: ChatExecutionPlan) => ChatExecutionPlan): Promise<unknown> { const plan = await this.requirePlan(request); const next = change(structuredClone(plan)); return this.save(request, next) }
   private async requirePlan(request: { chatId: string; messageId: string }): Promise<ChatExecutionPlan> { const workspace = await this.chats.get(request.chatId); const message = workspace.chat.messages.find(item => item.id === request.messageId); if (!message?.executionPlan || message.role !== 'assistant' || message.state !== 'complete') throw new Error('未知执行计划'); return structuredClone(message.executionPlan) }
   private async save(request: { chatId: string; messageId: string; requestId: string }, plan: ChatExecutionPlan, phase?: 'executing' | 'result'): Promise<unknown> { const workspace = await this.chats.get(request.chatId); const message = workspace.chat.messages.find(item => item.id === request.messageId); if (!message) throw new Error('未知执行计划'); const requestId = phase ? phaseRequestId(request.requestId, phase) : request.requestId; return this.chats.updateMessage({ requestId, chatId: request.chatId, messageId: request.messageId, content: message.content, state: 'complete', executionPlan: plan }) }
+}
+
+function findSessionForTarget(
+  target: string,
+  shells: readonly { sessionId?: string; hostname: string; observedHostname?: string; title?: string; status: string }[],
+  online: readonly { id: string; hostname: string; observedHostname?: string; title?: string }[],
+): string | undefined {
+  const candidates = shells.flatMap(shell => {
+    if (shell.status !== 'open' || !shell.sessionId) return []
+    const session = online.find(item => item.id === shell.sessionId)
+    if (!session) return []
+    return [{ shell, session }]
+  })
+  const resolved = resolvedHostnames(candidates.map(({ shell, session }) => ({
+    hostname: session.hostname,
+    observedHostname: session.observedHostname ?? shell.observedHostname,
+    displayName: session.title ?? shell.title,
+  })))
+  return candidates.find(({ shell, session }, index) => {
+    const identities = [
+      resolved[index],
+      session.observedHostname,
+      shell.observedHostname,
+      session.title,
+      shell.title,
+      session.hostname,
+      shell.hostname,
+    ]
+    return identities.some(identity => identity?.trim() === target.trim())
+  })?.session.id
 }
 
 function phaseRequestId(requestId: string, phase: 'executing' | 'result'): string {

@@ -22,7 +22,8 @@ import type { ExecutionPlanService } from './execution-plan-service'
 const channels = ['chats:list', 'chats:create', 'chats:get', 'chats:resolve-session', 'chats:set-mode', 'chats:update-title', 'chats:pin', 'chats:unpin', 'chats:remove', 'chats:bind-session', 'chats:transfer-sessions'] as const
 
 type ChatHandlerService = Pick<ChatService, 'list' | 'create' | 'get' | 'resolveSession' | 'setMode' | 'updateTitle' | 'pin' | 'unpin' | 'remove' | 'associateSession' | 'transferSessions' | 'closeSession' | 'reconcileSessions' | 'onChanged'>
-type SessionLookup = Pick<SessionService, 'snapshot' | 'onClosed'>
+  & Partial<Pick<ChatService, 'syncSessionMetadata'>>
+type SessionLookup = Pick<SessionService, 'snapshot' | 'onClosed'> & Partial<Pick<SessionService, 'onUpdated'>>
 
 export function registerChatHandlers(service: ChatHandlerService, trustedSender: WebContents, sessions: SessionLookup, runtime?: ChatRuntime, plans?: ExecutionPlanService): () => void {
   plans ??= (runtime as ChatRuntime & { planService?: ExecutionPlanService } | undefined)?.planService
@@ -70,8 +71,18 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
     const parsed = chatBindSessionRequestSchema.parse(request)
     const session = sessions.snapshot().find(item => item.id === parsed.sessionId)
     if (!session) throw new Error('Unknown terminal session')
-    const workspace = await service.associateSession(parsed, session as ConnectedSession)
-    if (!sessions.snapshot().some(item => item.id === parsed.sessionId)) await service.closeSession(parsed.sessionId)
+    let workspace = await service.associateSession(parsed, session as ConnectedSession)
+    const latest = sessions.snapshot().find(item => item.id === parsed.sessionId)
+    if (!latest) {
+      await service.closeSession(parsed.sessionId)
+    } else if (service.syncSessionMetadata && latest.observedHostname !== session.observedHostname) {
+      try {
+        const refreshed = await service.syncSessionMetadata(latest as ConnectedSession)
+        if (refreshed) workspace = refreshed
+      } catch (error) {
+        console.error('Failed to synchronize observed Shell hostname after binding', error)
+      }
+    }
     return workspace
   })
   ipcMain.handle('chats:transfer-sessions', async (event, request: unknown) => {
@@ -112,7 +123,21 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
   }
 
   const unsubscribeChanged = service.onChanged(event => trustedSender.send('chats:changed', event))
+  const observedMetadata = new Map<string, string | undefined>()
+  const unsubscribeUpdated = sessions.onUpdated?.(session => {
+    const hadObservedState = observedMetadata.has(session.id)
+    const observedHostname = Object.prototype.hasOwnProperty.call(session, 'observedHostname')
+      ? session.observedHostname
+      : undefined
+    const previous = observedMetadata.get(session.id)
+    observedMetadata.set(session.id, observedHostname)
+    if (!service.syncSessionMetadata || (!hadObservedState && observedHostname === undefined) || previous === observedHostname) return
+    void service.syncSessionMetadata(session).catch(error => {
+      console.error('Failed to synchronize observed Shell hostname', error)
+    })
+  })
   const unsubscribeClosed = sessions.onClosed(event => {
+    observedMetadata.delete(event.sessionId)
     void service.closeSession(event.sessionId).catch(error => {
       console.error('Failed to close chat session association', error)
     })
@@ -122,6 +147,7 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
     if (disposed) return
     disposed = true
     unsubscribeChanged()
+    unsubscribeUpdated?.()
     unsubscribeClosed()
     for (const channel of channels) ipcMain.removeHandler(channel)
     if (runtime) for (const channel of ['chat:send', 'chat:cancel'] as const) ipcMain.removeHandler(channel)

@@ -3,7 +3,7 @@ import type { ChatMessageContent } from '../../shared/chat-content'
 
 export type ChatContextInput = {
   messages: readonly { role: 'user' | 'assistant' | 'system'; content: ChatMessageContent; createdAt?: string; messageType?: string; executionPlan?: unknown }[]
-  shells?: readonly { hostname: string; title: string; status: 'open' | 'closed'; displayLabel?: string; ordinal?: number; recentLines?: readonly string[] }[]
+  shells?: readonly { hostname: string; observedHostname?: string; title: string; status: 'open' | 'closed'; displayLabel?: string; ordinal?: number; recentLines?: readonly string[] }[]
   facts?: readonly { hostname: string; scope?: string; values?: Record<string, unknown> }[]
   audit?: readonly { kind: string; label: string; at?: string }[]
   maxMessages?: number

@@ -168,6 +168,36 @@ describe('ChatService', () => {
     }
   })
 
+  it('synchronizes an observed hostname discovered after a session was bound', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'chat-service-observed-hostname-'))
+    const path = join(directory, 'chats.json')
+    const chatService = new ChatService(new ChatRepository(path, {
+      now: () => new Date('2026-08-16T08:00:00.000Z'),
+    }))
+    try {
+      const chat = (await chatService.create({ requestId: 'create-observed-hostname' })).chat
+      const session = { id: 'session-observed', hostname: '127.0.0.1', title: '堡垒机目标', mode: 'copilot' as const }
+      await chatService.associateSession({ requestId: 'bind-observed-hostname', chatId: chat.id, sessionId: session.id }, session)
+
+      const observed = { ...session, observedHostname: 'app-prod' }
+      const synced = await chatService.syncSessionMetadata(observed)
+
+      expect(synced?.chat.shells).toContainEqual(expect.objectContaining({
+        sessionId: session.id,
+        hostname: '127.0.0.1',
+        observedHostname: 'app-prod',
+      }))
+      await expect(new ChatRepository(path).findOpenSession(session.id)).resolves.toMatchObject({
+        observedHostname: 'app-prod',
+      })
+
+      const cleared = await chatService.syncSessionMetadata(session)
+      expect(cleared?.chat.shells.find(shell => shell.sessionId === session.id)).not.toHaveProperty('observedHostname')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('sanitizes close-before-bind fallback metadata before chat persistence and changed events', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'chat-service-safe-fallback-'))
     const path = join(directory, 'chat-workspaces.json')

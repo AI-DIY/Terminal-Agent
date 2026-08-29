@@ -1563,7 +1563,7 @@ test('renders an AccessClient Raw startup session from the initial session snaps
     const page = await app.firstWindow()
 
     await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(1)
-    await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: `选择终端会话 Raw ${port}`, exact: true })).toBeVisible()
   } finally {
     await app?.close()
     await closeServer(rawServer)
@@ -1596,7 +1596,7 @@ test('selects an unowned startup session over persisted history', async ({ launc
     const restoredPage = await restarted.firstWindow()
 
     await waitForWorkbenchReady(restoredPage)
-    await expect(restoredPage.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()
+    await expect(restoredPage.getByRole('button', { name: `选择终端会话 Raw ${rawPort}`, exact: true })).toBeVisible()
     const restoredHistory = chatItem(restoredPage, historyChatId)
     await expect(restoredHistory).toHaveCount(1)
     await expect(restoredHistory).not.toHaveClass(/active/)
@@ -1645,7 +1645,7 @@ test('opens an AccessClient temporary SSH session with its title and initial ter
     const page = await app.firstWindow()
 
     await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(1)
-    await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '选择终端会话 生产终端', exact: true })).toBeVisible()
     await expect.poll(() => sshServer.ptySizes).toContainEqual({ columns: 120, rows: 40 })
   } finally {
     await app?.close()
@@ -1677,7 +1677,7 @@ test('displays a CP936 AccessClient temporary session title without garbling', a
     const page = await app.firstWindow()
 
     await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(1)
-    await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '选择终端会话 AI中台_10.54.98.34', exact: true })).toBeVisible()
     await expect.poll(() => sshServer.ptySizes).toContainEqual({ columns: 120, rows: 40 })
   } finally {
     await app?.close()

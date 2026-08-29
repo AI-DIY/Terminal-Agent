@@ -32,7 +32,7 @@ import type { ConnectedSession } from '../ssh/session-service'
 import type { ChatMessageContent } from '../../shared/chat-content'
 import { sanitizeShellHistoryDisplay } from '../shell-history/shell-history-contracts'
 import { createHash, randomUUID } from 'node:crypto'
-import type { ChatMutation, ChatRepository, ChatTransferMutation } from './chat-repository'
+import type { ChatMutation, ChatRepository, ChatTransferMutation, SessionAssociationMetadata } from './chat-repository'
 
 type ChatRepositoryPort = Pick<ChatRepository, 'listSnapshot' | 'get' | 'findRetryMessage' | 'recoverInterruptedStreams' | 'create' | 'appendMessage' | 'updateMessage' | 'updateTitle' | 'pin' | 'unpin' | 'setMode' | 'associateShell' | 'associateOrCreateShell' | 'recordSessionRequest' | 'transferSessions' | 'closeAssociation' | 'closeSession' | 'findOpenSession' | 'findSessionRequest' | 'openSessionIds' | 'remove'>
 
@@ -119,14 +119,14 @@ export class ChatService {
     return this.trackMutation(async () => {
       const priorRequest = await this.repository.findSessionRequest(parsed)
       if (priorRequest) {
-        const recorded = await this.repository.recordSessionRequest(parsed)
+        const recorded = await this.repository.recordSessionRequest(parsed, sessionAssociationMetadata(session))
         if (!recorded) throw new Error('Recorded terminal session request has no workspace')
         return { revision: this.revision, chat: recorded.value, liveChatId: recorded.liveChatId }
       }
       let existing = await this.repository.findOpenSession(parsed.sessionId)
       if (existing) {
         if (existing.chatId === parsed.chatId) {
-          const recorded = await this.repository.recordSessionRequest(parsed)
+          const recorded = await this.repository.recordSessionRequest(parsed, sessionAssociationMetadata(session))
           if (recorded) return this.apply(Promise.resolve(recorded), 'updated')
           existing = await this.repository.findOpenSession(parsed.sessionId)
         }
@@ -137,6 +137,7 @@ export class ChatService {
         sessionId: session.id,
         historyId: stableHistoryId(parsed.requestId, session.id),
         hostname: session.hostname,
+        ...(observedSessionHostname(session) ? { observedHostname: observedSessionHostname(session) } : {}),
         title: session.title ?? session.hostname,
       })
       if (existing && existing.chatId !== parsed.chatId) {
@@ -157,6 +158,22 @@ export class ChatService {
     })
   }
 
+  /** Refresh metadata discovered after a Shell was attached to a task. */
+  async syncSessionMetadata(session: ConnectedSession): Promise<ChatWorkspaceSnapshot | null> {
+    const existing = await this.repository.findOpenSession(session.id)
+    if (!existing) return null
+    const request: ChatBindSessionRequest = {
+      requestId: stableSessionMetadataRequestId(session),
+      chatId: existing.chatId,
+      sessionId: session.id,
+    }
+    return this.trackMutation(async () => {
+      const mutation = await this.repository.recordSessionRequest(request, sessionAssociationMetadata(session, true))
+      if (!mutation) return null
+      return this.apply(Promise.resolve(mutation), 'updated')
+    })
+  }
+
   async transferSessions(request: ChatTransferSessionsRequest, sessions: readonly ConnectedSession[]): Promise<ChatWorkspaceSnapshot> {
     const parsed = chatTransferSessionsRequestSchema.parse(request)
     const sessionById = new Map(sessions.map(session => [session.id, session]))
@@ -169,6 +186,7 @@ export class ChatService {
         sessionId,
         historyId: stableHistoryId(parsed.requestId, sessionId),
         hostname: session.hostname,
+        ...(observedSessionHostname(session) ? { observedHostname: observedSessionHostname(session) } : {}),
         title: session.title ?? session.hostname,
       })
     })
@@ -190,6 +208,7 @@ export class ChatService {
         sessionId: session.id,
         historyId: stableHistoryId(requestId, session.id),
         hostname: session.hostname,
+        ...(observedSessionHostname(session) ? { observedHostname: observedSessionHostname(session) } : {}),
         title: session.title ?? session.hostname,
       }))
       this.publishWorkspace(mutation, 'updated')
@@ -309,10 +328,34 @@ function stableFallbackChatId(sessionId: string): string {
   return createHash('sha256').update(`${sessionId}:closed-history-chat`).digest('hex')
 }
 
+function stableSessionMetadataRequestId(session: ConnectedSession): string {
+  const metadata = sessionAssociationMetadata(session)
+  return createHash('sha256').update(JSON.stringify([
+    'session-metadata', session.id, metadata.hostname, metadata.observedHostname ?? null, metadata.title,
+  ])).digest('hex')
+}
+
+function sessionAssociationMetadata(session: ConnectedSession, includeObserved = false): SessionAssociationMetadata {
+  return sanitizeChatShellMetadata({
+    hostname: session.hostname,
+    ...(includeObserved || Object.prototype.hasOwnProperty.call(session, 'observedHostname')
+      ? { observedHostname: observedSessionHostname(session) }
+      : {}),
+    title: session.title ?? session.hostname,
+  })
+}
+
 function sanitizeChatShellMetadata<T extends { hostname: string; title: string }>(metadata: T): T {
   return {
     ...metadata,
     hostname: sanitizeShellHistoryDisplay(metadata.hostname),
+    ...(metadata && 'observedHostname' in metadata && typeof metadata.observedHostname === 'string'
+      ? { observedHostname: sanitizeShellHistoryDisplay(metadata.observedHostname) }
+      : {}),
     title: sanitizeShellHistoryDisplay(metadata.title),
   }
+}
+
+function observedSessionHostname(session: ConnectedSession): string | undefined {
+  return (session as ConnectedSession & { observedHostname?: string }).observedHostname?.trim() || undefined
 }

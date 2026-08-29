@@ -64,6 +64,7 @@ import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { buildStructuredShellContext, StructuredChatAgent } from './chat/structured-chat-agent'
 import { ExecutionPlanService } from './chat/execution-plan-service'
+import { resolvedHostnames } from '../shared/shell-display-label'
 
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
@@ -121,6 +122,9 @@ const chatRuntime = new ChatRuntime({
     const snapshot = await chats.get(chatId)
     const onlineSessions = sessions.snapshot().map(session => ({ ...session, recentLines: sessions.recentLines(session.id) }))
     const availableShells = buildStructuredShellContext(snapshot.chat.shells, onlineSessions)
+    const onlineShellIds = snapshot.chat.shells
+      .filter(shell => shell.status === 'open' && shell.sessionId && onlineSessions.some(session => session.id === shell.sessionId))
+      .map(shell => shell.sessionId!)
     const facts = await Promise.all(snapshot.chat.shells.map(async shell => {
       if (shell.status !== 'open') return null
       const session = shell.sessionId ? onlineSessions.find(item => item.id === shell.sessionId) : undefined
@@ -139,12 +143,12 @@ const chatRuntime = new ChatRuntime({
       messages: snapshot.chat.messages,
       shells: availableShells.map(shell => ({ ...shell, status: 'open' as const })),
       facts: facts.filter((record): record is NonNullable<typeof record> => Boolean(record)),
-      audit: approvedExecutionAudit.recent(snapshot.chat.shells.flatMap(shell => shell.sessionId ? [shell.sessionId] : [])),
+      audit: approvedExecutionAudit.recent(onlineShellIds),
     })
     return {
       messages: context,
       hasImages: snapshot.chat.messages.some(message => Array.isArray(message.content)),
-      availableHostnames: availableShells.map(shell => shell.hostname),
+      availableHostnames: resolvedHostnames(availableShells.map(shell => ({ hostname: shell.hostname, observedHostname: shell.observedHostname, displayName: shell.title }))),
       availableShells,
     }
   },

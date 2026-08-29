@@ -1,19 +1,21 @@
-# Terminal-Agent v2.0.1
+# Terminal-Agent v2.0.2
 
 Release date: 2026-08-29
 
 ## 开源 TA 修改意见修复
 
 - 计划确认执行后不再向聊天窗口追加额外执行结果消息，避免干扰后续 AI 交互。
+- 修复计划执行阶段复用请求幂等键导致的 `Chat request idempotency conflict`，执行完成后可继续进行 AI 对话。
 - Shell 标题栏和 AI 计划目标使用可读连接标题及稳定序号；在线 Shell 上下文携带最近 200 行输出，关闭连接不会传递。
 - 工作区和 AI 底部 Shell 数只统计当前在线连接。
+- 连接建立后异步观测到真实主机名时，会同步更新任务关联，多个共享堡垒机中转地址的 Shell 可稳定区分。
 - 重新生成 Windows x64 NSIS 安装包及配套桥接、卸载清理和自动更新元数据。
 
 ## Windows 发布包
 
-- `Terminal-Agent-Setup-2.0.1.exe`
+- `Terminal-Agent-Setup-2.0.2.exe`
 - `putty.exe`
-- `Terminal-Agent-Uninstall-Cleanup-2.0.1.zip`
+- `Terminal-Agent-Uninstall-Cleanup-2.0.2.zip`
 - `latest.yml` 与匹配的 `.blockmap`
 
 ---

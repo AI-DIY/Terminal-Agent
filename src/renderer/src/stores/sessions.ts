@@ -6,6 +6,7 @@ export const MAX_SESSION_BUFFER_CHARS = 200_000
 export type SessionView = {
   id: string
   hostname: string
+  observedHostname?: string
   title?: string
   mode: SessionMode
   buffer: string
@@ -14,13 +15,13 @@ export type SessionView = {
 export type NewSessionView = Omit<SessionView, 'buffer'>
 
 export function sessionLabel(session: SessionView): string {
-  return session.title ?? session.hostname
+  return session.observedHostname ?? session.title ?? session.hostname
 }
 
 export function sessionDisplayLabel(session: SessionView, orderedSessions: readonly SessionView[]): string {
   const index = orderedSessions.findIndex(item => item.id === session.id)
   if (index < 0) return sessionLabel(session)
-  return hostnameDisplayLabels(orderedSessions.map(item => ({ hostname: item.hostname, displayName: item.title })))[index]!.displayLabel
+  return hostnameDisplayLabels(orderedSessions.map(item => ({ hostname: item.hostname, observedHostname: item.observedHostname, displayName: item.title })))[index]!.displayLabel
 }
 
 export function createSessionsStore() {
@@ -30,6 +31,7 @@ export function createSessionsStore() {
     add(session: NewSessionView): SessionView {
       const current = sessions.get(session.id)
       const entry = { ...current, ...session, buffer: current?.buffer ?? '' }
+      if (!Object.prototype.hasOwnProperty.call(session, 'observedHostname')) delete entry.observedHostname
       sessions.set(entry.id, entry)
       return entry
     },

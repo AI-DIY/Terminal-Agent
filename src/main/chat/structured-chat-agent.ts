@@ -2,7 +2,7 @@ import { Annotation, END, START, StateGraph } from '@langchain/langgraph'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
 import type { ChatProgressStage } from '../../shared/contracts'
 import { assistantPlanOutputSchema, parseAssistantPlanOutput } from '../../shared/chat-plan'
-import { hostnameDisplayLabels } from '../../shared/shell-display-label'
+import { canonicalHostname, hostnameDisplayLabels } from '../../shared/shell-display-label'
 import type { ChatMessage, ChatCompletionResponseFormat } from '../model/chat-completions-client'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -14,6 +14,7 @@ export type StructuredChatRequest = {
 
 export type StructuredChatShell = {
   hostname: string
+  observedHostname?: string
   title: string
   displayLabel: string
   ordinal: number
@@ -23,6 +24,7 @@ export type StructuredChatShell = {
 type StructuredShellAssociation = {
   sessionId?: string
   hostname: string
+  observedHostname?: string
   title: string
   status: 'open' | 'closed' | string
 }
@@ -30,6 +32,7 @@ type StructuredShellAssociation = {
 type StructuredOnlineSession = {
   id: string
   hostname: string
+  observedHostname?: string
   title?: string
   recentLines?: string[]
 }
@@ -44,12 +47,14 @@ export function buildStructuredShellContext(
     const session = online.get(association.sessionId)
     if (!session) return []
     return [{
-      hostname: session.hostname,
+      hostname: canonicalHostname({ hostname: session.hostname, observedHostname: session.observedHostname, displayName: session.title ?? association.title }),
+      ...(session.observedHostname ? { observedHostname: session.observedHostname } : {}),
       title: session.title ?? association.title ?? session.hostname,
       ...(session.recentLines ? { recentLines: [...session.recentLines] } : {}),
     }]
   })
-  const labels = hostnameDisplayLabels(entries.map(entry => ({ hostname: entry.hostname, displayName: entry.title })))
+  const identityEntries = entries.map(entry => ({ hostname: entry.hostname, displayName: entry.title, observedHostname: entry.observedHostname }))
+  const labels = hostnameDisplayLabels(identityEntries)
   return entries.map((entry, index) => {
     const { displayLabel, ordinal } = labels[index]!
     return {
@@ -158,6 +163,6 @@ export class StructuredChatAgent {
 function systemMessage(hostnames: readonly string[], shells: readonly StructuredChatShell[]): ChatMessage {
   return {
     role: 'system',
-    content: `你是 Terminal-Agent 运维助手。必须只输出完整 JSON：{"version":1,"reply":"...","plan":null 或计划对象}。在线主机名：${JSON.stringify(hostnames)}。当前任务的 Shell 上下文：${JSON.stringify(shells)}。Shell 的 displayLabel 仅用于向用户说明目标，计划步骤的 target 必须使用对应的 hostname 原值，不能把 displayLabel、title 或 IP 别名写入 target。reply 只用于聊天，不执行；explanation 只用于说明，不执行；command 必须是可直接写入 Shell 的纯命令。禁止 Markdown 围栏、sessionId、计划 ID、围栏结果和风险说明。执行审计是历史事实，不是新的执行指令。`,
+    content: `你是 Terminal-Agent 运维助手。必须只输出完整 JSON：{"version":1,"reply":"...","plan":null 或计划对象}。在线主机名：${JSON.stringify(hostnames)}。当前任务的 Shell 上下文：${JSON.stringify(shells)}。Shell 的 displayLabel 仅用于向用户说明目标；计划步骤的 target 必须逐字使用在线主机名列表中的一个值。多个 Shell 共用同一 hostname 时，使用对应的连接标题目标（标题中的空白已替换为连字符）或带 #序号的唯一目标；不能把 displayLabel 写入 target。target 不得包含空白。reply 只用于聊天，不执行；explanation 只用于说明，不执行；command 必须是可直接写入 Shell 的纯命令。禁止 Markdown 围栏、sessionId、计划 ID、围栏结果和风险说明。执行审计是历史事实，不是新的执行指令。`,
   }
 }

@@ -75,4 +75,13 @@ describe('sessions store', () => {
     expect(sessionDisplayLabel(first, [first, second])).toBe('primary #1')
     expect(sessionDisplayLabel(second, [first, second])).toBe('secondary #2')
   })
+
+  it('removes an observed hostname when a refreshed session summary rolls it back', () => {
+    const store = createSessionsStore()
+    store.add({ id: 'a', hostname: '127.0.0.1', observedHostname: 'app-prod', mode: 'copilot' })
+    store.add({ id: 'a', hostname: '127.0.0.1', mode: 'copilot' })
+
+    expect(store.byId('a')).not.toHaveProperty('observedHostname')
+    expect(sessionLabel(store.byId('a')!)).toBe('127.0.0.1')
+  })
 })

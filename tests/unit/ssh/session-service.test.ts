@@ -294,7 +294,7 @@ describe('SessionService', () => {
     expect(() => service.setMode('missing', 'autonomous')).toThrow('Unknown terminal session')
   })
 
-  it('keeps an observed hostname in a main-only lookup and out of public events', async () => {
+  it('publishes an observed hostname through the session snapshot and update event', async () => {
     const shell = createShell()
     const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
     const service = new SessionService(client, { load: vi.fn() })
@@ -307,9 +307,46 @@ describe('SessionService', () => {
     service.setObservedHostname(session.id, ' api-prod\n')
 
     expect(service.observedHostname(session.id)).toBe('api-prod')
+    expect(service.snapshot()).toEqual([{ ...session, observedHostname: 'api-prod' }])
+    expect(updated).toEqual([{ ...session, observedHostname: 'api-prod' }])
+  })
+
+  it('does not publish duplicate or blank observed-hostname updates', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const updated: unknown[] = []
+    service.onUpdated(session => updated.push(session))
+    const session = await service.connect({
+      host: '10.0.0.12', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    service.setObservedHostname(session.id, '   ')
+    service.setObservedHostname(session.id, 'api-prod')
+    service.setObservedHostname(session.id, ' api-prod\n')
+
+    expect(updated).toEqual([{ ...session, observedHostname: 'api-prod' }])
+    expect(service.snapshot()).toEqual([{ ...session, observedHostname: 'api-prod' }])
+  })
+
+  it('clears the public observed hostname and announces the reverted summary', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const updated: unknown[] = []
+    service.onUpdated(session => updated.push(session))
+    const session = await service.connect({
+      host: '10.0.0.12', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    service.setObservedHostname(session.id, 'api-prod')
+    service.clearObservedHostname(session.id)
+
+    expect(service.observedHostname(session.id)).toBeUndefined()
     expect(service.snapshot()).toEqual([session])
-    expect(service.snapshot()[0]).not.toHaveProperty('observedHostname')
-    expect(updated).toEqual([])
+    expect(updated).toEqual([{ ...session, observedHostname: 'api-prod' }, session])
+    service.clearObservedHostname(session.id)
+    expect(updated).toHaveLength(2)
   })
 
   it('sends password credentials only to the SSH adapter and starts in Copilot mode', async () => {

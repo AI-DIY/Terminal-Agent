@@ -18,6 +18,12 @@ export type DirectSessionRequest = {
 export type ConnectedSession = {
   id: string
   hostname: string
+  /**
+   * Hostname reported by the connected remote system, when read-only
+   * observation has completed. The connection hostname remains the stable
+   * route/target value for backwards compatibility.
+   */
+  observedHostname?: string
   title?: string
   mode: SessionMode
   chatId?: string
@@ -309,13 +315,27 @@ export class SessionService {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('Unknown terminal session')
     const observedHostname = hostname.trim()
-    if (!observedHostname) return
+    if (!observedHostname || observedHostname === session.summary.observedHostname) return
     this.observedHostnames.set(sessionId, observedHostname)
+    session.summary = { ...session.summary, observedHostname }
+    for (const listener of this.updatedListeners) {
+      listener({ ...session.summary })
+    }
   }
 
   observedHostname(sessionId: string): string | undefined { return this.observedHostnames.get(sessionId) }
 
-  clearObservedHostname(sessionId: string): void { this.observedHostnames.delete(sessionId) }
+  clearObservedHostname(sessionId: string): void {
+    this.observedHostnames.delete(sessionId)
+    const session = this.sessions.get(sessionId)
+    if (!session?.summary.observedHostname) return
+    const summary = { ...session.summary }
+    delete summary.observedHostname
+    session.summary = summary
+    for (const listener of this.updatedListeners) {
+      listener({ ...session.summary })
+    }
+  }
 
   connectionIp(sessionId: string): string | undefined { return this.sessions.get(sessionId)?.connectionIp }
 

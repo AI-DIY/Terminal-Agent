@@ -38,6 +38,19 @@ describe('StructuredChatAgent', () => {
     ])
   })
 
+  it('carries the observed hostname as the canonical AI target identity', () => {
+    expect(buildStructuredShellContext([
+      { sessionId: 'first', hostname: '127.0.0.1', title: 'AI中台_10.54.98.34', status: 'open' },
+      { sessionId: 'second', hostname: '127.0.0.1', title: 'AI中台_98.29', status: 'open' },
+    ], [
+      { id: 'first', hostname: '127.0.0.1', title: 'AI中台_10.54.98.34', observedHostname: 'web-prod' },
+      { id: 'second', hostname: '127.0.0.1', title: 'AI中台_98.29', observedHostname: 'db-prod' },
+    ])).toMatchObject([
+      { hostname: 'web-prod', observedHostname: 'web-prod' },
+      { hostname: 'db-prod', observedHostname: 'db-prod' },
+    ])
+  })
+
   it('returns the first valid JSON response without exposing provider deltas', async () => {
     const complete = vi.fn().mockResolvedValue('{"version":1,"reply":"已准备。","plan":null}')
     await expect(new StructuredChatAgent({ complete }).run(request)).resolves.toMatchObject({ reply: '已准备。', plan: null })

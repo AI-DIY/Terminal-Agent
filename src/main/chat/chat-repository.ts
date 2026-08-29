@@ -56,8 +56,11 @@ type TransferSessionMetadata = {
   sessionId: string
   historyId: string
   hostname: string
+  observedHostname?: string
   title: string
 }
+
+export type SessionAssociationMetadata = Pick<TransferSessionMetadata, 'hostname' | 'observedHostname' | 'title'>
 
 export type ChatTransferMutation = ChatMutation<{
   source: ChatWorkspace
@@ -157,6 +160,7 @@ export class ChatRepository {
       ...(association.sessionId ? { sessionId: association.sessionId } : {}),
       historyId: association.historyId,
       hostname: association.hostname,
+      ...(association.observedHostname ? { observedHostname: association.observedHostname } : {}),
       title: association.title,
       status: association.status,
       associatedAt: association.associatedAt,
@@ -173,7 +177,7 @@ export class ChatRepository {
     return true
   }
 
-  async recordSessionRequest(request: ChatBindSessionRequest): Promise<ChatMutation<ChatWorkspace> | null> {
+  async recordSessionRequest(request: ChatBindSessionRequest, metadata?: SessionAssociationMetadata): Promise<ChatMutation<ChatWorkspace> | null> {
     const parsed = chatBindSessionRequestSchema.parse(request)
     const fingerprint = bindSessionFingerprint(parsed)
     let changed = false
@@ -191,6 +195,14 @@ export class ChatRepository {
         if (!association) throw new NoMatchingSessionOwner()
         const chat = requireChat(current, association.chatId)
         const appliedAt = nextLogicalTimestamp(this.now(), current)
+        if (metadata) {
+          association.hostname = metadata.hostname
+          association.title = metadata.title
+          if (Object.prototype.hasOwnProperty.call(metadata, 'observedHostname')) {
+            if (metadata.observedHostname) association.observedHostname = metadata.observedHostname
+            else delete association.observedHostname
+          }
+        }
         changed = true
         resultChatId = chat.id
         chat.updatedAt = appliedAt
@@ -340,9 +352,7 @@ export class ChatRepository {
 
   async associateShell(request: ChatAssociateShellRequest): Promise<ChatMutation<ChatWorkspace>> {
     const parsed = chatAssociateShellRequestSchema.parse(request)
-    const fingerprint = requestFingerprint('associateShell', [
-      parsed.chatId, parsed.sessionId ?? null, parsed.historyId, parsed.hostname, parsed.title,
-    ])
+    const fingerprint = associateShellFingerprint(parsed)
     return this.mutate(parsed.requestId, 'associateShell', parsed.chatId, fingerprint, (document, timestamp) => {
       const chat = requireChat(document, parsed.chatId)
       if (parsed.sessionId && document.associations.some(association => association.sessionId === parsed.sessionId && association.status === 'open')) {
@@ -361,7 +371,7 @@ export class ChatRepository {
     const parsed = chatAssociateShellRequestSchema.parse(request)
     const fingerprint = parsed.sessionId
       ? bindSessionFingerprint({ chatId: parsed.chatId, sessionId: parsed.sessionId })
-      : requestFingerprint('associateShell', [parsed.chatId, null, parsed.historyId, parsed.hostname, parsed.title])
+      : associateShellFingerprint(parsed)
     let changed = false
     let resultChatId: string | undefined
     try {
@@ -552,6 +562,7 @@ export class ChatRepository {
             sessionId,
             historyId: metadata.historyId,
             hostname: metadata.hostname,
+            ...(metadata.observedHostname ? { observedHostname: metadata.observedHostname } : {}),
             title: metadata.title,
             status: 'open',
             associatedAt,
@@ -799,6 +810,14 @@ function bindSessionFingerprint(request: Pick<ChatBindSessionRequest, 'chatId' |
   return requestFingerprint('bindSession', [request.chatId, request.sessionId])
 }
 
+function associateShellFingerprint(request: Pick<ChatAssociateShellRequest, 'chatId' | 'sessionId' | 'historyId' | 'hostname' | 'observedHostname' | 'title'>): string {
+  const payload: unknown[] = [request.chatId, request.sessionId ?? null, request.historyId, request.hostname]
+  // Keep the 2.0.1 fingerprint for requests that do not carry observed metadata.
+  if (request.observedHostname !== undefined) payload.push(request.observedHostname)
+  payload.push(request.title)
+  return requestFingerprint('associateShell', payload)
+}
+
 function isBindSessionOperation(operation: ChatOperation, fingerprint: string): boolean {
   return (operation.kind === 'associateShell' || operation.kind === 'bindSession')
     && operation.fingerprint === fingerprint
@@ -845,6 +864,7 @@ function toWorkspace(document: ChatDocument, chatId: string): ChatWorkspace {
       ...(association.sessionId ? { sessionId: association.sessionId } : {}),
       historyId: association.historyId,
       hostname: association.hostname,
+      ...(association.observedHostname ? { observedHostname: association.observedHostname } : {}),
       title: association.title,
       status: association.status,
       associatedAt: association.associatedAt,

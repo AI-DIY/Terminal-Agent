@@ -135,6 +135,7 @@ export const chatShellAssociationSchema = z.object({
   sessionId: z.string().trim().min(1).max(128).optional(),
   historyId: chatIdentifierSchema,
   hostname: z.string().trim().min(1).max(255),
+  observedHostname: z.string().trim().min(1).max(255).optional(),
   title: z.string().trim().min(1).max(255),
   status: z.enum(['open', 'closed']),
   associatedAt: chatTimestampSchema,
@@ -302,6 +303,7 @@ export const chatAssociateShellRequestSchema = z.object({
   sessionId: z.string().trim().min(1).max(128).optional(),
   historyId: chatIdentifierSchema,
   hostname: z.string().trim().min(1).max(255),
+  observedHostname: z.string().trim().min(1).max(255).optional(),
   title: z.string().trim().min(1).max(255),
 }).strict()
 export type ChatAssociateShellRequest = z.infer<typeof chatAssociateShellRequestSchema>
