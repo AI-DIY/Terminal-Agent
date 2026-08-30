@@ -30,7 +30,7 @@ Terminal-Agent 是面向日常运维与企业堡垒机场景的 Windows SSH 工�
 
 ### 1. 安装 Terminal-Agent
 
-在 Windows 环境完成 `npm run make:win` 打包或发布 `v2.0.2` 后，可使用生成的 `Terminal-Agent-Setup-2.0.2.exe` 安装包；发布后也可从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 获取。安装完成后，先启动一次 Terminal-Agent。完整的安装、`putty.exe` 替换和堡垒机跳转步骤见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
+在 Windows 环境完成 `npm run make:win` 打包或发布 `v2.0.3` 后，可使用生成的 `Terminal-Agent-Setup-2.0.3.exe` 安装包；发布后也可从 [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) 获取。安装完成后，先启动一次 Terminal-Agent。完整的安装、`putty.exe` 替换和堡垒机跳转步骤见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
 工作台内选择“新建 SSH 连接”，可使用以下入口：
 
@@ -114,19 +114,19 @@ AI 计划不会自动运行。相同 hostname 存在多个连接时，计划绑�
 - 安全围栏是本地执行前控制，不是完整的命令授权系统；请按组织要求维护规则、权限和审批流程。
 - 临时堡垒机连接不会保存到“已保存会话”；临时配置和临时密码也不会写入会话簿。
 - 本地主机记忆采用显式授权和可配置采集范围，可在设置中查看、编辑或清除；不要将其作为机密信息保管系统。
-- **模型信任边界**：任务消息、已授权主机事实和已人工确认命令的审计上下文，以及模型回复，都会在模型链路中原样传递，应用不再为这些内容做自动脱敏。仅应配置可信的本地模型、企业内网模型或受组织控制的模型服务；应用不会额外阻止公网模型。
-- 该原文直通策略不改变本地保护：模型 API Key 和 SSH 凭据仍采用既有保护方式，临时桥接密码仍不持久化，Shell 历史保护、主机记忆授权、执行围栏和单次精确命令确认仍然生效。
+- **模型信任边界**：发送给模型的应用自动注入上下文会移除连接 IP、网络接口地址及其在 Shell 标题、审计和重试文本中的地址字面量，并以规范化 hostname 作为主机实体标识；用户主动输入正文和符合消息契约的图片仍按原意传递。仅应配置可信的本地模型、企业内网模型或受组织控制的模型服务；应用不会额外阻止公网模型。
+- 该上下文投影不改变本地保护：模型 API Key 和 SSH 凭据仍采用既有保护方式，临时桥接密码仍不持久化，Shell 历史保护、主机记忆授权、执行围栏和单次精确命令确认仍然生效。
 - 在任何自动化操作之前，仍应确认目标环境、业务窗口、备份/回滚方案和组织审批状态。
 
 ## Release 文件说明
 
-在 Windows 环境完成 `npm run make:win` 打包或发布 `v2.0.2` 后将生成以下文件：
+在 Windows 环境完成 `npm run make:win` 打包或发布 `v2.0.3` 后将生成以下文件：
 
 | 文件 | 用途 |
 | --- | --- |
-| `Terminal-Agent-Setup-2.0.2.exe` | Windows x64 安装包。 |
+| `Terminal-Agent-Setup-2.0.3.exe` | Windows x64 安装包。 |
 | `putty.exe` | 提供给 Assess/Access Client 或堡垒机映射的单文件桥接程序。 |
-| `Terminal-Agent-Uninstall-Cleanup-2.0.2.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
+| `Terminal-Agent-Uninstall-Cleanup-2.0.3.zip` | 清理“已安装的应用”中遗留 Terminal-Agent 卸载条目的工具。它不会卸载程序、删除应用文件或删除用户数据。 |
 | `latest.yml` 与 `.blockmap` | 更新元数据；部署自动更新时使用。 |
 
 生成清理工具后，解压 ZIP 并以管理员权限运行 `清理 Terminal-Agent 卸载残留.cmd`。工具会先列出匹配项，并要求明确输入 `Y`；删除前会导出相应的 `.reg` 备份。

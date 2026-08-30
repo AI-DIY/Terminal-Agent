@@ -30,7 +30,7 @@ This is not a way for AI to bypass established operations controls. It is a cont
 
 ### 1. Install Terminal-Agent
 
-After completing Windows packaging with `npm run make:win` or publishing `v2.0.2`, use the generated `Terminal-Agent-Setup-2.0.2.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
+After completing Windows packaging with `npm run make:win` or publishing `v2.0.3`, use the generated `Terminal-Agent-Setup-2.0.3.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
 
 Inside the workbench, choose **New SSH connection** and select one of these entry points:
 
@@ -114,19 +114,19 @@ An unapproved command matching a fence is not sent to the SSH Shell. Review the 
 - Safety fences are local pre-execution controls, not a complete command authorization system. Maintain rules, permissions, and approval processes according to organizational policy.
 - Temporary bastion sessions are not written to **Saved sessions**. Temporary profiles and temporary passwords are not written to the session book.
 - Local host memory uses explicit consent and configurable collection scopes. It can be reviewed, edited, or cleared in Settings; do not use it as a secret storage system.
-- **Model trust boundary**: task messages, authorized host facts, and manually approved command-audit context, as well as model responses, are passed through the model chain unchanged. The application no longer automatically redacts those contents. Configure only a trusted local model, enterprise intranet model, or organization-controlled model service; the application does not additionally block public models.
-- This pass-through policy does not remove local protections: model API keys and SSH credentials keep their existing protection, temporary bridge passwords remain non-persistent, and Shell-history protections, host-memory authorization, execution fences, and exact one-time command confirmation remain in effect.
+- **Model trust boundary**: application-generated context sent to the model removes connection IPs, network-interface addresses, and address literals embedded in Shell titles, audits, and retry text, while normalized hostnames remain the host-entity identity; user-authored text and images allowed by the message contract retain their intended content. Configure only a trusted local model, enterprise intranet model, or organization-controlled model service; the application does not additionally block public models.
+- This context projection does not remove local protections: model API keys and SSH credentials keep their existing protection, temporary bridge passwords remain non-persistent, and Shell-history protections, host-memory authorization, execution fences, and exact one-time command confirmation remain in effect.
 - Before any automated action, verify the target environment, change window, backup or rollback plan, and required approvals.
 
 ## Release Assets
 
-A Windows package made with `npm run make:win` or a published `v2.0.2` Release will generate:
+A Windows package made with `npm run make:win` or a published `v2.0.3` Release will generate:
 
 | File | Purpose |
 | --- | --- |
-| `Terminal-Agent-Setup-2.0.2.exe` | Windows x64 installer. |
+| `Terminal-Agent-Setup-2.0.3.exe` | Windows x64 installer. |
 | `putty.exe` | Single-file bridge for Assess/Access Client or bastion mapping. |
-| `Terminal-Agent-Uninstall-Cleanup-2.0.2.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
+| `Terminal-Agent-Uninstall-Cleanup-2.0.3.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
 | `latest.yml` and `.blockmap` | Update metadata for deployments that use auto-update. |
 
 After the cleanup tool has been generated, extract the ZIP and run `清理 Terminal-Agent 卸载残留.cmd` as an administrator. It lists matching entries, requires an explicit `Y`, and exports `.reg` backups before deletion.

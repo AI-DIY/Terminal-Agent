@@ -1,3 +1,24 @@
+# Terminal-Agent v2.0.3
+
+Release date: 2026-08-30
+
+## 开源 TA 修改意见补充修复
+
+- 修复历史任务区收起、AI 工作区展开且多个 Shell 采用双行布局时，Shell 底部输入行被遮挡的问题。
+- 修复终端右键粘贴后 xterm 焦点和光标丢失的问题，粘贴后可直接继续输入。
+- AI 自动注入上下文会移除堡垒机连接 IP、网络接口地址以及标题、审计和重试文本中的 IP 字面量。
+- 以规范化真实 hostname 作为主机实体标识；同一 hostname 的不同大小写和重复连接不会被模型误识别为不同主机。
+- 增加模型上下文投影、主机目标匹配和窄窗口终端布局的回归测试。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-2.0.3.exe`
+- `putty.exe`
+- `Terminal-Agent-Uninstall-Cleanup-2.0.3.zip`
+- `latest.yml` 与匹配的 `.blockmap`
+
+---
+
 # Terminal-Agent v2.0.2
 
 Release date: 2026-08-29
