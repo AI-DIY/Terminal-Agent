@@ -4,6 +4,7 @@ import type { AgentCandidate } from '../../shared/contracts'
 import type { ChatCompletionsClient, ChatMessage } from '../model/chat-completions-client'
 import type { ModelSettingsService, ModelSettings } from '../settings/model-settings-service'
 import type { AgentEventPublisher, SchedulerModelPort, SchedulerModelRequest } from './agent-contracts'
+import { modelHostname, projectModelFacts } from '../../shared/model-context'
 
 type ModelSettingsSource = Pick<ModelSettingsService, 'load'>
 type ChatCompletionsSource = Pick<ChatCompletionsClient, 'stream'>
@@ -74,6 +75,11 @@ export class AgentModelRuntime implements SchedulerModelPort {
 }
 
 function createMessages(request: SchedulerModelRequest): ChatMessage[] {
+  // Keep user-authored goal text intact, but project all host facts at the
+  // model boundary. Transport addresses (including bastion endpoints and
+  // interface lists) are intentionally unavailable to the model.
+  const facts = projectModelFacts(request.facts)
+  const hostname = modelHostname(request.hostname) ?? modelHostname(request.facts.hostname)
   return [
     {
       role: 'system',
@@ -81,7 +87,11 @@ function createMessages(request: SchedulerModelRequest): ChatMessage[] {
     },
     {
       role: 'user',
-      content: JSON.stringify({ goal: request.goal, hostname: request.hostname, facts: request.facts }),
+      content: JSON.stringify({
+        goal: request.goal,
+        ...(hostname ? { hostname } : {}),
+        facts,
+      }),
     },
   ]
 }

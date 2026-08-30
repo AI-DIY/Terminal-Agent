@@ -761,7 +761,8 @@ test('layout controls persist while hidden terminals remain mounted and online',
       const shellToolbar = bounds('.shell-toolbar-content')
       const hostbarTools = bounds('.hostbar-tools')
       const chatPanel = bounds('.global-chat-panel')
-       const safetyBadge = bounds('.ai-safety-badge')
+      const terminalElement = bounds('.terminal-element')
+      const safetyBadge = bounds('.ai-safety-badge')
       const chatInput = bounds('.global-chat-panel textarea')
       const sendButton = bounds('.global-chat-panel .send-button')
       const withinPanel = (item: DOMRect) => item.left >= chatPanel.left && item.right <= chatPanel.right
@@ -772,9 +773,11 @@ test('layout controls persist while hidden terminals remain mounted and online',
         appActionsClearControls: appActions.right <= window.innerWidth - controlsInset + 0.5,
         hostbarToolsOverflowPx: Math.max(0, hostbarTools.right - shellToolbar.right),
         chatPanelFitsViewport: chatPanel.left >= 0 && chatPanel.right <= window.innerWidth,
-         safetyBadgeFits: withinPanel(safetyBadge),
+        safetyBadgeFits: withinPanel(safetyBadge),
         inputFits: withinPanel(chatInput),
         sendFits: withinPanel(sendButton),
+        terminalElementBottom: terminalElement.bottom,
+        canvasContentBottom: bounds('.canvas-content').bottom,
         noPageOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
         shellRegion: diagnostics('.shell-region'),
         shellToolbar: diagnostics('.shell-toolbar-content'),
@@ -794,6 +797,7 @@ test('layout controls persist while hidden terminals remain mounted and online',
     expect(narrowGeometry.inputFits).toBe(true)
     expect(narrowGeometry.sendFits).toBe(true)
     expect(narrowGeometry.noPageOverflow).toBe(true)
+    expect(narrowGeometry.terminalElementBottom).toBeLessThanOrEqual(narrowGeometry.canvasContentBottom + 0.5)
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
@@ -833,6 +837,7 @@ test('opens terminal clipboard actions from a right click and routes them throug
 
     await menu.getByRole('menuitem', { name: '粘贴', exact: true }).click()
     await expect(pane).toContainText('echo:clipboard-paste')
+    await expect.poll(() => pane.locator('.xterm-helper-textarea').evaluate(element => document.activeElement === element)).toBe(true)
 
     await pane.click({ button: 'right' })
     await menu.getByRole('menuitem', { name: '全选', exact: true }).click()
@@ -845,6 +850,115 @@ test('opens terminal clipboard actions from a right click and routes them throug
     await pane.click({ button: 'right' })
     await expect(menu.getByRole('menuitem', { name: '复制', exact: true })).toBeDisabled()
     await expect(menu.getByRole('menuitem', { name: '取消选择', exact: true })).toBeDisabled()
+  } finally {
+    await app?.close()
+    await closeServer(sshServer.server)
+  }
+})
+
+test('keeps the terminal input row visible when the history rail is collapsed', async ({ launchApp }) => {
+  const sshServer = await startSshServer()
+  let app: ElectronApplication | undefined
+
+  try {
+    app = (await launchApp()).app
+    const page = await app.firstWindow()
+    await connect(page, sshServer.port, '127.0.0.1')
+    await connect(page, sshServer.port, '127.0.0.2')
+    await connect(page, sshServer.port, '127.0.0.3')
+    await page.setViewportSize({ width: 900, height: 700 })
+    await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
+    await expect(page.getByLabel('每行数量')).toHaveValue('3')
+    await page.getByLabel('每行数量').selectOption('2')
+    await expect(page.getByLabel('可见终端面板')).toHaveAttribute('data-columns', '2')
+    await expect(page.getByRole('button', { name: '收起 AI工作区', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开 AI工作区', exact: true })).toBeHidden()
+    await expect(page.getByLabel('AI工作区', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '收起任务历史区', exact: true }).click()
+    await expect(page.getByRole('button', { name: '展开任务历史区', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '收起 AI工作区', exact: true })).toBeVisible()
+    await expect(page.getByLabel('AI工作区', { exact: true })).toBeVisible()
+
+    type TerminalGeometry = {
+      content: { top: number; bottom: number }
+      grid: { top: number; bottom: number; clientHeight: number; scrollHeight: number; scrollTop: number }
+      frames: Array<{
+        frame: { top: number; bottom: number; height: number }
+        pane: { top: number; bottom: number; height: number }
+        element: { top: number; bottom: number; height: number }
+        screen: { top: number; bottom: number; height: number }
+      }>
+    }
+    const measureGeometry = (scrollTop: number): Promise<TerminalGeometry> => page.evaluate(requestedScrollTop => {
+      const read = <T extends Element>(selector: string, root: ParentNode = document): T => {
+        const node = root.querySelector<T>(selector)
+        if (!node) throw new Error(`Missing ${selector}`)
+        return node
+      }
+      const bounds = (node: Element): DOMRect => node.getBoundingClientRect()
+      const isVisible = (node: HTMLElement): boolean => {
+        const style = getComputedStyle(node)
+        const box = bounds(node)
+        return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0
+      }
+      const content = read<HTMLElement>('.canvas-content')
+      const grid = read<HTMLElement>('.terminal-grid')
+      const frames = [...document.querySelectorAll<HTMLElement>('.terminal-frame')].filter(isVisible)
+      if (frames.length === 0) throw new Error('Missing visible terminal frames')
+      grid.scrollTop = requestedScrollTop
+      return {
+        content: { top: content.getBoundingClientRect().top, bottom: content.getBoundingClientRect().bottom },
+        grid: {
+          top: grid.getBoundingClientRect().top,
+          bottom: grid.getBoundingClientRect().bottom,
+          clientHeight: grid.clientHeight,
+          scrollHeight: grid.scrollHeight,
+          scrollTop: grid.scrollTop,
+        },
+        frames: frames.map(frame => {
+          const pane = read<HTMLElement>('.terminal-pane', frame)
+          const element = read<HTMLElement>('.terminal-element', frame)
+          const screen = read<HTMLElement>('.xterm-screen', frame)
+          const frameBox = bounds(frame)
+          const paneBox = bounds(pane)
+          const elementBox = bounds(element)
+          const screenBox = bounds(screen)
+          return {
+            frame: { top: frameBox.top, bottom: frameBox.bottom, height: frameBox.height },
+            pane: { top: paneBox.top, bottom: paneBox.bottom, height: paneBox.height },
+            element: { top: elementBox.top, bottom: elementBox.bottom, height: elementBox.height },
+            screen: { top: screenBox.top, bottom: screenBox.bottom, height: screenBox.height },
+          }
+        }),
+      }
+    }, scrollTop)
+    const topMetrics = await measureGeometry(0)
+    expect(topMetrics.frames, JSON.stringify(topMetrics, null, 2)).toHaveLength(3)
+    expect(topMetrics.grid.scrollTop, JSON.stringify(topMetrics, null, 2)).toBe(0)
+    expect(topMetrics.grid.scrollHeight, JSON.stringify(topMetrics, null, 2)).toBeGreaterThan(topMetrics.grid.clientHeight)
+
+    const assertNestedBounds = (item: TerminalGeometry['frames'][number], diagnostics: TerminalGeometry): void => {
+      const details = JSON.stringify(diagnostics, null, 2)
+      expect(item.pane.bottom, details).toBeLessThanOrEqual(item.frame.bottom + 0.5)
+      expect(item.element.bottom, details).toBeLessThanOrEqual(item.pane.bottom + 0.5)
+      // xterm rounds its row height to whole pixels; the pane's bottom padding is the clipping boundary.
+      expect(item.screen.bottom, details).toBeLessThanOrEqual(item.pane.bottom + 0.5)
+    }
+    const firstRow = topMetrics.frames.slice(0, 2)
+    for (const item of firstRow) {
+      assertNestedBounds(item, topMetrics)
+      expect(item.frame.top, JSON.stringify(topMetrics, null, 2)).toBeGreaterThanOrEqual(topMetrics.content.top - 0.5)
+      expect(item.frame.bottom, JSON.stringify(topMetrics, null, 2)).toBeLessThanOrEqual(topMetrics.content.bottom + 0.5)
+    }
+    const secondRowBeforeScroll = topMetrics.frames[2]
+    expect(secondRowBeforeScroll.frame.bottom, JSON.stringify(topMetrics, null, 2)).toBeGreaterThan(topMetrics.content.bottom + 0.5)
+
+    const scrolledMetrics = await measureGeometry(Number.MAX_SAFE_INTEGER)
+    expect(scrolledMetrics.grid.scrollTop, JSON.stringify(scrolledMetrics, null, 2)).toBeGreaterThan(0)
+    const secondRow = scrolledMetrics.frames[2]
+    assertNestedBounds(secondRow, scrolledMetrics)
+    expect(secondRow.frame.top, JSON.stringify(scrolledMetrics, null, 2)).toBeGreaterThanOrEqual(scrolledMetrics.content.top - 0.5)
+    expect(secondRow.frame.bottom, JSON.stringify(scrolledMetrics, null, 2)).toBeLessThanOrEqual(scrolledMetrics.content.bottom + 0.5)
   } finally {
     await app?.close()
     await closeServer(sshServer.server)

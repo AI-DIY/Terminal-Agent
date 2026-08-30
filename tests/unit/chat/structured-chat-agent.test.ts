@@ -51,6 +51,16 @@ describe('StructuredChatAgent', () => {
     ])
   })
 
+  it('falls back to the association hostname when the live endpoint only exposes an address', () => {
+    expect(buildStructuredShellContext([
+      { sessionId: 'first', hostname: 'real-host', title: '连接 192.0.2.10', status: 'open' },
+    ], [
+      { id: 'first', hostname: '192.0.2.10', observedHostname: 'not a hostname', title: '连接 192.0.2.10' },
+    ])).toEqual([
+      { hostname: 'real-host', title: '连接', displayLabel: '连接', ordinal: 1 },
+    ])
+  })
+
   it('returns the first valid JSON response without exposing provider deltas', async () => {
     const complete = vi.fn().mockResolvedValue('{"version":1,"reply":"已准备。","plan":null}')
     await expect(new StructuredChatAgent({ complete }).run(request)).resolves.toMatchObject({ reply: '已准备。', plan: null })
@@ -96,5 +106,32 @@ describe('StructuredChatAgent', () => {
     expect(system).toContain('web-01 #1')
     expect(system).toContain('displayLabel')
     expect(system).toContain('target')
+    expect(system).not.toContain('10.54.98.34')
+  })
+
+  it('treats repeated hostnames as one model target and strips IPs from retry context', async () => {
+    const systems: string[] = []
+    const complete = vi.fn()
+      .mockImplementationOnce(async (messages: Array<{ content: unknown }>) => {
+        systems.push(String(messages[0]?.content ?? ''))
+        return '{"version":1,"reply":"重试","plan":{"title":"检查","steps":[{"target":"missing-192.0.2.10","explanation":"检查","command":"pwd"}]}}'
+      })
+      .mockImplementationOnce(async (messages: Array<{ content: unknown }>) => {
+        systems.push(`${String(messages[0]?.content ?? '')}\n${String(messages.at(-1)?.content ?? '')}`)
+        return '{"version":1,"reply":"完成","plan":null}'
+      })
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      messages: [{ role: 'user', content: '检查 192.0.2.10' }],
+      availableHostnames: ['vm-01', 'VM-01', '192.0.2.10'],
+      availableShells: [
+        { hostname: 'vm-01', title: '主连接 192.0.2.10', displayLabel: '主连接 192.0.2.10', ordinal: 1 },
+        { hostname: 'vm-01', title: '备用连接', displayLabel: '备用连接 #2', ordinal: 2 },
+      ],
+    })).resolves.toMatchObject({ plan: null })
+
+    expect(systems[0]).toContain('["vm-01"]')
+    expect(systems[0]).not.toContain('192.0.2.10')
+    expect(systems[1]).not.toContain('192.0.2.10')
   })
 })

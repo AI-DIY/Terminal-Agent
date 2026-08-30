@@ -94,6 +94,32 @@ describe('ExecutionPlanService', () => {
     expect(write).not.toHaveBeenCalledWith('session-web', 'systemctl status api\n')
   })
 
+  it('matches canonical hostnames case-insensitively and ignores a trailing dot', async () => {
+    const write = vi.fn()
+    const targetPlan = { ...plan(), steps: [{ ...plan().steps[0], target: 'DB-PROD.' }] }
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: targetPlan }],
+        shells: [
+          { sessionId: 'session-web', hostname: '127.0.0.1', status: 'open' },
+          { sessionId: 'session-db', hostname: '127.0.0.1', status: 'open' },
+        ],
+      } })),
+      updateMessage: vi.fn(async () => undefined),
+    }, {
+      snapshot: () => [
+        { id: 'session-web', hostname: '127.0.0.1', observedHostname: 'WEB-PROD' },
+        { id: 'session-db', hostname: '127.0.0.1', observedHostname: 'db-prod' },
+      ],
+      write,
+    }, { match: () => null })
+
+    await service.execute({ requestId: 'request-canonical-case', chatId: 'chat-1', messageId: 'message-1' })
+
+    expect(write).toHaveBeenCalledWith('session-db', 'systemctl status api\n')
+    expect(write).not.toHaveBeenCalledWith('session-web', 'systemctl status api\n')
+  })
+
   it('binds an ordinal target when shared route sessions have no distinct hostname or title', async () => {
     const write = vi.fn()
     const targetPlan = { ...plan(), steps: [{ ...plan().steps[0], target: '127.0.0.1#2' }] }

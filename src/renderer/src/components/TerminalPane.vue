@@ -7,6 +7,7 @@ import type { SessionView } from '../stores/sessions'
 
 const props = defineProps<{ session: SessionView; active: boolean }>()
 const emit = defineEmits<{ activate: [] }>()
+const paneElement = ref<HTMLElement>()
 const terminalElement = ref<HTMLElement>()
 const contextMenuOpen = ref(false)
 const contextMenuStyle = ref({ left: '8px', top: '8px' })
@@ -20,7 +21,7 @@ let inputSubscription: { dispose(): void } | undefined
 let selectionSubscription: { dispose(): void } | undefined
 
 function openContextMenu(event: MouseEvent): void {
-  const bounds = terminalElement.value?.getBoundingClientRect()
+  const bounds = paneElement.value?.getBoundingClientRect()
   if (!bounds) return
   const width = 158
   const height = 148
@@ -71,6 +72,9 @@ async function pasteClipboard(): Promise<void> {
     if (value) terminal.paste(value)
   } catch { /* Clipboard permissions are controlled by the host. */ }
   closeContextMenu()
+  // The context-menu button takes focus away from xterm. Restore it so the
+  // next keystroke continues in the terminal without an extra click.
+  terminal.focus()
 }
 
 function selectAll(): void {
@@ -134,6 +138,7 @@ onMounted(() => window.addEventListener('pointerdown', closeContextMenu))
 
 <template>
   <section
+    ref="paneElement"
     class="terminal-pane"
     :class="{ active }"
     :data-testid="`terminal-pane-${session.id}`"
@@ -153,8 +158,8 @@ onMounted(() => window.addEventListener('pointerdown', closeContextMenu))
 </template>
 
 <style scoped>
-.terminal-pane { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--terminal, #151a20); }
-.terminal-element { height: 100%; min-height: 0; padding: 11px 12px; }
+.terminal-pane { position: relative; min-width: 0; min-height: 0; overflow: hidden; padding: 11px 12px; background: var(--terminal, #151a20); }
+.terminal-element { height: 100%; min-height: 0; }
 .terminal-context-menu { position: absolute; z-index: 9; display: grid; min-width: 154px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
 .terminal-context-menu button { min-height: 29px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 11px; text-align: left; }
 .terminal-context-menu button:hover,.terminal-context-menu button:focus-visible { background: var(--surface-soft); outline: 1px solid var(--accent); }

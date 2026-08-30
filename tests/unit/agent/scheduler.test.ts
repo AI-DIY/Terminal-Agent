@@ -29,6 +29,33 @@ describe('AgentScheduler', () => {
     expect(JSON.stringify(model.stream.mock.calls)).not.toContain('privateKey')
   })
 
+  it('projects connection addresses before handing facts to any model adapter', async () => {
+    const model = { stream: vi.fn().mockResolvedValue(undefined) }
+    const context: AgentGoalContext = {
+      goal: '分析 nginx',
+      session: { id: 'session-a', hostname: 'api-prod' },
+      facts: {
+        hostname: 'api-prod',
+        observedAt: '2026-08-09T00:00:00.000Z',
+        connectionIp: '192.0.2.10',
+        networkInterfaces: [{ name: 'eth0', addresses: ['192.0.2.10'] }],
+        operatingSystem: { name: 'Linux' },
+        services: { 'nginx.service': 'active running' },
+      },
+    }
+
+    await new AgentScheduler(model).start(context, vi.fn())
+
+    const request = model.stream.mock.calls[0]?.[0] as SchedulerModelRequest
+    expect(request.hostname).toBe('api-prod')
+    expect(request.facts.hostname).toBe('api-prod')
+    expect(request.facts.connectionIp).toBeUndefined()
+    expect(request.facts.networkInterfaces).toBeUndefined()
+    expect(JSON.stringify(request)).not.toContain('192.0.2.10')
+    expect(context.facts.connectionIp).toBe('192.0.2.10')
+    expect(context.facts.networkInterfaces?.[0]?.addresses).toEqual(['192.0.2.10'])
+  })
+
   it('rejects facts belonging to a different host', async () => {
     const scheduler = new AgentScheduler({ stream: vi.fn() })
 

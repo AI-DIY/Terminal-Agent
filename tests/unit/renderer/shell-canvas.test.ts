@@ -93,6 +93,15 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(terminal).toContain('全选')
     expect(terminal).toContain('取消选择')
     expect(terminal).toContain('navigator.clipboard')
+    expect(terminal).toContain('ref="paneElement"')
+    expect(terminal).toContain('paneElement.value?.getBoundingClientRect()')
+    const pasteHandler = terminal.slice(terminal.indexOf('async function pasteClipboard'), terminal.indexOf('function selectAll'))
+    expect(pasteHandler).toContain('terminal.focus()')
+    expect(pasteHandler.indexOf('closeContextMenu()')).toBeLessThan(pasteHandler.indexOf('terminal.focus()'))
+    const terminalPaneRule = /\.terminal-pane\s*\{([^}]*)\}/.exec(terminal)?.[1] ?? ''
+    const terminalElementRule = /\.terminal-element\s*\{([^}]*)\}/.exec(terminal)?.[1] ?? ''
+    expect(terminalPaneRule).toContain('padding: 11px 12px')
+    expect(terminalElementRule).not.toContain('padding:')
     expect(canvas).toContain('minmax(0, 1fr)')
     expect(canvas).toContain('min-height: 0')
     expect(shell).toContain('grid-template-rows: 48px minmax(0, 1fr)')

@@ -66,6 +66,10 @@ describe('AgentModelRuntime', () => {
     const messages = client.stream.mock.calls[0]?.[1] as Array<{ content: string }>
     const modelInput = JSON.stringify(messages)
     for (const value of [jwt, githubToken, awsKey, 'correct horse', 'private-key-material']) expect(modelInput).toContain(value)
+    expect(modelInput).not.toContain('192.0.2.10')
+    expect(modelInput).not.toContain('connectionIp')
+    expect(modelInput).not.toContain('networkInterfaces')
+    expect(modelInput).toContain('api-prod')
   })
 
   it('publishes cross-chunk output and a strict proposal unchanged', async () => {

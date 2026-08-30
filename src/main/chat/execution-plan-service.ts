@@ -75,8 +75,19 @@ function findSessionForTarget(
       session.hostname,
       shell.hostname,
     ]
-    return identities.some(identity => identity?.trim() === target.trim())
+    return identities.some(identity => sameTarget(identity, target))
   })?.session.id
+}
+
+/** Match model-facing host identities without changing the stored target. */
+function sameTarget(left: string | undefined, right: string): boolean {
+  const normalize = (value: string | undefined): string | undefined => {
+    const normalized = value?.trim().replace(/\.$/, '').toLowerCase()
+    return normalized || undefined
+  }
+  const normalizedLeft = normalize(left)
+  const normalizedRight = normalize(right)
+  return normalizedLeft !== undefined && normalizedLeft === normalizedRight
 }
 
 function phaseRequestId(requestId: string, phase: 'executing' | 'result'): string {

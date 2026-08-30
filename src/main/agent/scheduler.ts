@@ -1,5 +1,6 @@
 import { normalizeHostname } from '../facts/host-facts-service'
 import type { HostMemoryLegacyFacts } from '../../shared/contracts'
+import { projectModelFacts } from '../../shared/model-context'
 import type { AgentEventPublisher, AgentGoalContext, SchedulerModelPort, SchedulerModelRequest } from './agent-contracts'
 
 export class AgentScheduler {
@@ -11,24 +12,25 @@ export class AgentScheduler {
       throw new Error('Structured facts must match the active session hostname')
     }
 
+    const facts = projectModelFacts({
+      ...context.facts,
+      hostname,
+      ...(context.facts.operatingSystem ? { operatingSystem: { ...context.facts.operatingSystem } } : {}),
+      ...(context.facts.cpu ? { cpu: { ...context.facts.cpu } } : {}),
+      ...(context.facts.memory ? { memory: { ...context.facts.memory } } : {}),
+      ...(context.facts.disks ? { disks: context.facts.disks.map(disk => ({ ...disk })) } : {}),
+      ...(context.facts.networkInterfaces ? { networkInterfaces: context.facts.networkInterfaces.map(item => ({ ...item, addresses: [...item.addresses] })) } : {}),
+      ...(context.facts.processes ? { processes: context.facts.processes.map(process => ({ ...process })) } : {}),
+      ...(context.facts.services ? { services: { ...context.facts.services } } : {}),
+      ...(context.facts.legacyFacts ? { legacyFacts: cloneLegacyFacts(context.facts.legacyFacts) } : {}),
+    })
     const request: SchedulerModelRequest = {
       goal: context.goal,
       sessionId: context.session.id,
       hostname,
       signal: context.signal,
       hasImages: context.hasImages,
-      facts: {
-        ...context.facts,
-        hostname,
-        ...(context.facts.operatingSystem ? { operatingSystem: { ...context.facts.operatingSystem } } : {}),
-        ...(context.facts.cpu ? { cpu: { ...context.facts.cpu } } : {}),
-        ...(context.facts.memory ? { memory: { ...context.facts.memory } } : {}),
-        ...(context.facts.disks ? { disks: context.facts.disks.map(disk => ({ ...disk })) } : {}),
-        ...(context.facts.networkInterfaces ? { networkInterfaces: context.facts.networkInterfaces.map(item => ({ ...item, addresses: [...item.addresses] })) } : {}),
-        ...(context.facts.processes ? { processes: context.facts.processes.map(process => ({ ...process })) } : {}),
-        ...(context.facts.services ? { services: { ...context.facts.services } } : {}),
-        ...(context.facts.legacyFacts ? { legacyFacts: cloneLegacyFacts(context.facts.legacyFacts) } : {}),
-      },
+      facts,
     }
     await this.model.stream(request, publish)
   }

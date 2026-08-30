@@ -64,7 +64,7 @@ import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { buildStructuredShellContext, StructuredChatAgent } from './chat/structured-chat-agent'
 import { ExecutionPlanService } from './chat/execution-plan-service'
-import { resolvedHostnames } from '../shared/shell-display-label'
+import { modelHostname, uniqueModelHostnames } from '../shared/model-context'
 
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
@@ -129,12 +129,20 @@ const chatRuntime = new ChatRuntime({
       if (shell.status !== 'open') return null
       const session = shell.sessionId ? onlineSessions.find(item => item.id === shell.sessionId) : undefined
       const observedHostname = shell.sessionId ? sessions.observedHostname(shell.sessionId) : undefined
-      if (!session || !observedHostname) return null
+      // Host facts are keyed only by a validated real hostname. A stale
+      // observation may contain the bastion address (or malformed text), so
+      // fall back through persisted/session identities without ever using an
+      // IP as the host-memory key.
+      const hostIdentity = modelHostname(observedHostname)
+        ?? modelHostname(shell.observedHostname)
+        ?? modelHostname(session?.hostname)
+        ?? modelHostname(shell.hostname)
+      if (!session || !hostIdentity) return null
       const allowed = await Promise.resolve()
-        .then(() => hostMemorySettings.canObserveHost(session.hostname, observedHostname))
+        .then(() => hostMemorySettings.canObserveHost(session.hostname, hostIdentity))
         .catch(() => false)
       if (!allowed) return null
-      const record = await hostFacts.snapshot(observedHostname).catch(() => null)
+      const record = await hostFacts.snapshot(hostIdentity).catch(() => null)
       if (!record) return null
       const filtered = await hostMemorySettings.filterFacts(record)
       return { hostname: filtered.hostname, scope: 'host', values: filtered as unknown as Record<string, unknown> }
@@ -148,7 +156,10 @@ const chatRuntime = new ChatRuntime({
     return {
       messages: context,
       hasImages: snapshot.chat.messages.some(message => Array.isArray(message.content)),
-      availableHostnames: resolvedHostnames(availableShells.map(shell => ({ hostname: shell.hostname, observedHostname: shell.observedHostname, displayName: shell.title }))),
+      // Host identity is the canonical hostname. Connection titles and
+      // per-Shell display labels are presentation metadata, not distinct
+      // targets for the model.
+      availableHostnames: uniqueModelHostnames(availableShells.map(shell => shell.hostname)),
       availableShells,
     }
   },

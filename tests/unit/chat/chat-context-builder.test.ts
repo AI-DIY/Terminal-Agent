@@ -108,4 +108,38 @@ describe('chat context builder', () => {
     expect(metadata.audit[0].label).toContain(privateKeyPath)
     expect(context.some(message => message.content.includes(temporaryPath))).toBe(true)
   })
+
+  it('projects connection addresses out of host context while keeping hostname identity unique', () => {
+    const context = buildChatContext({
+      messages: [{ role: 'user', content: '请检查业务地址 192.0.2.10' }],
+      shells: [
+        { hostname: 'bastion.example', observedHostname: 'vm-01', title: '连接 192.0.2.10', status: 'open', recentLines: ['ssh 192.0.2.10', 'ready'] },
+        { hostname: 'bastion.example', observedHostname: 'vm-01', title: '第二连接', status: 'open' },
+      ],
+      facts: [
+        { hostname: 'vm-01', scope: 'identity', values: { connectionIp: '192.0.2.10', networkInterfaces: [{ name: 'eth0', addresses: ['192.0.2.10'] }], os: 'Linux' } },
+        { hostname: 'VM-01', scope: 'runtime', values: { currentUser: 'root' } },
+      ],
+      audit: [{ kind: 'approved-command', label: 'connect 192.0.2.10', at: '2026-08-29T00:00:00.000Z' }],
+    })
+
+    const system = String(context[0]?.content ?? '')
+    expect(system).toContain('vm-01')
+    expect(system).toContain('Linux')
+    expect(system).toContain('root')
+    expect(system).not.toContain('192.0.2.10')
+    expect(system).not.toContain('connectionIp')
+    expect(system).not.toContain('networkInterfaces')
+    expect(context.at(-1)?.content).toBe('请检查业务地址 192.0.2.10')
+  })
+
+  it('strips address literals from fact scopes as well as fact values', () => {
+    const context = buildChatContext({
+      messages: [],
+      facts: [{ hostname: 'vm-01', scope: 'bastion 192.0.2.10', values: { os: 'Linux' } }],
+    })
+    const metadata = JSON.parse(String(context[0]?.content).slice(String(context[0]?.content).indexOf('：') + 1))
+    expect(metadata.facts).toEqual([{ hostname: 'vm-01', scope: 'bastion', values: { os: 'Linux' } }])
+    expect(String(context[0]?.content)).not.toContain('192.0.2.10')
+  })
 })
