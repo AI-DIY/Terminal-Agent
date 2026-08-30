@@ -68,6 +68,18 @@ describe('chat context builder', () => {
     expect(systemContent).not.toContain('Closed Shell')
   })
 
+  it('keeps an IP-only live Shell in model context under a safe target', () => {
+    const context = buildChatContext({
+      messages: [],
+      shells: [{ hostname: '127.0.0.1', title: 'Raw bridge', status: 'open', recentLines: ['connected 127.0.0.1'] }],
+    })
+    const systemContent = String(context[0]?.content ?? '')
+
+    expect(systemContent).toContain('online-shell-1')
+    expect(systemContent).toContain('Raw bridge')
+    expect(systemContent).not.toContain('127.0.0.1')
+  })
+
   it('serializes recent output only for live Shells', () => {
     const context = buildChatContext({
       messages: [],

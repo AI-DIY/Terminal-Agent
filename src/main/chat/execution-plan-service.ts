@@ -1,6 +1,7 @@
 import type { AssistantPlanOutput, ChatExecutionPlan, ChatPlanEditStepRequest, ChatPlanRemoveStepRequest, ChatPlanCancelRequest, ChatPlanExecuteRequest } from '../../shared/chat-plan'
 import type { ChatMessageContent } from '../../shared/chat-content'
 import { resolvedHostnames } from '../../shared/shell-display-label'
+import { resolveModelShellTargets } from '../../shared/model-shell-target'
 
 type FenceMatcher = { match(command: string): { id: string; name: string } | null }
 type Sessions = { snapshot(): Array<{ id: string; hostname: string; observedHostname?: string; title?: string }>; write(sessionId: string, data: string): void | Promise<void> }
@@ -65,8 +66,22 @@ function findSessionForTarget(
     observedHostname: session.observedHostname ?? shell.observedHostname,
     displayName: session.title ?? shell.title,
   })))
+  // Keep this identity derivation in lockstep with the model-facing context.
+  // In particular, IP-only/Raw sessions receive an opaque alias such as
+  // `online-shell-*`; that alias must resolve to the same candidate
+  // here when the user approves a generated plan.
+  const modelTargets = resolveModelShellTargets(candidates.map(({ shell, session }) => ({
+    stableKey: session.id,
+    hostname: session.hostname,
+    fallbackHostname: shell.hostname,
+    observedHostname: session.observedHostname,
+    fallbackObservedHostname: shell.observedHostname,
+    displayName: session.title ?? shell.title,
+    fallbackDisplayName: shell.title,
+  })))
   return candidates.find(({ shell, session }, index) => {
     const identities = [
+      modelTargets[index],
       resolved[index],
       session.observedHostname,
       shell.observedHostname,

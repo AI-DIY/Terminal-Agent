@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { ExecutionPlanService } from '../../../src/main/chat/execution-plan-service'
 import { ChatRepository } from '../../../src/main/chat/chat-repository'
 import { ChatService } from '../../../src/main/chat/chat-service'
+import { resolveModelShellTargets } from '../../../src/shared/model-shell-target'
 
 function plan() {
   return {
@@ -141,6 +142,62 @@ describe('ExecutionPlanService', () => {
     }, { match: () => null })
 
     await service.execute({ requestId: 'request-ordinal', chatId: 'chat-1', messageId: 'message-1' })
+
+    expect(write).toHaveBeenCalledWith('session-second', 'systemctl status api\n')
+    expect(write).not.toHaveBeenCalledWith('session-first', 'systemctl status api\n')
+  })
+
+  it('maps opaque model aliases back to hostname-less online sessions in association order', async () => {
+    const write = vi.fn()
+    const targets = resolveModelShellTargets([
+      { stableKey: 'session-first', hostname: '127.0.0.1', displayName: 'Raw bridge 1' },
+      { stableKey: 'session-second', hostname: '192.0.2.10', displayName: 'Raw bridge 2' },
+    ])
+    const targetPlan = { ...plan(), steps: [{ ...plan().steps[0], target: targets[1]! }] }
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: targetPlan }],
+        shells: [
+          { sessionId: 'session-first', hostname: '127.0.0.1', title: 'Raw bridge 1', status: 'open' },
+          { sessionId: 'session-second', hostname: '192.0.2.10', title: 'Raw bridge 2', status: 'open' },
+        ],
+      } })),
+      updateMessage: vi.fn(async () => undefined),
+    }, {
+      snapshot: () => [
+        { id: 'session-first', hostname: '127.0.0.1', title: 'Raw bridge 1' },
+        { id: 'session-second', hostname: '192.0.2.10', title: 'Raw bridge 2' },
+      ],
+      write,
+    }, { match: () => null })
+
+    await service.execute({ requestId: 'request-opaque-alias', chatId: 'chat-1', messageId: 'message-1' })
+
+    expect(write).toHaveBeenCalledWith('session-second', 'systemctl status api\n')
+    expect(write).not.toHaveBeenCalledWith('session-first', 'systemctl status api\n')
+  })
+
+  it('maps a strict user@hostname title hint to its corresponding session', async () => {
+    const write = vi.fn()
+    const targetPlan = { ...plan(), steps: [{ ...plan().steps[0], target: 'c-ce-js-0002' }] }
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: targetPlan }],
+        shells: [
+          { sessionId: 'session-first', hostname: '127.0.0.1', title: 'appuser@c-ce-js-0001', status: 'open' },
+          { sessionId: 'session-second', hostname: '127.0.0.1', title: 'appuser@c-ce-js-0002', status: 'open' },
+        ],
+      } })),
+      updateMessage: vi.fn(async () => undefined),
+    }, {
+      snapshot: () => [
+        { id: 'session-first', hostname: '127.0.0.1', title: 'appuser@c-ce-js-0001' },
+        { id: 'session-second', hostname: '127.0.0.1', title: 'appuser@c-ce-js-0002' },
+      ],
+      write,
+    }, { match: () => null })
+
+    await service.execute({ requestId: 'request-title-host', chatId: 'chat-1', messageId: 'message-1' })
 
     expect(write).toHaveBeenCalledWith('session-second', 'systemctl status api\n')
     expect(write).not.toHaveBeenCalledWith('session-first', 'systemctl status api\n')

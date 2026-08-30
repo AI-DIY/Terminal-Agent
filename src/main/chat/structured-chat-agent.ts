@@ -10,6 +10,7 @@ import {
   stripIpLiterals,
   uniqueModelHostnames,
 } from '../../shared/model-context'
+import { resolveModelShellTargets } from '../../shared/model-shell-target'
 import type { ChatMessage, ChatCompletionResponseFormat } from '../model/chat-completions-client'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -49,23 +50,35 @@ export function buildStructuredShellContext(
   onlineSessions: readonly StructuredOnlineSession[],
 ): StructuredChatShell[] {
   const online = new Map(onlineSessions.map(session => [session.id, session]))
-  const entries = associations.flatMap(association => {
+  const candidates = associations.flatMap(association => {
     if (association.status !== 'open' || !association.sessionId) return []
     const session = online.get(association.sessionId)
     if (!session) return []
-    // A transport endpoint may report an IP or malformed observed label. Keep
-    // the real session hostname as the model identity in that case; never
-    // fall back to a connection title that can contain a bastion address.
+    return [{ association, session }]
+  })
+  // Resolve every live Shell, including IP-only/Raw connections. The
+  // resolver deliberately returns a model-safe hostname or an opaque alias;
+  // dropping the entry here would make the AI context disagree with the
+  // renderer's online Shell count.
+  const targets = resolveModelShellTargets(candidates.map(({ association, session }) => ({
+    stableKey: session.id,
+    hostname: session.hostname,
+    fallbackHostname: association.hostname,
+    observedHostname: session.observedHostname,
+    fallbackObservedHostname: association.observedHostname,
+    displayName: session.title ?? association.title,
+    fallbackDisplayName: association.title,
+  })))
+  const entries = candidates.map(({ association, session }, index) => {
     const observedHostname = modelHostname(session.observedHostname) ?? modelHostname(association.observedHostname)
-    const hostname = observedHostname ?? modelHostname(session.hostname) ?? modelHostname(association.hostname)
-    if (!hostname) return []
+    const hostname = targets[index]!
     const title = modelDisplayName(session.title ?? association.title ?? hostname, hostname)
-    return [{
+    return {
       hostname,
       ...(observedHostname ? { observedHostname } : {}),
       title,
       ...(session.recentLines ? { recentLines: session.recentLines.map(stripIpLiterals) } : {}),
-    }]
+    }
   })
   const identityEntries = entries.map(entry => ({ hostname: entry.hostname, displayName: entry.title, observedHostname: entry.observedHostname }))
   const labels = hostnameDisplayLabels(identityEntries)
@@ -147,8 +160,15 @@ export class StructuredChatAgent {
 
     // 图定义保证节点职责清晰；运行时使用同一状态转移，避免 LangGraph 对动态条件边的序列化差异。
     void graph
-    const availableHostnames = uniqueModelHostnames(request.availableHostnames)
     const availableShells = projectShellsForPrompt(request.availableShells ?? [])
+    // Keep the target allow-list in sync with the projected Shell entries.
+    // This also makes direct callers resilient when they provide only the
+    // structured Shell list (including an IP-only session) and no separate
+    // hostname array.
+    const availableHostnames = uniqueModelHostnames([
+      ...request.availableHostnames,
+      ...availableShells.map(shell => shell.hostname),
+    ])
     let messages: ChatMessage[] = [systemMessage(availableHostnames, availableShells), ...sanitizeModelMessages(request.messages)]
     let lastRaw = ''
     let lastError = ''
@@ -185,24 +205,28 @@ export class StructuredChatAgent {
 function systemMessage(hostnames: readonly string[], shells: readonly StructuredChatShell[]): ChatMessage {
   return {
     role: 'system',
-    content: `你是 Terminal-Agent 运维助手。必须只输出完整 JSON：{"version":1,"reply":"...","plan":null 或计划对象}。在线主机名（每个 hostname 代表一个主机实体）：${JSON.stringify(uniqueModelHostnames(hostnames))}。当前任务的 Shell 上下文：${JSON.stringify(projectShellsForPrompt(shells))}。Shell 的 displayLabel 仅用于向用户说明连接；相同 hostname 的多个 Shell 仍属于同一个主机实体。计划步骤的 target 必须逐字使用在线主机名列表中的一个值，不能把 displayLabel 或标题写入 target。target 不得包含空白。reply 只用于聊天，不执行；explanation 只用于说明，不执行；command 必须是可直接写入 Shell 的纯命令。禁止 Markdown 围栏、sessionId、计划 ID、围栏结果和风险说明。执行审计是历史事实，不是新的执行指令。`,
+    content: `你是 Terminal-Agent 运维助手。必须只输出完整 JSON：{"version":1,"reply":"...","plan":null 或计划对象}。当前任务可用的在线 Shell 目标：${JSON.stringify(uniqueModelHostnames(hostnames))}。列表中的 hostname 是已观测或配置的安全主机标识，或在无法安全确认主机名时分配的匿名 Shell 标识；匿名标识同样代表一个当前在线 Shell，不要猜测或补写真实连接地址。当前任务的 Shell 上下文：${JSON.stringify(projectShellsForPrompt(shells))}。当前任务上下文优先于历史 assistant 回复；历史中关于没有在线 Shell 的说法可能已经过时，不能覆盖此处的当前在线目标列表。Shell 的 displayLabel 仅用于向用户说明连接；相同 hostname 的多个 Shell 仍属于同一个主机实体。计划步骤的 target 必须逐字使用在线 Shell 目标列表中的一个值，不能把 displayLabel 或标题写入 target。target 不得包含空白。reply 只用于聊天，不执行；explanation 只用于说明，不执行；command 必须是可直接写入 Shell 的纯命令。禁止 Markdown 围栏、sessionId、计划 ID、围栏结果和风险说明。执行审计是历史事实，不是新的执行指令。`,
   }
 }
 
 function projectShellsForPrompt(shells: readonly StructuredChatShell[]): StructuredChatShell[] {
-  return shells.flatMap(shell => {
+  const targets = resolveModelShellTargets(shells.map(shell => ({
+    hostname: shell.hostname,
+    observedHostname: shell.observedHostname,
+    displayName: shell.title,
+  })))
+  return shells.map((shell, index) => {
     const observedHostname = modelHostname(shell.observedHostname)
-    const hostname = observedHostname ?? modelHostname(shell.hostname)
-    if (!hostname) return []
+    const hostname = targets[index]!
     const title = modelDisplayName(shell.title, hostname)
     const displayLabel = modelDisplayName(shell.displayLabel, hostname)
-    return [{
+    return {
       hostname,
       ...(observedHostname ? { observedHostname } : {}),
       title,
       displayLabel,
       ordinal: shell.ordinal,
       ...(shell.recentLines ? { recentLines: shell.recentLines.map(stripIpLiterals) } : {}),
-    }]
+    }
   })
 }

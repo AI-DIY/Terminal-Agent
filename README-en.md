@@ -30,7 +30,7 @@ This is not a way for AI to bypass established operations controls. It is a cont
 
 ### 1. Install Terminal-Agent
 
-After completing Windows packaging with `npm run make:win` or publishing `v2.0.3`, use the generated `Terminal-Agent-Setup-2.0.3.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
+After completing Windows packaging with `npm run make:win` or publishing `v2.0.4`, use the generated `Terminal-Agent-Setup-2.0.4.exe` installer; it is also available from [Releases](https://github.com/AI-DIY/Terminal-Agent/releases) after publication. Start Terminal-Agent once after installation.
 
 Inside the workbench, choose **New SSH connection** and select one of these entry points:
 
@@ -120,13 +120,13 @@ An unapproved command matching a fence is not sent to the SSH Shell. Review the 
 
 ## Release Assets
 
-A Windows package made with `npm run make:win` or a published `v2.0.3` Release will generate:
+A Windows package made with `npm run make:win` or a published `v2.0.4` Release will generate:
 
 | File | Purpose |
 | --- | --- |
-| `Terminal-Agent-Setup-2.0.3.exe` | Windows x64 installer. |
+| `Terminal-Agent-Setup-2.0.4.exe` | Windows x64 installer. |
 | `putty.exe` | Single-file bridge for Assess/Access Client or bastion mapping. |
-| `Terminal-Agent-Uninstall-Cleanup-2.0.3.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
+| `Terminal-Agent-Uninstall-Cleanup-2.0.4.zip` | Cleans stale Terminal-Agent entries from Windows installed apps. It does not uninstall the application or remove application files or user data. |
 | `latest.yml` and `.blockmap` | Update metadata for deployments that use auto-update. |
 
 After the cleanup tool has been generated, extract the ZIP and run `清理 Terminal-Agent 卸载残留.cmd` as an administrator. It lists matching entries, requires an explicit `Y`, and exports `.reg` backups before deletion.

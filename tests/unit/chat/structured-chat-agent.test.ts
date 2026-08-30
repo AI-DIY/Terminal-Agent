@@ -51,6 +51,14 @@ describe('StructuredChatAgent', () => {
     ])
   })
 
+  it('uses a valid persisted observation when the live observation is malformed', () => {
+    expect(buildStructuredShellContext([
+      { sessionId: 'first', hostname: '127.0.0.1', observedHostname: 'persisted-host', title: 'bridge', status: 'open' },
+    ], [
+      { id: 'first', hostname: '127.0.0.1', observedHostname: 'not a hostname', title: 'bridge' },
+    ])).toMatchObject([{ hostname: 'persisted-host' }])
+  })
+
   it('falls back to the association hostname when the live endpoint only exposes an address', () => {
     expect(buildStructuredShellContext([
       { sessionId: 'first', hostname: 'real-host', title: '连接 192.0.2.10', status: 'open' },
@@ -59,6 +67,57 @@ describe('StructuredChatAgent', () => {
     ])).toEqual([
       { hostname: 'real-host', title: '连接', displayLabel: '连接', ordinal: 1 },
     ])
+  })
+
+  it('keeps an IP-only online Shell visible through a strict user@hostname title hint', () => {
+    const shells = buildStructuredShellContext([
+      { sessionId: 'access-session', hostname: '127.0.0.1', title: 'appuser@c-ce-js-0002', status: 'open' },
+    ], [
+      { id: 'access-session', hostname: '127.0.0.1', title: 'appuser@c-ce-js-0002', recentLines: ['[appuser@c-ce-js-0002 ~]$ free -h', '172.17.0.1/16'] },
+    ])
+
+    expect(shells).toMatchObject([{ hostname: 'c-ce-js-0002', title: 'appuser@c-ce-js-0002' }])
+    expect(JSON.stringify(shells)).not.toContain('127.0.0.1')
+    expect(JSON.stringify(shells)).not.toContain('172.17.0.1')
+  })
+
+  it('keeps hostname-less Raw Shells with unique safe targets and no address literals', () => {
+    const shells = buildStructuredShellContext([
+      { sessionId: 'raw-first', hostname: '127.0.0.1', title: 'Raw bridge 1', status: 'open' },
+      { sessionId: 'raw-second', hostname: '127.0.0.1', title: 'Raw bridge 2', status: 'open' },
+    ], [
+      { id: 'raw-first', hostname: '127.0.0.1', title: 'Raw bridge 1', recentLines: ['connected to 127.0.0.1'] },
+      { id: 'raw-second', hostname: '127.0.0.1', title: 'Raw bridge 2' },
+    ])
+
+    expect(shells.map(shell => shell.hostname)).toHaveLength(2)
+    expect(shells.every(shell => /^online-shell-[a-z0-9-]+$/.test(shell.hostname))).toBe(true)
+    expect(shells[0]?.hostname).not.toBe(shells[1]?.hostname)
+    expect(new Set(shells.map(shell => shell.hostname)).size).toBe(2)
+    expect(JSON.stringify(shells)).not.toContain('127.0.0.1')
+  })
+
+  it('includes the safe Shell target in the structured system prompt and allow-list', async () => {
+    let system = ''
+    const complete = vi.fn(async messages => {
+      system = String(messages[0]?.content ?? '')
+      return '{"version":1,"reply":"已看到在线 Shell。","plan":null}'
+    })
+    const availableShells = buildStructuredShellContext([
+      { sessionId: 'raw-session', hostname: '127.0.0.1', title: 'Raw bridge', status: 'open' },
+    ], [{ id: 'raw-session', hostname: '127.0.0.1', title: 'Raw bridge' }])
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      messages: [{ role: 'user', content: '当前运行情况如何' }],
+      availableHostnames: availableShells.map(shell => shell.hostname),
+      availableShells,
+    })).resolves.toMatchObject({ reply: '已看到在线 Shell。' })
+
+    expect(system).toContain(availableShells[0]!.hostname)
+    expect(availableShells[0]!.hostname).toMatch(/^online-shell-[a-z0-9-]+$/)
+    expect(system).toContain('匿名 Shell 标识')
+    expect(system).toContain('当前任务上下文优先于历史 assistant 回复')
+    expect(system).not.toContain('127.0.0.1')
   })
 
   it('returns the first valid JSON response without exposing provider deltas', async () => {

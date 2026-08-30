@@ -7,6 +7,7 @@ import {
   sanitizeModelContent,
   stripIpLiterals,
 } from '../../shared/model-context'
+import { resolveModelShellTargets } from '../../shared/model-shell-target'
 
 export type ChatContextInput = {
   messages: readonly { role: 'user' | 'assistant' | 'system'; content: ChatMessageContent; createdAt?: string; messageType?: string; executionPlan?: unknown }[]
@@ -50,21 +51,23 @@ type ContextShell = NonNullable<ChatContextInput['shells']>[number]
 type ContextFact = NonNullable<ChatContextInput['facts']>[number]
 
 function projectShells(shells: readonly ContextShell[]): Array<Record<string, unknown>> {
-  return shells.flatMap(shell => {
-    if (shell.status !== 'open') return []
-    // Prefer the observed hostname, but retain a valid session hostname when
-    // an endpoint reports an IP or malformed observed value.
+  const liveShells = shells.filter(shell => shell.status === 'open')
+  const targets = resolveModelShellTargets(liveShells.map(shell => ({
+    hostname: shell.hostname,
+    observedHostname: shell.observedHostname,
+    displayName: shell.title,
+  })))
+  return liveShells.map((shell, index) => {
     const observedHostname = modelHostname(shell.observedHostname)
-    const hostname = observedHostname ?? modelHostname(shell.hostname)
-    if (!hostname) return []
-    return [{
+    const hostname = targets[index]!
+    return {
       hostname,
       ...(observedHostname ? { observedHostname } : {}),
       title: modelDisplayName(shell.title, hostname),
       ...(shell.displayLabel ? { displayLabel: modelDisplayName(shell.displayLabel, hostname) } : {}),
       ...(shell.ordinal !== undefined ? { ordinal: shell.ordinal } : {}),
       ...(shell.recentLines ? { recentLines: shell.recentLines.map(stripIpLiterals) } : {}),
-    }]
+    }
   })
 }
 

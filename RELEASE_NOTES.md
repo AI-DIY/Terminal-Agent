@@ -1,3 +1,23 @@
+# Terminal-Agent v2.0.4
+
+Release date: 2026-08-30
+
+## 在线 Shell 上下文修复
+
+- 修复连接地址为 IP、Raw 或堡垒机转发地址且尚未观测到远端 hostname 时，在线 Shell 被错误过滤、导致 AI 误报“没有在线主机”的问题。
+- 对标题中严格识别的 `user@hostname` 使用安全主机目标；无法确认时使用不含连接地址和会话 ID 的匿名 Shell 目标，并在执行计划确认阶段映射回原在线会话。
+- 当前任务上下文优先于历史助手回复，避免旧的“无在线 Shell”错误消息覆盖实时连接状态。
+- 保持自动注入上下文中的连接 IP、网络接口地址和 Shell 输出地址脱敏。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-2.0.4.exe`
+- `putty.exe`
+- `Terminal-Agent-Uninstall-Cleanup-2.0.4.zip`
+- `latest.yml` 与匹配的 `.blockmap`
+
+---
+
 # Terminal-Agent v2.0.3
 
 Release date: 2026-08-30

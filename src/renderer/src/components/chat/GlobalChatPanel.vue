@@ -5,6 +5,7 @@ import type { ChatWorkspace } from '../../../../shared/contracts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../stores/global-chat'
 import { chatContentText } from '../../../../shared/chat-content'
 import { hostnameDisplayLabels, resolvedHostnames } from '../../../../shared/shell-display-label'
+import { resolveModelShellTargets } from '../../../../shared/model-shell-target'
 
 const props = defineProps<{ chat: ChatWorkspace | null; readOnly?: boolean; shellCount?: number }>()
 const emit = defineEmits<{ collapse: [] }>()
@@ -76,8 +77,14 @@ function planTargetLabel(target: string): string {
     observedHostname: shell.observedHostname,
     displayName: shell.title,
   })))
+  const modelTargets = resolveModelShellTargets(shells.map(shell => ({
+    stableKey: shell.sessionId,
+    hostname: shell.hostname,
+    observedHostname: shell.observedHostname,
+    displayName: shell.title,
+  })))
   const index = shells.findIndex((shell, shellIndex) => [
-    resolved[shellIndex], shell.observedHostname, shell.title, shell.hostname,
+    modelTargets[shellIndex], resolved[shellIndex], shell.observedHostname, shell.title, shell.hostname,
   ].some(identity => identity?.trim() === target.trim()))
   if (index < 0) return target
   return hostnameDisplayLabels(shells.map(shell => ({ hostname: shell.hostname, observedHostname: shell.observedHostname, displayName: shell.title })))[index]?.displayLabel ?? target
