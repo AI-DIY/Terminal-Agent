@@ -14,6 +14,7 @@ import WorkbenchSessionSidebar from '../components/workbench/WorkbenchSessionSid
 import ShellCanvas from '../components/workbench/ShellCanvas.vue'
 import ShellHistoryDialog from '../components/workbench/ShellHistoryDialog.vue'
 import HostMemoryConsentDialog from '../components/workbench/HostMemoryConsentDialog.vue'
+import UpgradeDialog from '../components/UpgradeDialog.vue'
 import { closeSession } from '../stores/close-session'
 import { createFrameBatcher } from '../stores/data-batcher'
 import { createSessionsStore, type SessionView } from '../stores/sessions'
@@ -33,6 +34,8 @@ const showSavedSessions = ref(false)
 const editingProfile = ref<DirectSessionSummary | null>(null)
 const connectionError = ref('')
 const diagnosticError = ref('')
+const appVersion = ref('')
+const showUpgrade = ref(false)
 const bastionCatalog = ref<BastionCatalogSnapshot | null>(null)
 const bastionHosts = ref<BastionHostSummary[]>([])
 const selectedBastionSystemId = ref('')
@@ -61,6 +64,11 @@ const currentChatSessionIds = computed(() => new Set(
     : [],
 ))
 const currentChatSessions = computed(() => sessions.value.filter(session => currentChatSessionIds.value.has(session.id)))
+const onlineChatIds = computed(() => new Set(
+  chatStore.state.chats
+    .filter(chat => chatStore.hasOnlineShells(chat.id))
+    .map(chat => chat.id),
+))
 const historyHosts = computed(() => latestHistoryByHost(shellHistory.state.records))
 const selectedHistoryHosts = ref<string[]>([])
 const historyPlaybackRecords = computed(() => filterHistoryByHosts(historyHosts.value, selectedHistoryHosts.value, layoutPreferences.state.visibleCount))
@@ -340,7 +348,7 @@ async function duplicateShell(sessionId: string): Promise<void> {
   connectionError.value = ''
   const targetChatId = activeWorkbenchChatId.value
   if (!targetChatId) {
-    connectionError.value = '无法确定复制 Shell 的目标聊天。'
+    connectionError.value = '无法确定复制 SSH 的目标聊天。'
     return
   }
   const isTargetCurrent = () => chatStore.state.selectedId === targetChatId
@@ -372,7 +380,7 @@ async function reconnectShell(historyId: string): Promise<void> {
     if (isTargetCurrent()) closeShellHistory()
   } catch (error) {
     if (!isTargetCurrent()) return
-    connectionError.value = error instanceof Error ? error.message : '无法重新连接 Shell。'
+    connectionError.value = error instanceof Error ? error.message : '无法重新连接 SSH。'
     void shellHistory.refresh()
   }
 }
@@ -616,6 +624,17 @@ function onWindowKeydown(event: KeyboardEvent): void {
   if (showConnection.value) closeConnectionDialog()
   else if (showSavedSessions.value) closeSavedSessionsDialog()
   else if (showHistoryDialog.value) closeShellHistory()
+  else if (showUpgrade.value) showUpgrade.value = false
+}
+
+async function openUpgrade(): Promise<void> {
+  showUpgrade.value = true
+  try {
+    const updater = window.terminalAgent?.updater
+    if (!updater) return
+    const updaterState = await updater.getState()
+    appVersion.value = updaterState.currentVersion
+  } catch { /* The dialog reports updater errors when the check starts. */ }
 }
 
 async function openRendererDevTools(): Promise<void> {
@@ -748,6 +767,8 @@ onMounted(() => {
     .then(errors => { connectionError.value = errors.at(-1) ?? connectionError.value })
     .catch(() => { connectionError.value = '无法读取 AccessClient 启动状态。' })
   void refreshSavedProfiles().catch(() => { connectionError.value = '无法读取已保存会话。' })
+  const updater = window.terminalAgent?.updater
+  if (updater) void updater.getState().then(state => { appVersion.value = state.currentVersion }).catch(() => undefined)
   void refreshBastionCatalog()
   window.addEventListener('keydown', onWindowKeydown)
 })
@@ -772,7 +793,8 @@ onBeforeUnmount(() => {
 <template>
   <WorkbenchShell
     :data-workbench-ready="workbenchReady ? 'true' : 'false'"
-    :modal-open="showConnection || showSavedSessions || showHistoryDialog || pendingHostMemoryDisclosure !== null"
+    :modal-open="showConnection || showSavedSessions || showHistoryDialog || showUpgrade || pendingHostMemoryDisclosure !== null"
+    :current-version="appVersion"
     :current-chat-title="chatStore.state.selected?.title ?? '未选择任务'"
     :current-chat-shell-count="isLiveChat ? currentChatSessions.length : 0"
   >
@@ -782,12 +804,14 @@ onBeforeUnmount(() => {
       <button type="button" class="header-button" aria-label="设置" title="设置" @click="emit('showSettings')"><Settings :size="14" aria-hidden="true" /><span>设置</span></button>
       <button type="button" class="header-button" aria-label="DevTools" title="DevTools" @click="openRendererDevTools"><Code2 :size="14" aria-hidden="true" /><span>DevTools</span></button>
       <button type="button" class="header-button" aria-label="Node Inspector" title="Node Inspector" @click="openNodeInspector"><Bug :size="14" aria-hidden="true" /><span>Node Inspector</span></button>
+      <button type="button" class="header-button upgrade-button" aria-label="升级" title="检查并安装升级" @click="openUpgrade"><span>升级</span></button>
     </template>
 
     <template #sidebar="{ collapse }">
       <WorkbenchSessionSidebar
         :groups="chatStore.state.groups"
         :current-chat-id="chatStore.state.selectedId"
+        :online-chat-ids="onlineChatIds"
         :loading="chatStore.state.loading"
         :error="chatStore.state.error"
         :rename-task="renameTask"
@@ -823,7 +847,7 @@ onBeforeUnmount(() => {
         @toggle-history-host="toggleHistoricalHost"
       >
         <template #history>
-          <section class="history-playback" aria-label="任务 Shell 历史回放">
+          <section class="history-playback" aria-label="任务 SSH 历史回放">
             <div
               v-if="historyPlayback.length"
               class="history-shell-grid"
@@ -832,13 +856,13 @@ onBeforeUnmount(() => {
               :style="historyGridStyle"
             >
               <article v-for="playback in historyPlayback" :key="playback.record.id" class="history-shell-card">
-                <header><strong>{{ playback.record.title }}</strong><button type="button" :aria-label="`查看 Shell 历史 ${playback.record.hostname}`" @click="openShellHistory(playback.record.hostname)">历史</button></header>
-                <span>{{ playback.record.hostname }}</span><b>已关闭 · 只读历史</b>
-                <pre :aria-label="`只读终端历史 ${playback.record.hostname}`" data-read-only="true">{{ playback.terminal.output || playback.record.preview }}</pre>
+                <header><strong>{{ playback.record.title }}</strong><button type="button" :aria-label="`查看 SSH 历史 ${playback.record.hostname}`" @click="openShellHistory(playback.record.hostname)">历史</button></header>
+                <span>{{ playback.record.hostname }}</span><b>已关闭 · 只读历史 SSH</b>
+                <pre :aria-label="`只读终端历史 ${playback.record.hostname}`" data-read-only="true" :style="{ fontSize: `${layoutPreferences.state.fontSize}px` }">{{ playback.terminal.output || playback.record.preview }}</pre>
               </article>
             </div>
-            <p v-else-if="shellHistory.state.loading">正在读取关联 Shell 历史...</p>
-            <p v-else>此任务没有关联 Shell。</p>
+            <p v-else-if="shellHistory.state.loading">正在读取关联 SSH 历史...</p>
+            <p v-else>此任务没有关联 SSH。</p>
           </section>
         </template>
         <template #empty>
@@ -905,10 +929,12 @@ onBeforeUnmount(() => {
         :selected="shellHistory.state.selected"
         :loading="shellHistory.state.loading"
         :error="shellHistory.state.error"
+        :font-size="layoutPreferences.state.fontSize"
         @close="closeShellHistory"
         @select="shellHistory.select"
         @reconnect="reconnectShell"
       />
+      <UpgradeDialog :open="showUpgrade" :current-version="appVersion || '—'" @close="showUpgrade = false" />
       <HostMemoryConsentDialog v-if="pendingHostMemoryDisclosure" :host-identity="pendingHostMemoryDisclosure.hostIdentity" :submitting="hostMemorySubmitting" @close="dismissHostMemory" @acknowledge="acknowledgeHostMemory" />
     </template>
   </WorkbenchShell>
@@ -918,8 +944,8 @@ onBeforeUnmount(() => {
 .header-button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; font-weight: 600; }.header-button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
 .empty-state { display: grid; min-width: 0; min-height: 0; overflow: auto; background: var(--surface); }
 .agent-empty { display: grid; gap: 7px; padding: 16px; }
-.history-playback { height: 100%; overflow: auto; padding: 8px; background: var(--surface-soft); }
-.history-shell-grid { display: grid; align-content: start; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 8px; overflow: auto; }
+.history-playback { height: 100%; min-width: 0; min-height: 0; overflow: hidden; padding: 8px; background: var(--surface-soft); }
+.history-shell-grid { display: grid; align-content: start; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 8px; overflow-x: auto; overflow-y: hidden; }
 .history-shell-card { display: grid; grid-template-rows: 30px auto auto minmax(0, 1fr); gap: 5px; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); background: var(--terminal); }
 .history-shell-card > header { padding: 0 5px 0 9px; border-bottom: 1px solid #343a42; background: #20262d; color: #d8dade; }
 .history-shell-card > span,.history-shell-card > b { padding: 0 9px; }

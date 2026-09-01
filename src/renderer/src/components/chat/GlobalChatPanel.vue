@@ -186,7 +186,7 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
           </section>
         </div>
       </article>
-      <section v-if="!messages.length" class="empty"><Bot :size="24" aria-hidden="true" /><strong>{{ readOnly ? '此任务没有 AI 记录' : '开始协作' }}</strong><span>{{ readOnly ? 'Shell 历史仍可在中间工作区查看' : '输入目标，AI 会结合当前任务中的 Shell 信息回答' }}</span></section>
+      <section v-if="!messages.length" class="empty"><Bot :size="24" aria-hidden="true" /><strong>{{ readOnly ? '此任务没有 AI 记录' : '开始协作' }}</strong><span>{{ readOnly ? 'SSH 历史仍可在中间工作区查看' : '输入目标，AI 会结合当前任务中的 SSH 信息回答' }}</span></section>
       <p v-if="standaloneError" class="error">{{ standaloneError }}</p>
       <p v-if="actionError" class="error">{{ actionError }}</p>
     </div>
@@ -195,8 +195,8 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 
     <footer class="composer">
       <div class="composer-shell">
-        <textarea :value="draft" :disabled="readOnly || !chatId" aria-label="聊天输入" placeholder="告诉 AI 要完成什么；AI 会根据当前任务的 Shell 信息回答。" @input="updateDraft" @keydown="onKeydown" />
-        <div class="composer-foot"><span>{{ readOnly ? '历史聊天只读' : `${props.shellCount ?? chat?.shellCount ?? 0} 个在线 Shell` }}</span><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="send-button" :disabled="readOnly || !chatId || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
+        <textarea :value="draft" :disabled="readOnly || !chatId" aria-label="聊天输入" placeholder="告诉 AI 要完成什么；AI 会根据当前任务的 SSH 信息回答。" @input="updateDraft" @keydown="onKeydown" />
+        <div class="composer-foot"><span>{{ readOnly ? '历史聊天只读' : `${props.shellCount ?? chat?.shellCount ?? 0} 个在线 SSH` }}</span><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="send-button" :disabled="readOnly || !chatId || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
       </div>
     </footer>
   </section>

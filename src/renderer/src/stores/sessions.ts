@@ -1,5 +1,5 @@
 import type { SessionMode } from '../../../shared/contracts'
-import { hostnameDisplayLabels } from '../../../shared/shell-display-label'
+import { sshHostIdentity, sshHostnameDisplayLabels, type HostnameDisplayLabel } from '../../../shared/shell-display-label'
 
 export const MAX_SESSION_BUFFER_CHARS = 200_000
 
@@ -19,9 +19,22 @@ export function sessionLabel(session: SessionView): string {
 }
 
 export function sessionDisplayLabel(session: SessionView, orderedSessions: readonly SessionView[]): string {
+  const parts = sessionDisplayParts(session, orderedSessions)
+  return parts ? parts.displayLabel : sessionLabel(session)
+}
+
+/** Presentation parts for an SSH tab/card.  Keeping the ordinal separate
+ * lets the renderer style the small #x badge independently from the host
+ * label while retaining the legacy combined string API for chat/a11y. */
+export function sessionDisplayParts(session: SessionView, orderedSessions: readonly SessionView[]): HostnameDisplayLabel | null {
   const index = orderedSessions.findIndex(item => item.id === session.id)
-  if (index < 0) return sessionLabel(session)
-  return hostnameDisplayLabels(orderedSessions.map(item => ({ hostname: item.hostname, observedHostname: item.observedHostname, displayName: item.title })))[index]!.displayLabel
+  if (index < 0) return null
+  return sshHostnameDisplayLabels(orderedSessions.map(item => ({ hostname: item.hostname, observedHostname: item.observedHostname, displayName: item.title })))[index] ?? null
+}
+
+export function sessionHasDuplicateHost(session: SessionView, orderedSessions: readonly SessionView[]): boolean {
+  const identity = sshHostIdentity({ hostname: session.hostname, observedHostname: session.observedHostname, displayName: session.title })
+  return orderedSessions.filter(item => sshHostIdentity({ hostname: item.hostname, observedHostname: item.observedHostname, displayName: item.title }) === identity).length > 1
 }
 
 export function createSessionsStore() {

@@ -9,7 +9,7 @@ import {
   keyboardSidebarWidth,
 } from '../../stores/layout-preferences'
 
-defineProps<{ modalOpen?: boolean; currentChatTitle: string; currentChatShellCount: number }>()
+defineProps<{ modalOpen?: boolean; currentChatTitle: string; currentChatShellCount: number; currentVersion?: string }>()
 const layout = getLayoutPreferencesStore()
 const shellStyle = computed(() => ({
   '--left-width': layout.state.leftCollapsed ? '44px' : `${layout.state.leftWidth}px`,
@@ -83,8 +83,8 @@ onBeforeUnmount(widthSaver.flush)
 <template>
   <main class="workbench-shell" :class="`theme-${layout.state.theme}`" :style="shellStyle">
     <header class="app-header" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
-      <div class="brand"><span class="brand-mark" aria-hidden="true">TA</span><strong>Terminal-Agent</strong></div>
-      <div class="current-chat">当前任务&nbsp; / &nbsp;<b>{{ currentChatTitle }}</b><span>{{ currentChatShellCount }} 个 Shell</span></div>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">TA</span><strong>Terminal-Agent</strong><span class="app-version">v{{ currentVersion || '—' }}</span></div>
+      <div class="current-chat">当前任务&nbsp; / &nbsp;<b>{{ currentChatTitle }}</b><span>{{ currentChatShellCount }} 个 SSH</span></div>
       <div class="app-header-actions"><slot name="app-actions" /></div>
     </header>
     <section class="workspace" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
@@ -130,7 +130,7 @@ onBeforeUnmount(widthSaver.flush)
   box-shadow: none;
 }
 .app-header { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 calc(14px + var(--window-controls-inset)) 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); -webkit-app-region: drag; }
-.brand { display: flex; align-items: center; gap: 9px; min-width: 176px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; font-weight: 700; }.brand-mark { display: grid; place-items: center; box-sizing: border-box; width: 28px; height: 28px; border: 1px solid #535e6a; border-radius: 0; background: #1d242c; color: #fff; font-size: 10px; font-weight: 800; }
+.brand { display: flex; align-items: center; gap: 9px; min-width: 176px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; font-weight: 700; }.app-version { align-self: flex-end; margin: 0 0 8px -4px; color: var(--faint); font-size: 9px; font-weight: 600; letter-spacing: .02em; }.brand-mark { display: grid; place-items: center; box-sizing: border-box; width: 28px; height: 28px; border: 1px solid #535e6a; border-radius: 0; background: #1d242c; color: #fff; font-size: 10px; font-weight: 800; }
 .current-chat { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .current-chat b { color: var(--text-strong); font-size: 11px; font-weight: 680; }
 .current-chat span { margin-left: 9px; color: var(--faint); }

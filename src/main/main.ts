@@ -61,6 +61,8 @@ import { createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../share
 import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
 import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'
 import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'
+import { UpdaterService } from './updater/updater-service'
+import { registerUpdaterHandlers } from './updater/register-updater-handlers'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { buildStructuredShellContext, StructuredChatAgent } from './chat/structured-chat-agent'
 import { ExecutionPlanService } from './chat/execution-plan-service'
@@ -183,6 +185,15 @@ const executionGateway = new ExecutionGateway(
   approvedExecutionAudit,
 )
 const hostMemorySettings = new HostMemorySettingsService(join(app.getPath('userData'), 'host-memory-settings.json'))
+const applicationVersion = readApplicationVersion()
+const updater = new UpdaterService({
+  currentVersion: applicationVersion,
+  tempDirectory: join(app.getPath('temp'), 'terminal-agent-updates'),
+  relaunch: () => app.relaunch(),
+  // Keep the normal persistence/session shutdown path when restarting after
+  // an installer launch; `app.exit()` would bypass before-quit handlers.
+  exit: code => code === 0 ? app.quit() : app.exit(code),
+})
 let unregisterSessionEvents: (() => void) | undefined
 let unregisterAccessClientLaunchEvents: (() => void) | undefined
 let unregisterBastionLaunchEvents: (() => void) | undefined
@@ -196,7 +207,24 @@ let unregisterShellHistoryHandlers: (() => void) | undefined
 let unregisterWorkbenchSettingsHandlers: (() => void) | undefined
 let unregisterHostMemoryHandlers: (() => void) | undefined
 let unregisterDiagnosticsHandlers: (() => void) | undefined
+let unregisterUpdaterHandlers: (() => void) | undefined
 let unregisterSessionObservation: SessionObservationRegistration | undefined
+
+/**
+ * Electron exposes `app.getVersion()` in production.  A few lightweight
+ * startup/test hosts intentionally provide only the small subset of the app
+ * API they exercise, so keep updater initialization non-fatal there too.
+ */
+function readApplicationVersion(): string {
+  try {
+    const getter = (app as unknown as { getVersion?: () => unknown }).getVersion
+    const version = typeof getter === 'function' ? getter.call(app) : undefined
+    if (typeof version === 'string' && version.trim()) return version
+  } catch { /* Fall through to package/environment defaults. */ }
+  const packageVersion = process.env.npm_package_version?.trim()
+  return packageVersion || '2.0.5'
+}
+
 const accessClient = new AccessClientService(
   new AccessSessionResolver(new FileSavedSessionRepository(join(app.getPath('userData'), 'access-client-sessions.json')), readTempSession),
   createAccessClientSessionOpener(sessions),
@@ -228,6 +256,7 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
   const windowDiagnostics = new DiagnosticsController(rendererWindow.webContents)
   diagnostics = windowDiagnostics
   unregisterDiagnosticsHandlers = registerDiagnosticsHandlers(windowDiagnostics, rendererWindow.webContents)
+  unregisterUpdaterHandlers = registerUpdaterHandlers(updater, rendererWindow.webContents)
   const onBeforeInput = (event: Electron.Event, input: Electron.Input): void => {
     const opensDevTools = input.type === 'keyDown'
       && input.control && input.shift && !input.alt && !input.meta
@@ -243,6 +272,8 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
   mainWindow.on('closed', () => {
     unregisterDiagnosticsHandlers?.()
     unregisterDiagnosticsHandlers = undefined
+    unregisterUpdaterHandlers?.()
+    unregisterUpdaterHandlers = undefined
     windowDiagnostics.dispose()
     if (diagnostics === windowDiagnostics) diagnostics = undefined
     unregisterSessionEvents?.()
@@ -321,7 +352,15 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
 const isPrimaryInstance = configureAccessClientSingleInstance(app, accessClientLaunches)
 
 if (isPrimaryInstance) {
-  registerGracefulApplicationShutdown(app, () => sessions.closeAll(), () => shellHistoryLifecycle.drain(), () => diagnostics?.dispose())
+  registerGracefulApplicationShutdown(
+    app,
+    () => sessions.closeAll(),
+    () => shellHistoryLifecycle.drain(),
+    () => {
+      diagnostics?.dispose()
+      updater.dispose()
+    },
+  )
   app.whenReady().then(async () => {
     void recordPackagedWindowsInstallPath({
       platform: process.platform,

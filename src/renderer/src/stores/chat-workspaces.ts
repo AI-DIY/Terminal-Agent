@@ -408,6 +408,23 @@ export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = 
     workspace(chatId: string): ChatWorkspace | undefined {
       return workspaces.get(chatId)
     },
+    /**
+     * Returns whether a task currently owns at least one live SSH session.
+     * Keeping this lookup in the workspace store means the task history
+     * sidebar can show activity for every task, not only the selected one.
+     */
+    hasOnlineShells(chatId: string): boolean {
+      // The list endpoint already exposes the authoritative `live` bit for
+      // every task.  Use it first so an unselected task is highlighted too;
+      // fall back to the cached workspace for older/mock API snapshots that
+      // may not provide the summary flag.
+      const summary = state.chats.find(chat => chat.id === chatId)
+      // Older persisted/mock list snapshots may not carry the `live` bit.
+      // Only trust it when it is actually present; otherwise consult the
+      // hydrated workspace below.
+      if (summary && typeof summary.live === 'boolean') return summary.live
+      return Boolean(workspaces.get(chatId)?.shells.some(shell => shell.status === 'open' && Boolean(shell.sessionId)))
+    },
     async resolveSession(sessionId: string, isCurrent: () => boolean = () => true): Promise<ChatWorkspace | null> {
       while (isCurrent()) {
         const resolution = await api.resolveSession({ sessionId })

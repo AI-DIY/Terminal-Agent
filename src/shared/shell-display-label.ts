@@ -9,9 +9,55 @@ export type HostnameDisplayEntry = {
   observedHostname?: string
 }
 
+/**
+ * Resolve the comparison identity used by the SSH workspace's small host
+ * ordinal badge.  A bastion can expose one relay address for several target
+ * machines, so an observed remote hostname wins over the transport address.
+ *
+ * This is deliberately separate from `canonicalHostname`.  The latter is a
+ * model/execution-plan contract and must continue to use the persisted route
+ * when no observation is available.  The ordinal identity is only a UI
+ * comparison key, so it is case-insensitive and may use a conservative host
+ * hint from a connection title when the route is a loopback/relay address.
+ */
+export function sshHostIdentity(entry: HostnameDisplayEntry): string {
+  const observed = entry.observedHostname?.trim()
+  if (observed && !isIpLiteral(observed)) return observed.toLowerCase()
+  const hostname = entry.hostname.trim()
+  if (hostname && !isIpLiteral(hostname)) return hostname.toLowerCase()
+  // AccessClient/Raw bridges commonly use loopback as their route.  If the
+  // title contains an explicit host token (for example `appuser@web-01` or
+  // `堡垒机_web-01`), use that token so different targets do not all receive
+  // the same ordinal merely because they share the relay address.
+  const titleHint = hostHintFromTitle(entry.displayName)
+  if (titleHint) return titleHint.toLowerCase()
+  return hostname.toLowerCase()
+}
+
 /** The name used to address a Shell in chat and execution plans. */
 export function canonicalHostname(entry: HostnameDisplayEntry): string {
   return entry.observedHostname?.trim() || entry.hostname.trim()
+}
+
+/**
+ * Labels for visible SSH tabs/cards.  Unlike the legacy model-facing label
+ * helper below, this function counts by `sshHostIdentity`, keeping the #x
+ * badge tied to the actual remote host when a bastion relay is shared.
+ */
+export function sshHostnameDisplayLabels(entries: readonly HostnameDisplayEntry[]): HostnameDisplayLabel[] {
+  const identities = entries.map(sshHostIdentity)
+  const totals = countValues(identities)
+  const ordinals = new Map<string, number>()
+  return entries.map((entry, index) => {
+    const identity = identities[index]!
+    const ordinal = (ordinals.get(identity) ?? 0) + 1
+    ordinals.set(identity, ordinal)
+    const displayName = entry.observedHostname?.trim() || entry.displayName?.trim() || entry.hostname.trim()
+    return {
+      displayLabel: totals.get(identity)! > 1 ? `${displayName} #${ordinal}` : displayName,
+      ordinal,
+    }
+  })
 }
 
 export function resolvedHostnames(entries: readonly HostnameDisplayEntry[]): string[] {
@@ -76,4 +122,43 @@ function normalizeTargetPart(value: string | undefined): string | undefined {
 function withOrdinal(value: string, ordinal: number): string {
   const suffix = `#${ordinal}`
   return `${value.slice(0, Math.max(1, 255 - suffix.length))}${suffix}`
+}
+
+function hostHintFromTitle(value: string | undefined): string | undefined {
+  const title = value?.trim()
+  if (!title) return undefined
+
+  // Prefer an explicit user@host token.  This mirrors the strict shape used
+  // by model-shell-target without importing model-facing sanitisation into
+  // the renderer's presentation helper.
+  const atMatch = /(?:^|[^\w@.-])[^\s@]+@([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)$/.exec(title)
+  if (atMatch?.[1]) return atMatch[1]
+
+  // Bastion labels in existing integrations often append the target after an
+  // underscore.  Only accept a host-like suffix; ordinary titles such as
+  // “生产终端” remain associated with the route address and retain legacy
+  // duplicate behaviour.
+  const suffix = title.split('_').at(-1)?.trim()
+  if (suffix && (isHostLikeToken(suffix) || isIpLiteral(suffix))) return suffix
+
+  // A plain DNS-like title is also useful when a provider labels the target
+  // directly (for example `web-01.example.com`).  Avoid treating natural
+  // language labels such as “primary” as host identities unless they contain
+  // a separator or digit.
+  if (isHostLikeToken(title) && /[.\d-]/.test(title)) return title
+  return undefined
+}
+
+function isHostLikeToken(value: string): boolean {
+  return /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$/.test(value) && /[A-Za-z]/.test(value)
+}
+
+function isIpLiteral(value: string): boolean {
+  const candidate = value.trim().replace(/^\[|\]$/g, '')
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(candidate)) {
+    return candidate.split('.').every(part => Number(part) >= 0 && Number(part) <= 255)
+  }
+  // This deliberately accepts only hexadecimal/colon IPv6 forms; hostnames
+  // containing a colon (for example a label) are not treated as addresses.
+  return candidate.includes(':') && /^[0-9a-f:%]+$/i.test(candidate)
 }

@@ -1411,7 +1411,7 @@ describe('durable chat workbench components', () => {
     expect(source).not.toContain('新建 SSH 连接')
   })
 
-  it('shows the selected durable title while the live workspace reports current Shell count', () => {
+  it('shows the selected durable title while the live workspace reports current SSH count', () => {
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
     const shell = readFileSync(new URL('../../../src/renderer/src/components/workbench/WorkbenchShell.vue', import.meta.url), 'utf8')
 
@@ -1420,8 +1420,8 @@ describe('durable chat workbench components', () => {
     expect(view).toContain(':shell-count="isLiveChat ? currentChatSessions.length')
     expect(view).toContain(':shell-count="isLiveChat ? currentChatSessions.length : 0"')
     expect(shell).toContain('{{ currentChatTitle }}')
-    expect(shell).toContain('{{ currentChatShellCount }} 个 Shell')
-    expect(view).not.toContain('sessions.length }} 个 Shell')
+    expect(shell).toContain('{{ currentChatShellCount }} 个 SSH')
+    expect(view).not.toContain('sessions.length }} 个 SSH')
   })
 
 })

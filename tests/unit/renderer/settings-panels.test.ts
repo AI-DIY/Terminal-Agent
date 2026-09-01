@@ -34,11 +34,11 @@ describe('settings panels', () => {
     expect(appearance).toContain('SHELL_ROW_HEIGHT_PRESETS')
     expect(appearance).toContain('SHELL_FONT_SIZE_PRESETS')
     expect(appearance).toContain('单行高度（占工作区）')
-    expect(appearance).toContain('Shell 字体大小')
+    expect(appearance).toContain('SSH 字体大小')
     expect(canvas).toContain('SHELL_ROW_HEIGHT_PRESETS')
     expect(canvas).toContain('SHELL_FONT_SIZE_PRESETS')
     expect(canvas).toContain('单行高度（占工作区）')
-    expect(canvas).toContain('Shell 字体大小')
+    expect(canvas).toContain('SSH 字体大小')
   })
 
   it('themes the settings and host-memory surfaces through shared tokens', () => {

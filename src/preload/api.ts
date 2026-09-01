@@ -45,6 +45,19 @@ import { modelProfileIdSchema, rendererModelProfileInputSchema, rendererModelSet
 import type { RegexFenceRule } from '../main/agent/regex-fence-service'
 import type { DirectSessionSummary } from '../main/ssh/direct-session-repository'
 import { chatPlanEditStepRequestSchema, chatPlanRemoveStepRequestSchema, chatPlanCancelRequestSchema, chatPlanExecuteRequestSchema, type ChatPlanEditStepRequest, type ChatPlanRemoveStepRequest, type ChatPlanCancelRequest, type ChatPlanExecuteRequest } from '../shared/chat-plan'
+import {
+  updaterChannels,
+  updaterCheckResultSchema,
+  updaterDownloadInfoSchema,
+  updaterInstallResultSchema,
+  updaterProgressSchema,
+  updaterStateSchema,
+  type UpdaterCheckResult,
+  type UpdaterDownloadInfo,
+  type UpdaterInstallResult,
+  type UpdaterProgress,
+  type UpdaterState,
+} from '../main/updater/updater-contracts'
 
 export const terminalAgentNamespace = 'terminalAgent' as const
 
@@ -156,6 +169,16 @@ export type TerminalAgentApi = {
     catalog(): Promise<BastionCatalogSnapshot>
     hosts(systemId: string): Promise<BastionHostSummary[]>
     launch(request: BastionLaunchRequest): Promise<BastionLaunchResult>
+  }
+  updater: {
+    check(): Promise<UpdaterCheckResult>
+    download(): Promise<UpdaterDownloadInfo>
+    install(): Promise<UpdaterInstallResult>
+    restart(): Promise<void>
+    getState(): Promise<UpdaterState>
+    onProgress(listener: (event: UpdaterProgress) => void): () => void
+    onStatus(listener: (state: UpdaterState) => void): () => void
+    onError(listener: (message: string) => void): () => void
   }
 }
 
@@ -317,6 +340,28 @@ export function createTerminalAgentApi(ipcRenderer: {
       catalog: () => ipcRenderer.invoke('access-client:bastion:catalog') as Promise<BastionCatalogSnapshot>,
       hosts: (systemId: string) => ipcRenderer.invoke('access-client:bastion:hosts', systemId) as Promise<BastionHostSummary[]>,
       launch: (request: BastionLaunchRequest) => ipcRenderer.invoke('access-client:bastion:launch', request) as Promise<BastionLaunchResult>,
+    }),
+    updater: Object.freeze({
+      check: async () => updaterCheckResultSchema.parse(await ipcRenderer.invoke(updaterChannels.check)),
+      download: async () => updaterDownloadInfoSchema.parse(await ipcRenderer.invoke(updaterChannels.download)),
+      install: async () => updaterInstallResultSchema.parse(await ipcRenderer.invoke(updaterChannels.install)),
+      restart: async () => { await ipcRenderer.invoke(updaterChannels.restart) },
+      getState: async () => updaterStateSchema.parse(await ipcRenderer.invoke(updaterChannels.state)),
+      onProgress: (listener: (event: UpdaterProgress) => void) => {
+        const handler = (_event: unknown, payload: unknown) => listener(updaterProgressSchema.parse(payload))
+        ipcRenderer.on(updaterChannels.progress, handler)
+        return () => ipcRenderer.removeListener(updaterChannels.progress, handler)
+      },
+      onStatus: (listener: (state: UpdaterState) => void) => {
+        const handler = (_event: unknown, payload: unknown) => listener(updaterStateSchema.parse(payload))
+        ipcRenderer.on(updaterChannels.status, handler)
+        return () => ipcRenderer.removeListener(updaterChannels.status, handler)
+      },
+      onError: (listener: (message: string) => void) => {
+        const handler = (_event: unknown, payload: unknown) => listener(z.string().trim().min(1).max(2_000).parse(payload))
+        ipcRenderer.on(updaterChannels.error, handler)
+        return () => ipcRenderer.removeListener(updaterChannels.error, handler)
+      },
     }),
   })
 }

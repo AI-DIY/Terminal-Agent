@@ -31,26 +31,41 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(openHistory.indexOf('await shellHistory.open({ chatId')).toBeLessThan(openHistory.indexOf('showHistoryDialog.value = true'))
   })
 
-  it('renders historical hosts as a selectable compact workspace linked to the shared layout', () => {
+  it('renders historical hosts beside the live canvas and links them to the shared SSH layout', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
 
-    expect(canvas).toContain('历史 Shell 连接')
+    expect(canvas).toContain('历史 SSH 连接')
     expect(canvas).toContain(':aria-pressed="selectedHistoryHosts.includes(host.hostname)"')
-    expect(canvas).toContain("emit('toggleHistoryHost', host.hostname)")
-    expect(canvas).toContain('历史 Shell 布局')
+    expect(canvas).toContain('handleHistoryHostClick(host.hostname)')
+    expect(canvas).toContain("emit('toggleHistoryHost', hostname)")
+    expect(canvas).toContain('SSH 窗口布局')
+    expect(canvas.match(/class="layout-menu"/g)?.length).toBe(1)
     expect(view).toContain('filterHistoryByHosts')
     expect(view).toContain(':selected-history-hosts="selectedHistoryHosts"')
     expect(view).toContain(':style="historyGridStyle"')
   })
 
-  it('labels historical-only tasks as closed read-only playback instead of live Shell activity', () => {
+  it('labels historical-only tasks as closed read-only playback instead of live SSH activity', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
 
-    expect(canvas).toContain('Shell 历史回放')
+    expect(canvas).toContain('SSH 历史回放')
     expect(canvas).toContain('{{ historyHosts.length }} 台主机')
-    expect(canvas).toContain('以下 Shell 已关闭，仅提供只读回放')
+    expect(canvas).toContain('以下 SSH 已关闭，仅提供只读回放')
     expect(canvas).toContain('v-if="isLive" class="shell-title"')
+  })
+
+  it('opens the shared Shell History dialog when a historical host is clicked beside live SSH panes', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+    const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
+    const dialog = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellHistoryDialog.vue', import.meta.url), 'utf8')
+
+    expect(canvas).toContain('if (props.isLive && props.currentSessions.length > 0)')
+    expect(canvas).toContain('openHistoricalSessionHistory(hostname)')
+    expect(canvas).toContain(':aria-label="historyHostActionLabel(host.hostname)"')
+    expect(view).toContain('@history="openShellHistory"')
+    expect(view).toContain(':font-size="layoutPreferences.state.fontSize"')
+    expect(dialog).toContain('aria-label="Shell 历史"')
   })
 
   it('vertically centers the closed-Shell history title and summary in their toolbar', () => {
@@ -108,6 +123,8 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(canvas).toContain('min-height: 0')
     expect(canvas).toContain(':font-size="layout.state.fontSize"')
     expect(canvas).toContain('SHELL_FONT_SIZE_PRESETS')
+    expect(canvas).toContain('overflow-x: auto; overflow-y: hidden;')
+    expect(canvas).toContain('SSH 窗口布局设置')
     expect(canvas).not.toContain('Maximize2')
     expect(canvas).not.toContain('Minimize2')
     expect(canvas).not.toContain('maximizedSessionId')

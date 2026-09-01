@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Circle, X } from '@lucide/vue'
-import { sessionDisplayLabel, type SessionView } from '../stores/sessions'
+import { sessionDisplayLabel, sessionDisplayParts, sessionHasDuplicateHost, type SessionView } from '../stores/sessions'
 
 defineProps<{ sessions: SessionView[]; activeSessionId: string | null }>()
 const emit = defineEmits<{ select: [sessionId: string]; close: [sessionId: string] }>()
@@ -16,10 +16,11 @@ const emit = defineEmits<{ select: [sessionId: string]; close: [sessionId: strin
     >
       <button type="button" class="select" :aria-label="`选择终端会话 ${sessionDisplayLabel(session, sessions)}`" :aria-current="session.id === activeSessionId ? 'page' : undefined" @click="emit('select', session.id)">
         <Circle :size="7" :stroke-width="0" fill="currentColor" aria-hidden="true" />
-        <strong>{{ sessionDisplayLabel(session, sessions) }}</strong>
+        <strong>{{ sessionDisplayParts(session, sessions)?.displayLabel.replace(/\s+#\d+$/, '') ?? sessionDisplayLabel(session, sessions) }}</strong>
+        <span v-if="sessionHasDuplicateHost(session, sessions)" class="host-ordinal">#{{ sessionDisplayParts(session, sessions)?.ordinal }}</span>
         <small>已连接</small>
       </button>
-      <button type="button" class="close" :aria-label="`关闭终端会话 ${sessionDisplayLabel(session, sessions)}`" title="关闭 Shell" @click="emit('close', session.id)"><X :size="13" aria-hidden="true" /></button>
+      <button type="button" class="close" :aria-label="`关闭 SSH 会话 ${sessionDisplayLabel(session, sessions)}`" title="关闭 SSH" @click="emit('close', session.id)"><X :size="13" aria-hidden="true" /></button>
     </div>
   </nav>
 </template>
@@ -32,7 +33,7 @@ const emit = defineEmits<{ select: [sessionId: string]; close: [sessionId: strin
 button { border: 0; background: transparent; color: inherit; }
 .select { display: flex; min-width: 0; align-items: center; gap: 7px; height: 100%; padding: 0 4px 0 10px; text-align: left; }
 .select > svg { flex: 0 0 auto; color: var(--green); }.session-tab.active .select > svg { color: var(--accent); }
-.select strong { max-width: 128px; overflow: hidden; color: var(--text-strong); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.select strong { max-width: 128px; overflow: hidden; color: var(--text-strong); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }.host-ordinal { align-self: flex-start; margin-top: 8px; padding: 1px 4px; border: 1px solid var(--amber-line); border-radius: 3px; background: var(--amber-soft); color: var(--amber); font-size: 8px; font-weight: 750; line-height: 1.1; }
 small { color: var(--faint); font-size: 9px; }
 .close { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 auto; padding: 0; border-radius: 4px; color: var(--faint); }.close:hover { background: var(--hover); color: var(--red); }
 </style>

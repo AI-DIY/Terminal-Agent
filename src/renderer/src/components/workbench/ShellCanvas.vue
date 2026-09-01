@@ -4,7 +4,7 @@ import { computed, ref, watch } from 'vue'
 import type { ShellHistorySummary } from '../../../../shared/contracts'
 import SessionTabs from '../SessionTabs.vue'
 import TerminalPane from '../TerminalPane.vue'
-import { sessionDisplayLabel, sessionLabel, type SessionView } from '../../stores/sessions'
+import { sessionDisplayLabel, sessionDisplayParts, sessionHasDuplicateHost, sessionLabel, type SessionView } from '../../stores/sessions'
 import {
   getLayoutPreferencesStore,
   SHELL_FONT_SIZE_PRESETS,
@@ -44,9 +44,13 @@ const displayedSessionIds = computed(() => props.visibleSessionIds.slice(0, layo
 const displayedSessionIdSet = computed(() => new Set(displayedSessionIds.value))
 const gridColumns = computed(() => Math.max(1, Math.min(layout.state.columns, displayedSessionIds.value.length || 1)))
 const gridStyle = computed(() => shellGridStyle(gridColumns.value, layout.state.rowHeightPercent))
+const layoutItemCount = computed(() => props.isLive
+  ? Math.min(displayedSessionIds.value.length, props.currentSessions.length)
+  : Math.min(props.historyHosts.length, layout.state.visibleCount))
 const layoutSummary = computed(() => {
-  const count = Math.min(displayedSessionIds.value.length, props.currentSessions.length)
-  return count === 0 ? '尚未接入 Shell' : `${count} 个 Shell · ${Math.ceil(count / gridColumns.value)} 行`
+  const count = layoutItemCount.value
+  const columns = Math.max(1, Math.min(layout.state.columns, count || 1))
+  return count === 0 ? '尚未接入 SSH' : `${count} 个 SSH · ${Math.ceil(count / columns)} 行`
 })
 
 function paneVisible(sessionId: string): boolean {
@@ -103,6 +107,37 @@ function openHistoricalSessionHistory(hostname: string): void {
   emit('history', hostname)
 }
 
+function displayBaseLabel(session: SessionView): string {
+  return sessionDisplayParts(session, props.currentSessions)?.displayLabel.replace(/\s+#\d+$/, '') ?? sessionDisplayLabel(session, props.currentSessions)
+}
+
+function displayOrdinal(session: SessionView): number | null {
+  return sessionHasDuplicateHost(session, props.currentSessions)
+    ? sessionDisplayParts(session, props.currentSessions)?.ordinal ?? null
+    : null
+}
+
+/**
+ * A historical host is still a filter in the read-only task view.  When a
+ * live task has terminals mounted, however, the historical row sits beside
+ * the live canvas and must open the same Shell History dialog as the card
+ * action; otherwise the click appears to do nothing because the playback
+ * slot is intentionally not mounted in the live view.
+ */
+function handleHistoryHostClick(hostname: string): void {
+  if (props.isLive && props.currentSessions.length > 0) {
+    openHistoricalSessionHistory(hostname)
+    return
+  }
+  emit('toggleHistoryHost', hostname)
+}
+
+function historyHostActionLabel(hostname: string): string {
+  return props.isLive && props.currentSessions.length > 0
+    ? `打开 SSH 历史 ${hostname}`
+    : `筛选 SSH 历史 ${hostname}`
+}
+
 watch(
   () => props.currentSessions.map(session => session.id),
   () => {
@@ -129,27 +164,27 @@ watch(
         @select="selectSession"
         @close="closeSession"
       />
-       <div v-else class="history-toolbar-title"><strong>Shell 历史回放</strong><span>{{ historyHosts.length }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
+       <div v-else class="history-toolbar-title"><strong>SSH 历史回放</strong><span>{{ historyHosts.length }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
       <div class="hostbar-tools">
         <div v-if="isLive" class="shell-title">
-          <strong>Shell</strong>
+          <strong>SSH</strong>
           <span>{{ shellCount }} 个关联 · {{ displayedSessionIds.length }} 个正在显示</span>
         </div>
-        <span v-else class="history-readonly-note">以下 Shell 已关闭，仅提供只读回放</span>
+        <span v-else class="history-readonly-note">以下 SSH 已关闭，仅提供只读回放</span>
         <button v-if="isLive" type="button" class="connect-button" @click="emit('connect')"><Plus :size="13" aria-hidden="true" /><span>新建 SSH 连接</span></button>
         <button v-else-if="liveChatAvailable" type="button" class="connect-button" @click="emit('restoreLive')">返回实时任务</button>
         <button
           v-if="(isLive && currentSessions.length) || (!isLive && historyHosts.length)"
           type="button"
           class="layout-button"
-          :aria-label="isLive ? 'Shell 布局' : '历史 Shell 布局'"
+          aria-label="SSH 窗口布局"
           aria-haspopup="true"
           :aria-expanded="layoutMenuOpen"
           @click="layoutMenuOpen = !layoutMenuOpen"
-        ><LayoutGrid :size="13" aria-hidden="true" /><span>{{ isLive ? '布局' : '历史布局' }}</span></button>
+        ><LayoutGrid :size="13" aria-hidden="true" /><span>SSH 窗口布局</span></button>
       </div>
-      <section v-if="layoutMenuOpen && isLive && currentSessions.length" class="layout-menu" aria-label="Shell 布局设置">
-        <strong>Shell 布局</strong>
+      <section v-if="layoutMenuOpen && ((isLive && currentSessions.length) || (!isLive && historyHosts.length))" class="layout-menu" aria-label="SSH 窗口布局设置">
+        <strong>SSH 窗口布局</strong>
         <label>当前展示数量
           <select :value="layout.state.visibleCount" @change="updateLayout('visibleCount', $event)">
             <option v-for="value in 4" :key="value" :value="value">{{ value }}</option>
@@ -160,7 +195,7 @@ watch(
             <option v-for="value in 4" :key="value" :value="value">{{ value }}</option>
           </select>
         </label>
-        <label>Shell 字体大小
+        <label>SSH 字体大小
           <select :value="layout.state.fontSize" @change="updateLayout('fontSize', $event)">
             <option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option>
           </select>
@@ -173,38 +208,31 @@ watch(
         <span>{{ layoutSummary }}</span>
       </section>
     </header>
-    <section v-if="historyHosts.length" class="history-shell-toolbar" aria-label="历史 Shell 连接">
-      <div class="history-shell-heading"><strong>历史 Shell 连接</strong><span>{{ selectedHistoryHosts.length }} / {{ historyHosts.length }} 台已选择</span></div>
+    <section v-if="historyHosts.length" class="history-shell-toolbar" aria-label="历史 SSH 连接">
+      <div class="history-shell-heading"><strong>历史 SSH 连接</strong><span>{{ selectedHistoryHosts.length }} / {{ historyHosts.length }} 台已选择</span></div>
       <div class="history-shell-tabs">
         <div v-for="host in historyHosts" :key="host.hostname" class="history-host-item">
           <button
             type="button"
             class="history-shell-tab"
             :class="{ selected: selectedHistoryHosts.includes(host.hostname) }"
-            :aria-label="`筛选历史 Shell ${host.hostname}`"
+            :aria-label="historyHostActionLabel(host.hostname)"
             :aria-pressed="selectedHistoryHosts.includes(host.hostname)"
-            @click="emit('toggleHistoryHost', host.hostname)"
+            @click="handleHistoryHostClick(host.hostname)"
             @contextmenu.prevent="emit('historyMenu', host.id)"
           ><span class="host-status" aria-hidden="true" />{{ host.title }}</button>
-          <section v-if="menuHistoryId === host.id" class="terminal-context-menu history-context-menu" role="menu" :aria-label="`历史 Shell 操作 ${host.hostname}`">
+          <section v-if="menuHistoryId === host.id" class="terminal-context-menu history-context-menu" role="menu" :aria-label="`历史 SSH 操作 ${host.hostname}`">
             <button
               type="button"
               role="menuitem"
               :disabled="!host.reconnectable"
-              title="仅仍保留安全连接描述的历史 Shell 可以重连"
+              title="仅仍保留安全连接描述的历史 SSH 可以重连"
               @click="reconnectHistory(host.id)"
             >重连</button>
-            <button type="button" role="menuitem" @click="openHistoricalSessionHistory(host.hostname)">查看 Shell 历史</button>
+            <button type="button" role="menuitem" @click="openHistoricalSessionHistory(host.hostname)">查看 SSH 历史</button>
           </section>
         </div>
       </div>
-      <section v-if="layoutMenuOpen && !isLive" class="layout-menu history-layout-menu" aria-label="历史 Shell 布局设置">
-        <strong>历史 Shell 布局</strong>
-        <label>当前展示数量<select :value="layout.state.visibleCount" @change="updateLayout('visibleCount', $event)"><option v-for="value in 4" :key="value" :value="value">{{ value }}</option></select></label>
-        <label>每行数量<select :value="layout.state.columns" @change="updateLayout('columns', $event)"><option v-for="value in 4" :key="value" :value="value">{{ value }}</option></select></label>
-        <label>Shell 字体大小<select :value="layout.state.fontSize" @change="updateLayout('fontSize', $event)"><option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option></select></label>
-        <label>单行高度（占工作区）<select :value="layout.state.rowHeightPercent" @change="updateLayout('rowHeightPercent', $event)"><option v-for="preset in SHELL_ROW_HEIGHT_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option></select></label>
-      </section>
     </section>
 
     <div class="canvas-content">
@@ -224,18 +252,19 @@ watch(
           @contextmenu.prevent="openTerminalMenu(session.id)"
         >
           <header>
-            <strong>{{ sessionDisplayLabel(session, currentSessions) }}</strong>
+            <strong>{{ displayBaseLabel(session) }}</strong>
+            <span v-if="displayOrdinal(session) !== null" class="host-ordinal">#{{ displayOrdinal(session) }}</span>
             <span>已连接</span>
             <div class="terminal-actions">
-              <button type="button" :aria-label="`查看 Shell 历史 ${sessionDisplayLabel(session, currentSessions)}`" title="历史会话" @click="openSessionHistory(session)"><History :size="14" aria-hidden="true" /></button>
+              <button type="button" :aria-label="`查看 SSH 历史 ${sessionDisplayLabel(session, currentSessions)}`" title="历史会话" @click="openSessionHistory(session)"><History :size="14" aria-hidden="true" /></button>
               <button type="button" :aria-label="`终端操作 ${sessionDisplayLabel(session, currentSessions)}`" title="终端操作" @click="openTerminalMenu(session.id)"><MoreHorizontal :size="15" aria-hidden="true" /></button>
-              <button type="button" :aria-label="`关闭画布终端会话 ${sessionDisplayLabel(session, currentSessions)}`" title="关闭 Shell" class="close-terminal" @click="closeSession(session.id)"><X :size="15" aria-hidden="true" /></button>
+              <button type="button" :aria-label="`关闭画布终端会话 ${sessionDisplayLabel(session, currentSessions)}`" title="关闭 SSH" class="close-terminal" @click="closeSession(session.id)"><X :size="15" aria-hidden="true" /></button>
             </div>
           </header>
           <section v-if="menuSessionId === session.id" class="terminal-context-menu" role="menu" :aria-label="`终端操作 ${sessionDisplayLabel(session, currentSessions)}`">
             <button type="button" role="menuitem" @click="duplicateSession(session.id)">复制 SSH 通道</button>
-            <button type="button" role="menuitem" disabled title="仅已关闭且仍保留安全连接描述的 Shell 可以重新连接">重新连接</button>
-            <button type="button" role="menuitem" @click="openSessionHistory(session)">查看 Shell 历史</button>
+            <button type="button" role="menuitem" disabled title="仅已关闭且仍保留安全连接描述的 SSH 可以重新连接">重新连接</button>
+            <button type="button" role="menuitem" @click="openSessionHistory(session)">查看 SSH 历史</button>
           </section>
           <TerminalPane :session="session" :active="session.id === activeSessionId" :font-size="layout.state.fontSize" @activate="selectSession(session.id)" />
         </article>
@@ -267,23 +296,24 @@ watch(
 .layout-menu label { display: contents; color: var(--text); font-size: 11px; }
 .layout-menu select { width: 86px; height: 28px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--text); }
 .canvas-content { position: relative; grid-row: 3; min-width: 0; min-height: 0; overflow: hidden; }
-.terminal-grid { display: grid; align-content: start; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 10px; padding: 10px; overflow: auto; background: var(--surface); }
+.terminal-grid { display: grid; align-content: start; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 10px; padding: 10px; overflow-x: auto; overflow-y: hidden; background: var(--surface); }
 .terminal-frame { position: relative; display: grid; grid-template-rows: 36px minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--terminal); container-type: inline-size; }
 .terminal-frame:has(.terminal-pane.active) { border-color: var(--accent); box-shadow: inset 0 2px 0 var(--accent); }
 .terminal-frame > header { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0 7px 0 10px; border-bottom: 1px solid var(--line); background: var(--panel); color: var(--text); }
 .terminal-frame > header strong { min-width: 36px; overflow: hidden; color: var(--text-strong); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.terminal-frame > header > span { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-frame > header > span:not(.host-ordinal) { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-frame > header > .host-ordinal { align-self: flex-start; flex: 0 0 auto; margin-top: 5px; padding: 1px 4px; border: 1px solid var(--amber-line); border-radius: 3px; background: var(--amber-soft); color: var(--amber); font-size: 8px; font-weight: 750; line-height: 1.1; }
 .terminal-actions { display: flex; flex: 0 0 auto; gap: 3px; margin-left: auto; }
 .terminal-actions button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); }
 .terminal-actions button:hover,.terminal-actions button:focus-visible { background: var(--hover); color: var(--text-strong); }.terminal-actions .close-terminal:hover { color: var(--red); }
 .terminal-frame :deep(.terminal-pane) { height: 100%; border: 0; }
 .terminal-context-menu { position: absolute; z-index: 9; top: 36px; right: 5px; display: grid; min-width: 154px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
 .terminal-context-menu button { min-height: 29px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 11px; text-align: left; }.terminal-context-menu button:hover,.terminal-context-menu button:focus-visible { background: var(--surface-soft); outline: 1px solid var(--accent); }.terminal-context-menu button:disabled { color: var(--muted); cursor: not-allowed; }
-.empty-slot,.history-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; }
+.empty-slot,.history-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .history-shell-toolbar { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; min-height: 38px; padding: 4px 9px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 86%, var(--surface)); }
 .history-shell-heading { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }.history-shell-heading strong { color: var(--text-strong); font-size: 10px; }.history-shell-heading span { color: var(--muted); font-size: 9px; }
 .history-shell-tabs { display: flex; gap: 5px; min-width: 0; overflow-x: auto; }.history-host-item { position: relative; flex: 0 0 auto; }.history-shell-tab { display: flex; align-items: center; gap: 5px; min-height: 27px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 10px; white-space: nowrap; }.history-shell-tab:hover,.history-shell-tab:focus-visible { border-color: var(--accent); color: var(--text); outline: 0; }.history-shell-tab.selected { border-color: color-mix(in srgb, var(--accent) 68%, var(--line)); background: var(--accent-soft); color: var(--text-strong); }.host-status { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }.history-shell-tab.selected .host-status { background: var(--accent); }
-.history-layout-menu { top: 46px; }.history-context-menu { top: 30px; right: auto; left: 0; }
+.history-context-menu { top: 30px; right: auto; left: 0; }
 @media (max-width: 1180px) {
   .shell-title { display: none; }
   .history-shell-heading span { display: none; }

@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, type ComponentPublicInstance, watch } from 'vue'
-import type { ShellHistoryDetail, ShellHistorySummary } from '../../../../shared/contracts'
+import type { ShellFontSize, ShellHistoryDetail, ShellHistorySummary } from '../../../../shared/contracts'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   open: boolean
   records: ShellHistorySummary[]
   selectedId: string | null
   selected: ShellHistoryDetail | null
   loading: boolean
   error: string
-}>()
+  /** Keep the read-only preview typography in lockstep with SSH window layout. */
+  fontSize: ShellFontSize
+}>(), { fontSize: 13 })
 const emit = defineEmits<{
   close: []
   select: [historyId: string]
@@ -89,7 +91,7 @@ watch(() => props.records.map(record => record.id).join('\u0000'), () => { if (p
         <section class="history-preview" aria-label="Shell 历史预览">
           <template v-if="selected">
             <header><strong>{{ selected.title }}</strong><span>{{ selected.hostname }}</span></header>
-            <pre :aria-label="`只读终端历史 ${selected.hostname}`" data-read-only="true" tabindex="0">{{ selected.output }}</pre>
+            <pre :aria-label="`只读终端历史 ${selected.hostname}`" data-read-only="true" tabindex="0" :style="{ fontSize: `${fontSize}px` }">{{ selected.output }}</pre>
             <div class="preview-actions">
               <span v-if="selectedRecord?.reconnectable">可使用现有安全连接描述重新连接</span>
               <span v-else>该 Shell 的安全连接描述已不可用</span>

@@ -7,6 +7,7 @@ import type { ChatGroup } from '../../stores/chat-workspaces'
 const props = defineProps<{
   groups: ChatGroup[]
   currentChatId: string | null
+  onlineChatIds?: ReadonlySet<string>
   loading: boolean
   error: string
   renameTask(chatId: string, title: string): Promise<boolean>
@@ -94,7 +95,7 @@ function removeTask(chatId: string): void {
 <template>
   <aside class="session-sidebar" aria-label="任务历史区">
     <header class="sidebar-header">
-      <div class="panel-title"><strong>任务历史区</strong><span>任务与 Shell 记录</span></div>
+      <div class="panel-title"><strong>任务历史区</strong><span>任务与 SSH 记录</span></div>
       <button type="button" class="collapse-button" aria-label="收起任务历史区" title="收起任务历史区" @click="emit('collapse')"><PanelLeftClose :size="14" aria-hidden="true" /><span>收起</span></button>
     </header>
     <button type="button" class="new-chat" aria-label="新建任务" @click="emit('create')"><Plus :size="14" aria-hidden="true" /><span>新建任务</span></button>
@@ -104,7 +105,7 @@ function removeTask(chatId: string): void {
       <p v-if="!groups.length" class="empty">暂无任务</p>
       <section v-for="group in groups" :key="group.label" class="chat-group" :aria-label="group.label">
         <h2>{{ group.label }}</h2>
-        <div v-for="chat in group.chats" :key="chat.id" class="history-item" :data-chat-id="chat.id" :class="{ active: chat.id === currentChatId }">
+        <div v-for="chat in group.chats" :key="chat.id" class="history-item" :data-chat-id="chat.id" :class="{ active: chat.id === currentChatId, 'has-online-shell': props.onlineChatIds?.has(chat.id) }">
           <div v-if="editingChatId === chat.id" class="chat-rename">
             <input
               :ref="element => setRenameInput(chat.id, element)"
@@ -121,7 +122,7 @@ function removeTask(chatId: string): void {
           </div>
           <button v-else type="button" class="chat-select" :aria-label="`选择任务 ${chat.title}`" :aria-current="chat.id === currentChatId ? 'page' : undefined" @click="emit('select', chat.id)">
             <span class="chat-title"><strong>{{ chat.title }}</strong><span v-if="chat.pinnedAt" class="pin-status" role="img" aria-label="已置顶"><Pin :size="12" aria-hidden="true" /></span></span>
-            <span class="chat-select-meta">{{ createdLabel(chat) }} 新建 <b>{{ chat.shellCount }} 个 Shell</b></span>
+            <span class="chat-select-meta">{{ createdLabel(chat) }} 新建 <b>{{ chat.shellCount }} 个 SSH</b><strong v-if="props.onlineChatIds?.has(chat.id)" class="working-status">正在工作</strong></span>
           </button>
           <div class="chat-actions">
             <button type="button" class="chat-menu-toggle" :aria-label="`任务操作 ${chat.title}`" title="任务操作" :aria-expanded="openMenuChatId === chat.id" @click.stop="toggleMenu(chat.id)"><MoreHorizontal :size="15" aria-hidden="true" /></button>
@@ -158,9 +159,12 @@ nav:hover::-webkit-scrollbar-thumb:hover,nav:focus-within::-webkit-scrollbar-thu
 .history-item { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 28px; border-radius: 5px; }
 .history-item:hover { background: var(--hover); }
 .history-item.active { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }
+.history-item.has-online-shell { background: var(--amber-soft); box-shadow: inset 3px 0 0 var(--amber-line); }
+.history-item.has-online-shell:hover { background: color-mix(in srgb, var(--amber-soft) 82%, var(--hover)); }
+.history-item.has-online-shell.active { background: color-mix(in srgb, var(--amber-soft) 72%, var(--selected)); box-shadow: inset 3px 0 0 var(--amber-line); }
 .chat-select,.chat-rename { min-width: 0; padding: 9px 6px 10px 10px; border: 0; background: transparent; color: var(--text); text-align: left; }
 .chat-title { display: flex; min-width: 0; align-items: center; gap: 5px; }.chat-title strong { overflow: hidden; color: var(--text-strong); font-size: 11px; font-weight: 690; text-overflow: ellipsis; white-space: nowrap; }.pin-status { display: grid; flex: 0 0 auto; color: var(--accent); }
-.chat-select-meta { display: flex; justify-content: space-between; gap: 10px; margin-top: 5px; color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }.chat-select-meta b { color: var(--muted); font-weight: 550; white-space: nowrap; }
+.chat-select-meta { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: 5px; color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }.chat-select-meta b { color: var(--muted); font-weight: 550; white-space: nowrap; }.working-status { margin-left: auto; color: var(--red); font-size: 9px; font-weight: 750; white-space: nowrap; }
 .chat-rename { padding-right: 8px; }.chat-rename input { width: 100%; height: 26px; min-width: 0; padding: 0 6px; border: 1px solid var(--focus); border-radius: 4px; background: var(--surface); color: var(--text-strong); font: inherit; }.rename-error { margin: 4px 0 0; font-size: 10px; line-height: 1.3; }
 .chat-actions { position: relative; align-self: start; }.chat-menu-toggle { display: grid; place-items: center; width: 24px; height: 24px; margin: 7px 4px 0 0; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); opacity: 0; }.history-item:hover .chat-menu-toggle,.chat-menu-toggle:focus-visible,.chat-menu-toggle[aria-expanded="true"] { opacity: 1; }.chat-menu-toggle:hover { background: var(--surface); color: var(--text-strong); }
 .chat-menu { position: absolute; z-index: 2; top: 34px; right: 4px; display: grid; width: 116px; padding: 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); box-shadow: 0 8px 18px color-mix(in srgb, #000 18%, transparent); }.chat-menu button { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 28px; padding: 0 7px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 10px; text-align: left; }.chat-menu button:hover,.chat-menu button:focus-visible { background: var(--hover); }.chat-menu .danger { color: var(--red); }

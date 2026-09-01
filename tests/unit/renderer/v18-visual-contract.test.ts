@@ -13,10 +13,10 @@ describe('V18 production visual contract', () => {
     const chat = rendererSource('components/chat/GlobalChatPanel.vue')
 
     expect(sidebar).toContain('任务历史区')
-    expect(sidebar).toContain('任务与 Shell 记录')
+    expect(sidebar).toContain('任务与 SSH 记录')
     expect(sidebar).toContain('新建任务')
     expect(shellCanvas).toContain('新建 SSH 连接')
-    expect(shellCanvas).toContain('Shell 布局')
+    expect(shellCanvas).toContain('SSH 窗口布局')
     expect(sessionTabs).not.toContain('辅助驾驶')
     expect(sessionTabs).not.toContain('全自动驾驶')
     expect(chat).toContain('AI工作区')
@@ -86,7 +86,7 @@ describe('V18 production visual contract', () => {
     const store = rendererSource('stores/chat-workspaces.ts')
 
     expect(workbench).toContain("'未选择任务'")
-    expect(workbench).toContain('此任务没有关联 Shell。')
+    expect(workbench).toContain('此任务没有关联 SSH。')
     expect(shell).toContain('当前任务')
     expect(shellCanvas).toContain('返回实时任务')
     expect(store).toContain('无法读取任务。')

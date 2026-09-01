@@ -190,7 +190,7 @@ test('keeps a long task history scrollable', async ({ launchApp }) => {
   }
 })
 
-test('vertically centers the closed-Shell history heading and summary', async ({ launchApp }) => {
+test('vertically centers the closed-SSH history heading and summary', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -199,11 +199,11 @@ test('vertically centers the closed-Shell history heading and summary', async ({
     const page = await app.firstWindow()
 
     await connect(page, sshServer.port)
-    await page.getByRole('button', { name: '关闭终端会话 127.0.0.1', exact: true }).click()
+    await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.1', exact: true }).click()
 
     const toolbar = page.locator('.shell-toolbar-content')
     await expect(toolbar).toBeVisible()
-    await expect(toolbar.getByText('Shell 历史回放', { exact: true })).toBeVisible()
+    await expect(toolbar.getByText('SSH 历史回放', { exact: true })).toBeVisible()
     const centers = await toolbar.evaluate(node => {
       const toolbarBox = node.getBoundingClientRect()
       const titleParts = [...node.querySelectorAll<HTMLElement>('.history-toolbar-title strong,.history-toolbar-title span')]
@@ -224,7 +224,7 @@ test('vertically centers the closed-Shell history heading and summary', async ({
   }
 })
 
-test('persists chat navigation across renderer reload with the real Shell count', async ({ launchApp }) => {
+test('persists chat navigation across renderer reload with the real SSH count', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -235,9 +235,9 @@ test('persists chat navigation across renderer reload with the real Shell count'
     await page.getByRole('button', { name: '新建任务', exact: true }).click()
     const activeChat = page.locator('.history-item.active')
     await connect(page, sshServer.port)
-    await expect(activeChat.getByText('1 个 Shell', { exact: true })).toBeVisible()
+    await expect(activeChat.getByText('1 个 SSH', { exact: true })).toBeVisible()
     const chatId = await activeChat.getAttribute('data-chat-id')
-    if (!chatId) throw new Error('Expected a durable chat id after its first Shell association')
+    if (!chatId) throw new Error('Expected a durable chat id after its first SSH association')
 
     await page.reload()
     await waitForWorkbenchReady(page)
@@ -245,14 +245,14 @@ test('persists chat navigation across renderer reload with the real Shell count'
     const restoredChat = chatItem(page, chatId)
     await restoredChat.getByRole('button', { name: /^选择任务 / }).click()
     await expect(restoredChat).toHaveClass(/active/)
-    await expect(restoredChat.getByText('1 个 Shell', { exact: true })).toBeVisible()
+    await expect(restoredChat.getByText('1 个 SSH', { exact: true })).toBeVisible()
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
   }
 })
 
-test('restores a newly created zero-Shell chat as a connectable live workspace after reload', async ({ launchApp }) => {
+test('restores a newly created zero-SSH chat as a connectable live workspace after reload', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -262,7 +262,7 @@ test('restores a newly created zero-Shell chat as a connectable live workspace a
 
     await page.getByRole('button', { name: '新建任务', exact: true }).click()
     const activeChat = page.locator('.history-item.active')
-    const title = (await activeChat.locator('strong').textContent())?.trim()
+    const title = (await activeChat.locator('.chat-title > strong').textContent())?.trim()
     if (!title) throw new Error('Expected a durable chat title')
     const chatId = await activeChat.getAttribute('data-chat-id')
     if (!chatId) throw new Error('Expected a durable chat id')
@@ -273,21 +273,21 @@ test('restores a newly created zero-Shell chat as a connectable live workspace a
     const restoredChat = chatItem(page, chatId)
     await expect(restoredChat).toBeVisible()
     await expect(restoredChat).not.toHaveClass(/active/)
-    await expect(page.locator('.history-item.active')).toContainText('0 个 Shell')
+    await expect(page.locator('.history-item.active')).toContainText('0 个 SSH')
     await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
-    await expect(page.getByLabel('任务 Shell 历史回放')).toHaveCount(0)
+    await expect(page.getByLabel('任务 SSH 历史回放')).toHaveCount(0)
     await expect(page.getByRole('button', { name: '返回实时任务', exact: true })).toHaveCount(0)
 
     await connect(page, sshServer.port)
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()
-    await expect(page.locator('.history-item.active').getByText('1 个 Shell', { exact: true })).toBeVisible()
+    await expect(page.locator('.history-item.active').getByText('1 个 SSH', { exact: true })).toBeVisible()
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
   }
 })
 
-test('restores an empty live workspace while another chat keeps a running Shell', async ({ launchApp }) => {
+test('restores an empty live workspace while another chat keeps a running SSH session', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -303,9 +303,9 @@ test('restores an empty live workspace while another chat keeps a running Shell'
 
     await page.reload()
 
-    await expect(page.locator('.history-item.active')).toContainText('0 个 Shell')
+    await expect(page.locator('.history-item.active')).toContainText('0 个 SSH')
     await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
-    await page.locator('.history-item').filter({ hasText: '1 个 Shell' }).locator('.chat-select').click()
+    await page.locator('.history-item').filter({ hasText: '1 个 SSH' }).locator('.chat-select').click()
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()
     await sendCommand(page.locator('[data-testid^="terminal-pane-"]:visible'), page, 'after-empty-reload')
     await expect(page.locator('[data-testid^="terminal-pane-"]:visible')).toContainText('echo:after-empty-reload')
@@ -336,16 +336,16 @@ test('restores the current empty workspace after a background chat closes', asyn
 
     await page.reload()
 
-    await expect(page.locator('.history-item.active')).toContainText('0 个 Shell')
+    await expect(page.locator('.history-item.active')).toContainText('0 个 SSH')
     await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
-    await expect(page.getByLabel('任务 Shell 历史回放')).toHaveCount(0)
+    await expect(page.getByLabel('任务 SSH 历史回放')).toHaveCount(0)
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
   }
 })
 
-test('restores a chat with only closed Shells as history playback after reload', async ({ launchApp }) => {
+test('restores a chat with only closed SSH sessions as history playback after reload', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -356,10 +356,10 @@ test('restores a chat with only closed Shells as history playback after reload',
     await page.getByRole('button', { name: '新建任务', exact: true }).click()
     const activeChat = page.locator('.history-item.active')
     await connect(page, sshServer.port)
-    await page.getByRole('button', { name: '关闭终端会话 127.0.0.1', exact: true }).click()
+    await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.1', exact: true }).click()
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toHaveCount(0)
-    const title = (await activeChat.locator('strong').textContent())?.trim()
-    if (!title) throw new Error('Expected a durable task title after its first Shell association')
+    const title = (await activeChat.locator('.chat-title > strong').textContent())?.trim()
+    if (!title) throw new Error('Expected a durable task title after its first SSH association')
     const chatId = await activeChat.getAttribute('data-chat-id')
     if (!chatId) throw new Error('Expected a durable chat id')
 
@@ -369,12 +369,12 @@ test('restores a chat with only closed Shells as history playback after reload',
     const chat = chatItem(page, chatId)
     await chat.getByRole('button', { name: `选择任务 ${title}`, exact: true }).click()
     await expect(chat).toHaveClass(/active/)
-    await expect(page.getByLabel('任务 Shell 历史回放')).toBeVisible()
-    await expect(page.getByText('已关闭 · 只读历史', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('任务 SSH 历史回放')).toBeVisible()
+    await expect(page.getByText('已关闭 · 只读历史 SSH', { exact: true })).toBeVisible()
     await expect(page.locator('.empty-state')).toHaveCount(0)
 
     await chat.click()
-    await expect(page.getByLabel('任务 Shell 历史回放')).toBeVisible()
+    await expect(page.getByLabel('任务 SSH 历史回放')).toBeVisible()
     await expect(page.locator('.empty-state')).toHaveCount(0)
   } finally {
     await app?.close()
@@ -396,15 +396,15 @@ test('filters historical hosts as a multi-select workspace with shared layout an
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.1', exact: true }).click()
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.2', exact: true }).click()
 
-    const firstHost = page.getByRole('button', { name: '筛选历史 Shell 127.0.0.1', exact: true })
-    const secondHost = page.getByRole('button', { name: '筛选历史 Shell 127.0.0.2', exact: true })
+    const firstHost = page.getByRole('button', { name: '筛选 SSH 历史 127.0.0.1', exact: true })
+    const secondHost = page.getByRole('button', { name: '筛选 SSH 历史 127.0.0.2', exact: true })
     const historicalCards = page.locator('.history-shell-card')
     await expect(firstHost).toHaveAttribute('aria-pressed', 'true')
     await expect(secondHost).toHaveAttribute('aria-pressed', 'true')
     await expect(historicalCards).toHaveCount(2)
-    await expect(page.getByText('Shell 历史回放', { exact: true })).toBeVisible()
+    await expect(page.getByText('SSH 历史回放', { exact: true })).toBeVisible()
     await expect(page.getByText('2 台主机 · 2 条记录', { exact: true })).toBeVisible()
-    await expect(page.getByText('以下 Shell 已关闭，仅提供只读回放', { exact: true })).toBeVisible()
+    await expect(page.getByText('以下 SSH 已关闭，仅提供只读回放', { exact: true })).toBeVisible()
     await expect(page.locator('.shell-title')).toHaveCount(0)
 
     await firstHost.click()
@@ -418,8 +418,8 @@ test('filters historical hosts as a multi-select workspace with shared layout an
     await firstHost.click()
     await expect(historicalCards).toHaveCount(2)
 
-    await page.getByRole('button', { name: '历史 Shell 布局', exact: true }).click()
-    const historyLayout = page.getByLabel('历史 Shell 布局设置')
+    await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
+    const historyLayout = page.getByLabel('SSH 窗口布局设置')
     await historyLayout.getByLabel('每行数量').selectOption('1')
     await historyLayout.getByLabel('单行高度（占工作区）').selectOption('48')
     const grid = page.locator('.history-shell-grid')
@@ -427,7 +427,7 @@ test('filters historical hosts as a multi-select workspace with shared layout an
     await expect(grid).toHaveAttribute('data-row-height-percent', '48')
 
     await firstHost.click({ button: 'right' })
-    const menu = page.getByRole('menu', { name: '历史 Shell 操作 127.0.0.1', exact: true })
+    const menu = page.getByRole('menu', { name: '历史 SSH 操作 127.0.0.1', exact: true })
     await expect(menu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
   } finally {
     await app?.close()
@@ -461,20 +461,20 @@ test('duplicates a live terminal, previews read-only history, and reconnects it 
     const closeButtons = page.getByRole('button', { name: /关闭画布终端会话 127\.0\.0\.1(?: #\d+)?$/, exact: false })
     await closeButtons.last().click()
     await closeButtons.first().click()
-    await expect(page.getByLabel('任务 Shell 历史回放')).toBeVisible()
+    await expect(page.getByLabel('任务 SSH 历史回放')).toBeVisible()
     const historyPreview = page.getByLabel('只读终端历史 127.0.0.1', { exact: true })
     await expect(historyPreview).toHaveAttribute('data-read-only', 'true')
     await expect(historyPreview).toContainText('echo:history-preview')
 
     const historyTab = page.locator('.history-shell-tab').first()
     await historyTab.click({ button: 'right' })
-    const historyMenu = page.getByRole('menu', { name: '历史 Shell 操作 127.0.0.1', exact: true })
+    const historyMenu = page.getByRole('menu', { name: '历史 SSH 操作 127.0.0.1', exact: true })
     await expect(historyMenu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
-    await historyMenu.getByRole('menuitem', { name: '查看 Shell 历史', exact: true }).click()
+    await historyMenu.getByRole('menuitem', { name: '查看 SSH 历史', exact: true }).click()
     await expect(page.getByRole('dialog', { name: 'Shell 历史', exact: true })).toBeVisible()
     await page.getByRole('dialog', { name: 'Shell 历史', exact: true }).getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
 
-    const historyButton = page.getByRole('button', { name: '查看 Shell 历史 127.0.0.1', exact: true })
+    const historyButton = page.getByRole('button', { name: '查看 SSH 历史 127.0.0.1', exact: true })
     await historyButton.click()
     const dialog = page.getByRole('dialog', { name: 'Shell 历史', exact: true })
     const firstHistoryRecord = dialog.getByRole('option', { name: /选择 Shell 历史 127\.0\.0\.1/ }).first()
@@ -498,9 +498,9 @@ test('duplicates a live terminal, previews read-only history, and reconnects it 
     const retainedHistoryTab = page.locator('.history-shell-tab').first()
     await expect(retainedHistoryTab).toBeVisible()
     await retainedHistoryTab.click({ button: 'right' })
-    const hybridHistoryMenu = page.getByRole('menu', { name: '历史 Shell 操作 127.0.0.1', exact: true })
+    const hybridHistoryMenu = page.getByRole('menu', { name: '历史 SSH 操作 127.0.0.1', exact: true })
     await expect(hybridHistoryMenu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
-    await hybridHistoryMenu.getByRole('menuitem', { name: '查看 Shell 历史', exact: true }).click()
+    await hybridHistoryMenu.getByRole('menuitem', { name: '查看 SSH 历史', exact: true }).click()
     await expect(page.getByRole('dialog', { name: 'Shell 历史', exact: true })).toBeVisible()
     await expect(page.locator('[data-testid^="terminal-pane-"]:visible')).toHaveCount(1)
     await page.getByRole('dialog', { name: 'Shell 历史', exact: true }).getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
@@ -517,7 +517,7 @@ test('duplicates a live terminal, previews read-only history, and reconnects it 
   }
 })
 
-test('transfers a running Shell before deleting its live chat', async ({ launchApp }) => {
+test('transfers a running SSH session before deleting its live chat', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -530,7 +530,7 @@ test('transfers a running Shell before deleting its live chat', async ({ launchA
     await connect(page, sshServer.port, '127.0.0.2')
     await removeActiveTask(page)
     const transferredTask = page.locator('.history-item.active')
-    await expect(transferredTask.getByText('2 个 Shell', { exact: true })).toBeVisible()
+    await expect(transferredTask.getByText('2 个 SSH', { exact: true })).toBeVisible()
     const transferredChatId = await transferredTask.getAttribute('data-chat-id')
     if (!transferredChatId) throw new Error('Expected a fallback task after deleting the live task')
 
@@ -558,9 +558,9 @@ test('transfers a running Shell before deleting its live chat', async ({ launchA
     await secondSessionTab.click()
     await sendCommand(panes.last(), page, 'after-reload')
     await expect(panes.last()).toContainText('echo:after-reload')
-    await page.getByRole('button', { name: '关闭终端会话 127.0.0.2', exact: true }).click()
+    await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.2', exact: true }).click()
     await expect(secondSessionTab).toHaveCount(0)
-    await page.getByRole('button', { name: '关闭终端会话 127.0.0.1', exact: true }).click()
+    await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.1', exact: true }).click()
     await expect(firstSessionTab).toHaveCount(0)
   } finally {
     await app?.close()
@@ -613,8 +613,8 @@ test('restores authoritative multi-chat session ownership and fallback layouts',
     await expect(secondBSession.locator('..')).toHaveClass(/active/)
     await expect(page.locator('[data-testid^="terminal-pane-"]:visible')).toHaveCount(2)
 
-    await page.getByRole('button', { name: '关闭终端会话 127.0.0.3', exact: true }).click()
-    await page.getByRole('button', { name: '关闭终端会话 127.0.0.2', exact: true }).click()
+    await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.3', exact: true }).click()
+    await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.2', exact: true }).click()
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.2', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.3', exact: true })).toHaveCount(0)
     await expect(page.getByText('辅助驾驶 - 变更需人工确认', { exact: true })).toHaveCount(0)
@@ -645,21 +645,21 @@ test('preserves the authoritative workspace layout across another live chat and 
     await connect(page, sshServer.port, '127.0.0.2')
     await createNamedChat(page, '历史 H')
     await connect(page, sshServer.port, '127.0.0.3')
-    await page.getByRole('button', { name: '关闭终端会话 127.0.0.3', exact: true }).click()
+    await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.3', exact: true }).click()
     await page.getByRole('button', { name: '选择任务 历史 H', exact: true }).click()
-    await expect(page.getByLabel('任务 Shell 历史回放')).toBeVisible()
+    await expect(page.getByLabel('任务 SSH 历史回放')).toBeVisible()
 
     await page.getByRole('button', { name: '选择任务 聊天 B', exact: true }).click()
     await connect(page, sshServer.port, '127.0.0.4')
     const activeBSession = page.getByRole('button', { name: '选择终端会话 127.0.0.4', exact: true })
     await expect(activeBSession.locator('..')).toHaveClass(/active/)
 
-    await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
-    await expect(page.getByLabel('Shell 布局设置')).toBeVisible()
+    await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
+    await expect(page.getByLabel('SSH 窗口布局设置')).toBeVisible()
     await page.getByRole('button', { name: '选择任务 聊天 A', exact: true }).click()
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.2', exact: true })).toBeVisible()
     await expect(page.locator('[data-testid^="terminal-pane-"]:visible')).toHaveCount(1)
-    await expect(page.getByLabel('Shell 布局设置')).toHaveCount(0)
+    await expect(page.getByLabel('SSH 窗口布局设置')).toHaveCount(0)
 
     await page.getByRole('button', { name: '选择任务 聊天 B', exact: true }).click()
     await expect(page.getByRole('button', { name: /最大化终端会话/ })).toHaveCount(0)
@@ -668,7 +668,7 @@ test('preserves the authoritative workspace layout across another live chat and 
     await expect(page.locator('[data-testid^="terminal-pane-"]:visible')).toHaveCount(1)
 
     await page.getByRole('button', { name: '选择任务 历史 H', exact: true }).click()
-    await expect(page.getByLabel('任务 Shell 历史回放')).toBeVisible()
+    await expect(page.getByLabel('任务 SSH 历史回放')).toBeVisible()
     await page.getByRole('button', { name: '选择任务 聊天 B', exact: true }).click()
 
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()
@@ -695,13 +695,13 @@ test('layout controls persist while hidden terminals remain mounted and online',
     const allPanes = page.locator('[data-testid^="terminal-pane-"]')
     const originalPanes = await allPanes.elementHandles()
     await expect(allPanes).toHaveCount(4)
-    await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
+    await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
     await page.getByLabel('当前展示数量').selectOption('2')
     await page.getByLabel('每行数量').selectOption('1')
     await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('100')
-    await expect(page.getByLabel('Shell 字体大小')).toHaveValue('13')
+    await expect(page.getByLabel('SSH 字体大小')).toHaveValue('13')
     await page.getByLabel('单行高度（占工作区）').selectOption('100')
-    await page.getByLabel('Shell 字体大小').selectOption('11')
+    await page.getByLabel('SSH 字体大小').selectOption('11')
 
     const grid = page.getByLabel('可见终端面板')
     await expect(allPanes.filter({ visible: true })).toHaveCount(2)
@@ -709,7 +709,7 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await expect(grid).toHaveAttribute('data-row-height-percent', '100')
     for (const pane of originalPanes) expect(await pane.evaluate(node => node.isConnected)).toBe(true)
 
-    await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
+    await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
     await page.getByRole('button', { name: '选择终端会话 127.0.0.4', exact: true }).click()
     const fourthPane = page.getByLabel('终端会话 127.0.0.4', { exact: true })
     await expect(fourthPane).toBeVisible()
@@ -730,11 +730,11 @@ test('layout controls persist while hidden terminals remain mounted and online',
 
     await expect(page.locator('.workbench-shell')).toHaveClass(/theme-graphite/)
     await page.getByRole('button', { name: activeTaskName!, exact: true }).click()
-    await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
+    await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
     await expect(page.getByLabel('当前展示数量')).toHaveValue('2')
     await expect(page.getByLabel('每行数量')).toHaveValue('1')
     await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('100')
-    await expect(page.getByLabel('Shell 字体大小')).toHaveValue('11')
+    await expect(page.getByLabel('SSH 字体大小')).toHaveValue('11')
     await page.setViewportSize({ width: 900, height: 700 })
     const narrowGeometry = await page.evaluate(() => {
       const element = (selector: string): HTMLElement => {
@@ -874,7 +874,7 @@ test('keeps the terminal input row visible when the history rail is collapsed', 
     await connect(page, sshServer.port, '127.0.0.2')
     await connect(page, sshServer.port, '127.0.0.3')
     await page.setViewportSize({ width: 900, height: 700 })
-    await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
+    await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
     await expect(page.getByLabel('每行数量')).toHaveValue('3')
     await page.getByLabel('每行数量').selectOption('2')
     await expect(page.getByLabel('可见终端面板')).toHaveAttribute('data-columns', '2')
@@ -1083,7 +1083,7 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
   }
 })
 
-test('removes per-terminal maximize and defaults to a full-height Shell row', async ({ launchApp }) => {
+test('removes per-terminal maximize and defaults to a full-height SSH row', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -1112,18 +1112,21 @@ test('removes per-terminal maximize and defaults to a full-height Shell row', as
   }
 })
 
-test('shows all four SSH connection modes and a safe unavailable CMDB state', async ({ launchApp }) => {
+test('shows embedded SSH connection modes with bastion host default and hides CMDB', async ({ launchApp }) => {
   let app: ElectronApplication | undefined
 
   try {
     app = (await launchApp()).app
     const page = await app.firstWindow()
 
-    await expect(page.getByRole('tab', { name: '堡垒机 CMDB 唤起', exact: true })).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByRole('tab', { name: '堡垒机主机唤起', exact: true })).toBeVisible()
+    await expect(page.getByRole('tab', { name: '堡垒机 CMDB 唤起', exact: true })).toHaveCount(0)
+    const bastionHostTab = page.getByRole('tab', { name: '堡垒机主机唤起', exact: true })
+    await expect(bastionHostTab).toBeVisible()
+    await expect(bastionHostTab).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
     await expect(page.getByRole('tab', { name: '主机私钥连接', exact: true })).toBeVisible()
-    await expect(page.getByText('未配置堡垒机目录来源。', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toBeVisible()
+    await expect(page.getByText('未配置堡垒机目录来源。', { exact: true })).toHaveCount(0)
   } finally {
     await app?.close()
   }
@@ -1201,8 +1204,8 @@ test('ignores a late direct connection after newer chat navigation and dialog ge
     await expect(selectedHistory).toHaveAttribute('aria-current', 'page')
     await expect(selectedHistory).toHaveAttribute('aria-label', selectedHistoryLabel!)
     await expect(page.getByRole('button', { name: '返回实时任务', exact: true })).toHaveCount(0)
-    await expect(chatItem(page, newerChatId)).toContainText('0 个 Shell')
-    await expect(chatItem(page, initialChatId)).toContainText('1 个 Shell')
+    await expect(chatItem(page, newerChatId)).toContainText('0 个 SSH')
+    await expect(chatItem(page, initialChatId)).toContainText('1 个 SSH')
 
     await chatItem(page, initialChatId).getByRole('button', { name: /^选择任务 / }).click()
     await openButton.click()
@@ -1219,8 +1222,8 @@ test('ignores a late direct connection after newer chat navigation and dialog ge
     releaseSecondAuthentication.resolve(undefined)
 
     await expect(dialog).toBeVisible()
-    await expect(chatItem(page, newerChatId)).toContainText('0 个 Shell')
-    await expect(chatItem(page, initialChatId)).toContainText('1 个 Shell')
+    await expect(chatItem(page, newerChatId)).toContainText('0 个 SSH')
+    await expect(chatItem(page, initialChatId)).toContainText('1 个 SSH')
   } finally {
     releaseFirstAuthentication.resolve(undefined)
     releaseSecondAuthentication.resolve(undefined)
@@ -1602,7 +1605,7 @@ test('clearing acknowledged host memory persists removal and requires fresh SSH 
 
     await test.step('closes the cleared SSH session before restart', async () => {
       await page.getByRole('button', { name: '返回工作台', exact: true }).click()
-      await page.getByRole('button', { name: '关闭终端会话 127.0.0.1', exact: true }).click()
+      await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.1', exact: true }).click()
       await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(0)
     }, { timeout: 10_000 })
 
@@ -1629,7 +1632,7 @@ test('clearing acknowledged host memory persists removal and requires fresh SSH 
       await expect(freshDisclosure).toContainText('127.0.0.1')
       await expect(freshDisclosure).not.toContainText('api-prod')
       await freshDisclosure.getByRole('button', { name: '暂不允许', exact: true }).click()
-      await restartedPage.getByRole('button', { name: '关闭终端会话 127.0.0.1', exact: true }).click()
+      await restartedPage.getByRole('button', { name: '关闭 SSH 会话 127.0.0.1', exact: true }).click()
       await expect(restartedPage.locator('[data-testid^="terminal-pane-"]')).toHaveCount(0)
     }, { timeout: 20_000 })
   } finally { await restarted?.close(); await app?.close(); await closeServer(sshServer.server) }
@@ -1694,12 +1697,12 @@ test('selects an unowned startup session over persisted history', async ({ launc
     const launch = await launchApp()
     const page = await launch.app.firstWindow()
     await connect(page, historyServer.port)
-    const historyTitle = (await page.locator('.history-item.active strong').textContent())?.trim()
+    const historyTitle = (await page.locator('.history-item.active .chat-title > strong').textContent())?.trim()
     if (!historyTitle) throw new Error('Expected a persisted history title')
     const historyChatId = await page.locator('.history-item.active').getAttribute('data-chat-id')
     if (!historyChatId) throw new Error('Expected a persisted history task id')
-    await page.getByRole('button', { name: '关闭终端会话 127.0.0.1', exact: true }).click()
-    await expect(page.getByLabel('任务 Shell 历史回放')).toBeVisible()
+    await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.1', exact: true }).click()
+    await expect(page.getByLabel('任务 SSH 历史回放')).toBeVisible()
     await launch.app.close()
 
     const rawPort = (rawServer.address() as AddressInfo).port
@@ -1713,7 +1716,7 @@ test('selects an unowned startup session over persisted history', async ({ launc
     const restoredHistory = chatItem(restoredPage, historyChatId)
     await expect(restoredHistory).toHaveCount(1)
     await expect(restoredHistory).not.toHaveClass(/active/)
-    await expect(restoredPage.locator('.history-item.active')).toContainText('1 个 Shell')
+    await expect(restoredPage.locator('.history-item.active')).toContainText('1 个 SSH')
   } finally {
     await restarted?.close()
     await closeServer(historyServer.server)
@@ -1871,7 +1874,7 @@ async function removeActiveTask(page: Awaited<ReturnType<ElectronApplication['fi
   if (!activeChatId) throw new Error('Expected the active task to have a durable chat id')
   await activeTask.getByRole('button', { name: /^任务操作 / }).click()
   await activeTask.getByRole('menuitem', { name: '删除', exact: true }).click()
-  // Deleting a live task first transfers its Shells, then removes the source task.
+  // Deleting a live task first transfers its SSH sessions, then removes the source task.
   await expect(chatItem(page, activeChatId)).toHaveCount(0)
   await expect(page.locator('.history-item.active')).toHaveCount(1)
 }

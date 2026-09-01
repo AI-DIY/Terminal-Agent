@@ -38,7 +38,7 @@ function selectedNumber(event: Event): number {
     <header class="panel-head">
       <div>
         <h2 id="appearance-title">外观</h2>
-        <p>选择工作台主题。布局、侧栏宽度和 Shell 展示方式会自动记忆。</p>
+        <p>选择工作台主题。布局、侧栏宽度和 SSH 展示方式会自动记忆。</p>
       </div>
       <span class="save-state" role="status">{{ message }}</span>
     </header>
@@ -51,14 +51,14 @@ function selectedNumber(event: Event): number {
     </section>
 
     <section class="settings-band layout-band" aria-labelledby="layout-title">
-      <div class="section-copy"><h3 id="layout-title">Shell 工作区布局</h3><p>以下设置与工作台“布局”菜单共用同一份偏好。</p></div>
+      <div class="section-copy"><h3 id="layout-title">SSH 工作区布局</h3><p>以下设置与工作台“SSH 窗口布局”菜单共用同一份偏好。</p></div>
       <div class="layout-fields">
-        <label><span>Shell 展示数量</span><select :value="layout.state.visibleCount" @change="saveLayout({ visibleCount: selectedNumber($event) as 1|2|3|4 })"><option v-for="value in [1,2,3,4]" :key="value" :value="value">{{ value }} 个</option></select></label>
+        <label><span>SSH 展示数量</span><select :value="layout.state.visibleCount" @change="saveLayout({ visibleCount: selectedNumber($event) as 1|2|3|4 })"><option v-for="value in [1,2,3,4]" :key="value" :value="value">{{ value }} 个</option></select></label>
         <label><span>每行数量</span><select :value="layout.state.columns" @change="saveLayout({ columns: selectedNumber($event) as 1|2|3|4 })"><option v-for="value in [1,2,3,4]" :key="value" :value="value">{{ value }} 个</option></select></label>
-        <label><span>Shell 字体大小</span><select :value="layout.state.fontSize" @change="saveLayout({ fontSize: selectedNumber($event) as ShellFontSize })"><option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option></select></label>
+        <label><span>SSH 字体大小</span><select :value="layout.state.fontSize" @change="saveLayout({ fontSize: selectedNumber($event) as ShellFontSize })"><option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option></select></label>
         <label><span>单行高度（占工作区）</span><select :value="layout.state.rowHeightPercent" @change="saveLayout({ rowHeightPercent: selectedNumber($event) as ShellRowHeightPercent })"><option v-for="preset in SHELL_ROW_HEIGHT_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option></select></label>
       </div>
-      <div class="layout-preview" aria-label="当前 Shell 布局摘要"><strong>{{ layout.state.visibleCount }} 个 Shell</strong><span>{{ layout.state.columns }} 列 · {{ layout.state.fontSize }}px · 单行 {{ layout.state.rowHeightPercent }}%</span></div>
+      <div class="layout-preview" aria-label="当前 SSH 布局摘要"><strong>{{ layout.state.visibleCount }} 个 SSH</strong><span>{{ layout.state.columns }} 列 · {{ layout.state.fontSize }}px · 单行 {{ layout.state.rowHeightPercent }}%</span></div>
     </section>
 
     <p v-if="layout.state.error" class="error" role="alert">{{ layout.state.error }}</p>

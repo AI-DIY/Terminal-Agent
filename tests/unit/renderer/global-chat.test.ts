@@ -336,7 +336,7 @@ describe('global chat store', () => {
     expect(panel).toContain('function planTargetLabel(target: string)')
     expect(panel).toContain('{{ planTargetLabel(step.target) }}')
     expect(panel).toContain('hostnameDisplayLabels')
-    expect(panel).toContain('个在线 Shell')
+    expect(panel).toContain('个在线 SSH')
   })
 
   it('composes text-only content while retaining old image records for hydration', () => {
