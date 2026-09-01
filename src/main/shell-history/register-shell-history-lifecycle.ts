@@ -1,9 +1,10 @@
 import type { ChatChangedEvent } from '../../shared/contracts'
-import type { HistoryConnectedSession, TerminalClosedEvent, TerminalDataEvent, TerminalWriteEvent } from '../ssh/session-service'
+import type { ConnectedSession, HistoryConnectedSession, TerminalClosedEvent, TerminalDataEvent, TerminalWriteEvent } from '../ssh/session-service'
 import type { ShellHistoryService } from './shell-history-service'
 
 type SessionLifecycleSource = {
   onHistoryOpened(listener: (session: HistoryConnectedSession) => void): () => void
+  onUpdated(listener: (session: ConnectedSession) => void): () => void
   onData(listener: (event: TerminalDataEvent) => void): () => void
   onWrite(listener: (event: TerminalWriteEvent) => void): () => void
   onClosed(listener: (event: TerminalClosedEvent) => void): () => void
@@ -39,7 +40,7 @@ export function registerShellHistoryLifecycle(
       openedSessions.set(session.id, session)
       history.attach({
         sessionId: session.id,
-        hostname: session.hostname,
+        hostname: historyHostname(session),
         title: session.title ?? session.hostname,
         connectionType: session.connectionType,
         reconnectReference: session.reconnectReference,
@@ -48,6 +49,13 @@ export function registerShellHistoryLifecycle(
       const association = associations.get(session.id)
       if (association) history.associate({ sessionId: session.id, ...association })
     })
+  })
+  const unsubscribeUpdated = sessions.onUpdated(session => {
+    const opened = openedSessions.get(session.id)
+    if (!opened) return
+    const updated: HistoryConnectedSession = { ...opened, ...session }
+    if (!Object.prototype.hasOwnProperty.call(session, 'observedHostname')) delete updated.observedHostname
+    openedSessions.set(session.id, updated)
   })
   const unsubscribeData = sessions.onData(event => {
     runSafely(() => history.append(event))
@@ -70,7 +78,11 @@ export function registerShellHistoryLifecycle(
           history.reportError()
         }
       }
-      await history.close({ sessionId: event.sessionId, endedAt })
+      await history.close({
+        sessionId: event.sessionId,
+        endedAt,
+        ...(session ? { hostname: historyHostname(session) } : {}),
+      })
     }).catch(() => undefined)
     pendingCloses.add(closeTask)
     void closeTask.finally(() => pendingCloses.delete(closeTask))
@@ -89,6 +101,7 @@ export function registerShellHistoryLifecycle(
     if (disposed) return
     disposed = true
     unsubscribeHistoryOpened()
+    unsubscribeUpdated()
     unsubscribeData()
     unsubscribeWrite()
     unsubscribeClosed()
@@ -98,6 +111,10 @@ export function registerShellHistoryLifecycle(
     while (pendingCloses.size > 0) await Promise.all([...pendingCloses])
   }
   return dispose
+}
+
+function historyHostname(session: ConnectedSession): string {
+  return session.observedHostname?.trim() || session.title?.trim() || session.hostname
 }
 
 function runSafely(operation: () => unknown): void {

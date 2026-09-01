@@ -2,10 +2,11 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { SessionView } from '../stores/sessions'
+import type { ShellFontSize } from '../../../shared/contracts'
 
-const props = defineProps<{ session: SessionView; active: boolean }>()
+const props = defineProps<{ session: SessionView; active: boolean; fontSize: ShellFontSize }>()
 const emit = defineEmits<{ activate: [] }>()
 const paneElement = ref<HTMLElement>()
 const terminalElement = ref<HTMLElement>()
@@ -102,7 +103,7 @@ onMounted(() => {
     convertEol: true,
     cursorBlink: true,
     fontFamily: '"Cascadia Mono", Consolas, "Courier New", monospace',
-    fontSize: 13,
+    fontSize: props.fontSize,
     theme: {
       background,
       foreground: '#d8dade',
@@ -134,6 +135,15 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerdown', closeContextMenu)
 })
 onMounted(() => window.addEventListener('pointerdown', closeContextMenu))
+
+watch(
+  () => props.fontSize,
+  fontSize => {
+    if (!terminal) return
+    terminal.options.fontSize = fontSize
+    resize()
+  },
+)
 </script>
 
 <template>

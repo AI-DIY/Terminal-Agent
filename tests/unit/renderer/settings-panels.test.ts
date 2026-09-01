@@ -27,14 +27,18 @@ describe('settings panels', () => {
     expect(gate.isReady()).toBe(true)
   })
 
-  it('uses the same percentage layout presets in Appearance and Shell workspace', () => {
+  it('uses the same font-size and percentage layout presets in Appearance and Shell workspace', () => {
     const appearance = readFileSync(new URL('../../../src/renderer/src/components/settings/AppearanceSettings.vue', import.meta.url), 'utf8')
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
 
     expect(appearance).toContain('SHELL_ROW_HEIGHT_PRESETS')
+    expect(appearance).toContain('SHELL_FONT_SIZE_PRESETS')
     expect(appearance).toContain('单行高度（占工作区）')
+    expect(appearance).toContain('Shell 字体大小')
     expect(canvas).toContain('SHELL_ROW_HEIGHT_PRESETS')
+    expect(canvas).toContain('SHELL_FONT_SIZE_PRESETS')
     expect(canvas).toContain('单行高度（占工作区）')
+    expect(canvas).toContain('Shell 字体大小')
   })
 
   it('themes the settings and host-memory surfaces through shared tokens', () => {

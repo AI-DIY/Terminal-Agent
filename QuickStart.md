@@ -43,19 +43,3 @@ reg query "HKCR\accessclient\shell\open\command" /ve
 （2）使用集团堡垒机正常唤起shell连接即可。
 
 ![从堡垒机唤起 Shell](docs/images/quickstart/07-launch-bastion.png)
-
-## 主要功能与安全
-
-### 连接与工作台
-
-- 兼容既有 Access Client 的堡垒机入口；支持指定堡垒机主机、用户名密码 SSH 与私钥 SSH，多个 Shell 和任务可在同一工作台管理。
-
-### AI 模型与任务审批
-
-- 在“设置 → 大语言模型配置”中配置 Ollama、OpenAI 兼容或 llama.cpp 模型；输入 API Key，测试连接后保存并激活。模型密钥由 Windows 受保护存储保存，页面不会回填。
-- 任务可重命名、置顶或删除；Shell 结果和计划执行记录保留在任务中。需要排查问题时可打开顶部 DevTools 或 Node Inspector。
-
-### 安全围栏与企业边界
-
-- 在“设置 → 安全围栏”中查看、启停、测试和保存规则。默认拦截进程终止、交互式编辑器、删除文件、服务变更、关机/重启、磁盘分区或格式化等高风险命令；未授权命令不会发送到 SSH Shell。
-- 仅使用可信的本地、企业内网或组织控制的模型服务，并在执行前确认目标环境和审批状态。

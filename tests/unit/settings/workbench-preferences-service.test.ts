@@ -39,6 +39,7 @@ describe('workbench preference validation', () => {
       visibleCount: 3,
       columns: 3,
       rowHeightPercent: 64 as const,
+      fontSize: 13 as const,
     }
 
     expect(workbenchPreferencesSchema.parse(valid)).toMatchObject({ visibleCount: 3, columns: 3 })
@@ -53,7 +54,7 @@ describe('workbench preference validation', () => {
     })
   })
 
-  it.each([48, 64, 80] as const)('accepts the documented %i%% row height', rowHeightPercent => {
+  it.each([48, 64, 80, 100] as const)('accepts the documented %i%% row height', rowHeightPercent => {
     expect(workbenchPreferencesSchema.parse({ ...createDefaultWorkbenchPreferences(), rowHeightPercent }).rowHeightPercent).toBe(rowHeightPercent)
   })
 })
@@ -63,18 +64,19 @@ describe('WorkbenchPreferencesService', () => {
     const { service, filePath } = await createService()
 
     await expect(service.load()).resolves.toEqual(createDefaultWorkbenchPreferences())
-    await expect(service.saveLayout({ leftWidth: 248, visibleCount: 4, columns: 2, rowHeightPercent: 80 })).resolves.toMatchObject({
+    await expect(service.saveLayout({ leftWidth: 248, visibleCount: 4, columns: 2, rowHeightPercent: 80, fontSize: 11 })).resolves.toMatchObject({
       theme: 'pearl',
       leftWidth: 248,
       rightWidth: 390,
       visibleCount: 4,
       columns: 2,
       rowHeightPercent: 80,
+      fontSize: 11,
     })
 
     const persisted = workbenchPreferencesDocumentSchema.parse(JSON.parse(await readFile(filePath, 'utf8')))
     expect(persisted).toEqual({
-      version: 3,
+      version: 4,
       appearance: { theme: 'pearl' },
       layout: {
         leftWidth: 248,
@@ -84,6 +86,7 @@ describe('WorkbenchPreferencesService', () => {
         visibleCount: 4,
         columns: 2,
         rowHeightPercent: 80,
+        fontSize: 11,
       },
       routing: {},
       memory: {},
@@ -114,7 +117,7 @@ describe('WorkbenchPreferencesService', () => {
 
     await expect(service.load()).resolves.toMatchObject({ theme: 'graphite', rowHeightPercent })
     expect(JSON.parse(await readFile(filePath, 'utf8'))).toMatchObject({
-      version: 3,
+      version: 4,
       layout: { rowHeightPercent },
     })
   })
@@ -143,8 +146,33 @@ describe('WorkbenchPreferencesService', () => {
 
     await expect(service.load()).resolves.toMatchObject({ rowHeightPercent: expectedRowHeightPercent })
     expect(JSON.parse(await readFile(filePath, 'utf8'))).toMatchObject({
-      version: 3,
+      version: 4,
       layout: { rowHeightPercent: expectedRowHeightPercent },
+    })
+  })
+
+  it('migrates a version-3 preference without changing its explicit row height', async () => {
+    const { service, filePath } = await createService()
+    await writeFile(filePath, JSON.stringify({
+      version: 3,
+      appearance: { theme: 'graphite' },
+      layout: {
+        leftWidth: 222,
+        rightWidth: 390,
+        leftCollapsed: false,
+        rightCollapsed: false,
+        visibleCount: 3,
+        columns: 3,
+        rowHeightPercent: 64,
+      },
+      routing: {},
+      memory: {},
+    }))
+
+    await expect(service.load()).resolves.toMatchObject({ theme: 'graphite', rowHeightPercent: 64, fontSize: 13 })
+    expect(JSON.parse(await readFile(filePath, 'utf8'))).toMatchObject({
+      version: 4,
+      layout: { rowHeightPercent: 64, fontSize: 13 },
     })
   })
 

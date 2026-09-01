@@ -43,10 +43,11 @@ export function createGlobalChatStore(api: Api) {
     retryableErrors: {} as Record<string, boolean>,
     readOnly: {} as Record<string, boolean>,
     activeMessageIds: {} as Record<string, string | null>,
+    runUserMessageIds: {} as Record<string, string | null>,
     pendingImages: {} as Record<string, ChatImageUrlPart[]>,
     progress: {} as Record<string, ChatProgressStage | null>,
   })
-  const lastUserMessage = new Map<string, any>()
+  const lastUserMessage = new Map<string, { id: string; content: string }>()
   const cancelledRuns = new Map<string, string>()
   const errorAnnouncementListeners = new Set<(announcement: ErrorAnnouncement) => void>()
   const assistantAnnouncementListeners = new Set<(announcement: AssistantAnnouncement) => void>()
@@ -87,6 +88,7 @@ export function createGlobalChatStore(api: Api) {
       state.errors[event.chatId] = ''
       state.retryableErrors[event.chatId] = false
       state.activeMessageIds[event.chatId] = null
+      state.runUserMessageIds[event.chatId] = null
       const message = list.find(item => item.id === event.messageId)
       if (message) {
         message.content = event.content
@@ -104,6 +106,7 @@ export function createGlobalChatStore(api: Api) {
     state.errors[event.chatId] = event.error
     state.retryableErrors[event.chatId] = event.retryable
     state.activeMessageIds[event.chatId] = event.messageId
+    state.runUserMessageIds[event.chatId] = null
     const message = list.find(item => item.id === event.messageId)
     if (message) {
       message.content = event.error
@@ -125,6 +128,7 @@ export function createGlobalChatStore(api: Api) {
       state.runs[chatId] = runId
       state.progress[chatId] = null
       state.activeMessageIds[chatId] = null
+      state.runUserMessageIds[chatId] = latestUserMessageId(state.messages[chatId])
     },
     setDraft(chatId: string, value: string): void {
       state.drafts[chatId] = value
@@ -161,8 +165,8 @@ export function createGlobalChatStore(api: Api) {
       }))
       state.progress[chatId] = null
       const retryTarget = retryableHydratedError(visible)
-      if (retryTarget) {
-        lastUserMessage.set(chatId, retryTarget.user.content)
+      if (retryTarget && typeof retryTarget.user.content === 'string') {
+        lastUserMessage.set(chatId, { id: retryTarget.user.id, content: retryTarget.user.content })
         state.errors[chatId] = retryTarget.assistant.content
         state.retryableErrors[chatId] = true
       } else {
@@ -172,6 +176,7 @@ export function createGlobalChatStore(api: Api) {
         state.retryableErrors[chatId] = false
       }
       state.activeMessageIds[chatId] = null
+      state.runUserMessageIds[chatId] = null
       state.readOnly[chatId] = readOnly
     },
     async send(chatId: string, content: any): Promise<void> {
@@ -185,15 +190,16 @@ export function createGlobalChatStore(api: Api) {
       state.runs[chatId] = runId
       state.progress[chatId] = null
       state.activeMessageIds[chatId] = null
-      lastUserMessage.set(chatId, value)
       const userId = `user:${runId}`
       ;(state.messages[chatId] ?? (state.messages[chatId] = [])).push({ id: userId, role: 'user', content: value, state: 'complete' })
+      lastUserMessage.set(chatId, { id: userId, content: value })
+      state.runUserMessageIds[chatId] = userId
       await api.send({ chatId, runId, content: value })
     },
     async retry(chatId: string): Promise<void> {
       if (state.readOnly[chatId]) return
-      const value = lastUserMessage.get(chatId)
-      if (typeof value !== 'string' || !value || !state.errors[chatId] || !state.retryableErrors[chatId]) return
+      const previous = lastUserMessage.get(chatId)
+      if (!previous || !previous.content || !state.errors[chatId] || !state.retryableErrors[chatId]) return
       const runId = crypto.randomUUID()
       cancelledRuns.delete(chatId)
       state.runs[chatId] = runId
@@ -201,7 +207,8 @@ export function createGlobalChatStore(api: Api) {
       state.errors[chatId] = ''
       state.retryableErrors[chatId] = false
       state.activeMessageIds[chatId] = null
-      await api.send({ chatId, runId, content: value, retry: true })
+      state.runUserMessageIds[chatId] = previous.id
+      await api.send({ chatId, runId, content: previous.content, retry: true })
     },
     canRetry(chatId: string): boolean {
       return !state.readOnly[chatId] && Boolean(state.errors[chatId]) && state.retryableErrors[chatId]
@@ -227,6 +234,7 @@ export function createGlobalChatStore(api: Api) {
           state.runs[chatId] = null
           state.progress[chatId] = null
           state.activeMessageIds[chatId] = null
+          state.runUserMessageIds[chatId] = null
         }
         lastUserMessage.delete(chatId)
         state.errors[chatId] = '取消状态未能保存，请重新加载后确认。'
@@ -238,6 +246,7 @@ export function createGlobalChatStore(api: Api) {
         state.runs[chatId] = null
         state.progress[chatId] = null
         state.activeMessageIds[chatId] = null
+        state.runUserMessageIds[chatId] = null
         state.errors[chatId] = ''
       }
       if (activeMessageId) {
@@ -281,15 +290,24 @@ export function createGlobalChatStore(api: Api) {
 }
 
 function retryableHydratedError(messages: readonly {
+  id: string
   role: 'user' | 'assistant' | 'system'
   content: any
   state: 'streaming' | 'complete' | 'error'
   retryable?: boolean
-}[]): { user: { content: any }; assistant: { content: any } } | undefined {
+}[]): { user: { id: string; content: any }; assistant: { content: any } } | undefined {
   const assistant = messages.at(-1)
   const user = messages.at(-2)
   if (assistant?.role !== 'assistant' || assistant.state !== 'error' || assistant.retryable === false || assistant.content === terminalCancellationContent || user?.role !== 'user') return undefined
   return { user, assistant }
+}
+
+function latestUserMessageId(messages: readonly Message[] | undefined): string | null {
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = messages?.[index]
+    if (message?.role === 'user' && message.messageType !== 'execution_audit') return message.id
+  }
+  return null
 }
 
 function terminalHydratedError(messages: readonly {

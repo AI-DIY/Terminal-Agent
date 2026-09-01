@@ -48,11 +48,12 @@ describe('Shell history lifecycle', () => {
     expect(history.audit).toHaveBeenNthCalledWith(1, { sessionId: 'session-a', data: 'whoami' })
     expect(history.audit).toHaveBeenNthCalledWith(2, { sessionId: 'session-a', data: '\r' })
     expect(history.associate).toHaveBeenCalledWith({ sessionId: 'session-a', chatId: 'chat-a', historyId: 'history-a' })
-    expect(history.close).toHaveBeenCalledWith({ sessionId: 'session-a', endedAt: '2026-08-16T08:02:00.000Z' })
+    expect(history.close).toHaveBeenCalledWith({ sessionId: 'session-a', hostname: 'web-01', endedAt: '2026-08-16T08:02:00.000Z' })
 
     dispose()
     dispose()
     expect(events.unsubscribeHistoryOpened).toHaveBeenCalledOnce()
+    expect(events.unsubscribeUpdated).toHaveBeenCalledOnce()
     expect(events.unsubscribeData).toHaveBeenCalledOnce()
     expect(events.unsubscribeWrite).toHaveBeenCalledOnce()
     expect(events.unsubscribeClosed).toHaveBeenCalledOnce()
@@ -122,7 +123,7 @@ describe('Shell history lifecycle', () => {
 
     fallback.resolve({ chatId: 'chat-delayed-close', historyId: 'history-delayed-close' })
     await vi.waitFor(() => expect(history.close).toHaveBeenCalledWith({
-      sessionId: 'session-delayed-close', endedAt: '2026-08-16T08:01:00.000Z',
+      sessionId: 'session-delayed-close', hostname: 'web-delayed-close', endedAt: '2026-08-16T08:01:00.000Z',
     }))
     expect(history.associate).toHaveBeenCalledWith({ sessionId: 'session-delayed-close', chatId: 'chat-delayed-close', historyId: 'history-delayed-close' })
   })
@@ -139,7 +140,7 @@ describe('Shell history lifecycle', () => {
     events.closed?.({ sessionId: 'session-failed-close' })
 
     await vi.waitFor(() => expect(history.close).toHaveBeenCalledWith({
-      sessionId: 'session-failed-close', endedAt: '2026-08-16T08:01:00.000Z',
+      sessionId: 'session-failed-close', hostname: 'web-failed-close', endedAt: '2026-08-16T08:01:00.000Z',
     }))
     expect(history.reportError).toHaveBeenCalledOnce()
   })
@@ -165,15 +166,85 @@ describe('Shell history lifecycle', () => {
     await drained
     expect(finished).toBe(true)
   })
+
+  it('persists the observed hostname instead of a bastion address when the session closes', async () => {
+    const events = createEventSources()
+    const history = {
+      attach: vi.fn(), append: vi.fn(), audit: vi.fn(), associate: vi.fn(), close: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(),
+    }
+    registerShellHistoryLifecycle(events.sessions, events.chats, history, {
+      now: () => new Date('2026-08-16T08:02:00.000Z'),
+    })
+
+    events.historyOpened?.({
+      id: 'session-bastion', hostname: '127.0.0.1', title: 'bastion-web', mode: 'copilot', connectionType: 'access-client-ssh',
+    })
+    events.updated?.({
+      id: 'session-bastion', hostname: '127.0.0.1', observedHostname: 'api-prod', title: 'bastion-web', mode: 'copilot',
+    })
+    events.closed?.({ sessionId: 'session-bastion' })
+
+    await vi.waitFor(() => expect(history.close).toHaveBeenCalledWith({
+      sessionId: 'session-bastion', hostname: 'api-prod', endedAt: '2026-08-16T08:02:00.000Z',
+    }))
+    expect(history.attach).toHaveBeenCalledWith(expect.objectContaining({ hostname: 'bastion-web' }))
+  })
+
+  it('uses a configured title when no observed hostname is available for a proxied session', async () => {
+    const events = createEventSources()
+    const history = {
+      attach: vi.fn(), append: vi.fn(), audit: vi.fn(), associate: vi.fn(), close: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(),
+    }
+    registerShellHistoryLifecycle(events.sessions, events.chats, history, {
+      now: () => new Date('2026-08-16T08:02:00.000Z'),
+    })
+
+    events.historyOpened?.({
+      id: 'session-raw', hostname: '127.0.0.1', title: 'raw-console-01', mode: 'copilot', connectionType: 'access-client-raw',
+    })
+    events.closed?.({ sessionId: 'session-raw' })
+
+    await vi.waitFor(() => expect(history.close).toHaveBeenCalledWith({
+      sessionId: 'session-raw', hostname: 'raw-console-01', endedAt: '2026-08-16T08:02:00.000Z',
+    }))
+    expect(history.attach).toHaveBeenCalledWith(expect.objectContaining({ hostname: 'raw-console-01' }))
+  })
+
+  it('falls back to the configured title when an observed hostname is cleared', async () => {
+    const events = createEventSources()
+    const history = {
+      attach: vi.fn(), append: vi.fn(), audit: vi.fn(), associate: vi.fn(), close: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(),
+    }
+    registerShellHistoryLifecycle(events.sessions, events.chats, history, {
+      now: () => new Date('2026-08-16T08:02:00.000Z'),
+    })
+
+    events.historyOpened?.({
+      id: 'session-cleared-hostname', hostname: '127.0.0.1', title: 'bastion-web', mode: 'copilot', connectionType: 'access-client-ssh',
+    })
+    events.updated?.({
+      id: 'session-cleared-hostname', hostname: '127.0.0.1', observedHostname: 'api-prod', title: 'bastion-web', mode: 'copilot',
+    })
+    events.updated?.({
+      id: 'session-cleared-hostname', hostname: '127.0.0.1', title: 'bastion-web', mode: 'copilot',
+    })
+    events.closed?.({ sessionId: 'session-cleared-hostname' })
+
+    await vi.waitFor(() => expect(history.close).toHaveBeenCalledWith({
+      sessionId: 'session-cleared-hostname', hostname: 'bastion-web', endedAt: '2026-08-16T08:02:00.000Z',
+    }))
+  })
 })
 
 function createEventSources() {
   let historyOpened: ((session: ConnectedSession & { connectionType: 'direct-ssh' | 'access-client-ssh' | 'access-client-raw' }) => void) | undefined
+  let updated: ((session: ConnectedSession) => void) | undefined
   let data: ((event: TerminalDataEvent) => void) | undefined
   let write: ((event: TerminalDataEvent) => void) | undefined
   let closed: ((event: TerminalClosedEvent) => void) | undefined
   let changed: ((event: ChatChangedEvent) => void) | undefined
   const unsubscribeHistoryOpened = vi.fn()
+  const unsubscribeUpdated = vi.fn()
   const unsubscribeData = vi.fn()
   const unsubscribeWrite = vi.fn()
   const unsubscribeClosed = vi.fn()
@@ -181,6 +252,7 @@ function createEventSources() {
   return {
     sessions: {
       onHistoryOpened: vi.fn((listener: (session: ConnectedSession & { connectionType: 'direct-ssh' | 'access-client-ssh' | 'access-client-raw' }) => void) => { historyOpened = listener; return unsubscribeHistoryOpened }),
+      onUpdated: vi.fn((listener: (session: ConnectedSession) => void) => { updated = listener; return unsubscribeUpdated }),
       onData: vi.fn((listener: (event: TerminalDataEvent) => void) => { data = listener; return unsubscribeData }),
       onWrite: vi.fn((listener: (event: TerminalDataEvent) => void) => { write = listener; return unsubscribeWrite }),
       onClosed: vi.fn((listener: (event: TerminalClosedEvent) => void) => { closed = listener; return unsubscribeClosed }),
@@ -189,11 +261,13 @@ function createEventSources() {
       onChanged: vi.fn((listener: (event: ChatChangedEvent) => void) => { changed = listener; return unsubscribeChanged }),
     },
     get historyOpened() { return historyOpened },
+    get updated() { return updated },
     get data() { return data },
     get write() { return write },
     get closed() { return closed },
     get changed() { return changed },
     unsubscribeHistoryOpened,
+    unsubscribeUpdated,
     unsubscribeData,
     unsubscribeWrite,
     unsubscribeClosed,

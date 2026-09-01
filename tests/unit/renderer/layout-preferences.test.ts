@@ -5,11 +5,10 @@ import { createTerminalAgentApi } from '../../../src/preload/api'
 import {
   createLayoutPreferencesStore,
   createDelayedLayoutSaver,
-  createShellCanvasState,
   keyboardSidebarWidth,
+  SHELL_FONT_SIZE_PRESETS,
   SHELL_ROW_HEIGHT_PRESETS,
   shellGridStyle,
-  shellPanePresentations,
 } from '../../../src/renderer/src/stores/layout-preferences'
 
 describe('renderer layout preferences', () => {
@@ -131,32 +130,6 @@ describe('renderer layout preferences', () => {
     expect(store.state).toMatchObject({ ready: true, theme: 'graphite' })
   })
 
-  it('maximizes and restores without changing the prior pane grid', () => {
-    const canvas = createShellCanvasState()
-    const before = ['s1', 's2', 's3']
-
-    canvas.toggleMaximize('s2')
-    expect(canvas.maximizedSessionId.value).toBe('s2')
-    expect(shellPanePresentations(before, before, canvas.maximizedSessionId.value)).toEqual([
-      { sessionId: 's1', visible: false },
-      { sessionId: 's2', visible: true },
-      { sessionId: 's3', visible: false },
-    ])
-
-    canvas.restore()
-    expect(canvas.maximizedSessionId.value).toBeNull()
-    expect(shellPanePresentations(before, before, canvas.maximizedSessionId.value).map(item => item.visible)).toEqual([true, true, true])
-  })
-
-  it('keeps hidden terminal entries mounted in the pane presentation model', () => {
-    expect(shellPanePresentations(['s1', 's2', 's3', 's4'], ['s1', 's3'], null)).toEqual([
-      { sessionId: 's1', visible: true },
-      { sessionId: 's2', visible: false },
-      { sessionId: 's3', visible: true },
-      { sessionId: 's4', visible: false },
-    ])
-  })
-
   it('adjusts keyboard separators in the visual direction and clamps both boundaries', () => {
     expect(keyboardSidebarWidth('left', 210, 'ArrowLeft')).toBe(210)
     expect(keyboardSidebarWidth('left', 359, 'ArrowRight')).toBe(360)
@@ -165,20 +138,22 @@ describe('renderer layout preferences', () => {
     expect(keyboardSidebarWidth('left', 222, 'Enter')).toBeNull()
   })
 
-  it('maps compact, standard, and spacious layouts to percentage-based row heights', () => {
+  it('uses persistent terminal font sizes and percentage-based row heights without an individual maximize mode', () => {
     expect(SHELL_ROW_HEIGHT_PRESETS).toEqual([
       { label: '紧凑', value: 48 },
       { label: '标准', value: 64 },
       { label: '宽松', value: 80 },
+      { label: '占满', value: 100 },
     ])
-    expect(createDefaultWorkbenchPreferences().rowHeightPercent).toBe(64)
-    expect(shellGridStyle(3, 64, false)).toEqual({
+    expect(SHELL_FONT_SIZE_PRESETS).toEqual([
+      { label: '小', value: 11 },
+      { label: '标准', value: 12 },
+      { label: '大', value: 13 },
+    ])
+    expect(createDefaultWorkbenchPreferences()).toMatchObject({ rowHeightPercent: 100, fontSize: 13 })
+    expect(shellGridStyle(3, 100)).toEqual({
       gridTemplateColumns: 'repeat(3, minmax(210px, 1fr))',
-      gridAutoRows: '64%',
-    })
-    expect(shellGridStyle(3, 64, true)).toEqual({
-      gridTemplateColumns: 'minmax(0, 1fr)',
-      gridAutoRows: 'minmax(0, 1fr)',
+      gridAutoRows: '100%',
     })
   })
 })

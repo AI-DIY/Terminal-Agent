@@ -1221,7 +1221,7 @@ describe('durable chat workbench components', () => {
     expect(view).toContain('addSession(session, false)')
     expect(view).toContain('if (isCurrent() && store.byId(session.id)) select(session.id)')
     expect(canvas).toContain('const currentSessionIds = computed(() => new Set(props.currentSessions.map(session => session.id)))')
-    expect(canvas).toContain('return currentSessionIds.value.has(sessionId) && visibleBySessionId.value.get(sessionId) === true')
+    expect(canvas).toContain('return currentSessionIds.value.has(sessionId) && displayedSessionIdSet.value.has(sessionId)')
   })
 
   it('pins a duplicate request to the chat captured before its async transport resolves', async () => {

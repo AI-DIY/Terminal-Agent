@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
+import { shouldSendOnPlainEnter } from '../../../src/renderer/src/components/chat/chat-composer-shortcuts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../../src/renderer/src/stores/global-chat'
 
 function api() {
@@ -76,7 +77,7 @@ describe('global chat store', () => {
     expect(panel).toContain("const disposeErrorAnnouncement = store.onErrorAnnouncement(announcement => {")
     expect(panel).toContain('if (announcement.chatId !== chatId.value) return')
     expect(panel).toContain("const disposeAssistantAnnouncement = store.onAssistantAnnouncement(announcement => {")
-    expect(panel).toContain('if (announcement.chatId !== chatId.value) return\n  announceAssistantResponse(assistantReply(announcement.content))')
+    expect(panel).toMatch(/if \(announcement\.chatId !== chatId\.value\) return\r?\n[ ]{2}announceAssistantResponse\(assistantReply\(announcement\.content\)\)/)
     expect(panel).toContain('<div class="messages">')
     expect(panel).not.toContain(':aria-live="message.role === \'assistant\' && message.state !== \'error\' ? \'polite\' : undefined"')
     expect(panel).toContain('<p class="visually-hidden-alert" role="status" aria-live="polite" aria-atomic="true"><span :key="assistantResponse?.id">{{ assistantResponse?.content ?? \'\' }}</span></p>')
@@ -90,6 +91,65 @@ describe('global chat store', () => {
     expect(panel).toContain('<p v-if="actionError" class="error">{{ actionError }}</p>')
     expect(panel).not.toContain('<p v-if="standaloneError" class="error" role="alert">')
     expect(panel).not.toContain('<p v-if="actionError" class="error" role="alert">')
+  })
+
+  it('sends only plain Enter and leaves modified or composing Enter for textarea newlines', () => {
+    const plainEnter = { key: 'Enter', isComposing: false, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false }
+
+    expect(shouldSendOnPlainEnter(plainEnter)).toBe(true)
+    expect(shouldSendOnPlainEnter({ ...plainEnter, isComposing: true })).toBe(false)
+    expect(shouldSendOnPlainEnter({ ...plainEnter, shiftKey: true })).toBe(false)
+    expect(shouldSendOnPlainEnter({ ...plainEnter, ctrlKey: true })).toBe(false)
+    expect(shouldSendOnPlainEnter({ ...plainEnter, altKey: true })).toBe(false)
+    expect(shouldSendOnPlainEnter({ ...plainEnter, metaKey: true })).toBe(false)
+    expect(shouldSendOnPlainEnter({ ...plainEnter, key: 'a' })).toBe(false)
+
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+    expect(panel).toContain('function onKeydown(event: KeyboardEvent): void { if (shouldSendOnPlainEnter(event)) { event.preventDefault(); send() } }')
+  })
+
+  it('anchors active progress below the user message that started the matching task run', async () => {
+    const transport = api()
+    const store = createGlobalChatStore(transport)
+
+    await store.send('task-a', 'first question')
+    await store.send('task-b', 'second question')
+    const taskARunId = store.state.runs['task-a']!
+    const taskBRunId = store.state.runs['task-b']!
+    const taskAUserMessageId = store.state.messages['task-a']![0].id
+    const taskBUserMessageId = store.state.messages['task-b']![0].id
+
+    store.apply({ kind: 'chat:progress', chatId: 'task-a', runId: taskARunId, stage: 'thinking' })
+    store.apply({ kind: 'chat:progress', chatId: 'task-b', runId: taskBRunId, stage: 'executing' })
+
+    expect(store.state.runUserMessageIds).toMatchObject({
+      'task-a': taskAUserMessageId,
+      'task-b': taskBUserMessageId,
+    })
+    expect(store.state.progress).toMatchObject({ 'task-a': 'thinking', 'task-b': 'executing' })
+
+    store.apply({ kind: 'chat:completed', chatId: 'task-a', runId: taskARunId, messageId: 'answer-a', content: 'done' })
+    expect(store.state.runUserMessageIds['task-a']).toBeNull()
+    expect(store.state.runUserMessageIds['task-b']).toBe(taskBUserMessageId)
+
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+    expect(panel).toContain("const runUserMessageId = computed(() => chatId.value ? store.state.runUserMessageIds[chatId.value] ?? null : null)")
+    expect(panel).toContain("v-if=\"message.role === 'user' && message.id === runUserMessageId && progress\"")
+    expect(panel).not.toContain('<section v-if="progress" class="progress-item"')
+    expect(panel).not.toContain('<span v-if="running" role="status">正在生成回复</span>')
+  })
+
+  it('provides a safe, expandable context-details control from shared usage estimates', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+
+    expect(panel).toContain("import { estimateChatMessages } from '../../../../shared/chat-token-estimator'")
+    expect(panel).toContain('const contextUsed = computed(() => estimateChatMessages(messages.value))')
+    expect(panel).toContain('function toggleContextDetails(): void')
+    expect(panel).toContain('class="context-toggle"')
+    expect(panel).toContain(':aria-expanded="contextDetailsExpanded"')
+    expect(panel).toContain('aria-controls="chat-context-details"')
+    expect(panel).toContain('v-if="contextDetailsExpanded" id="chat-context-details"')
+    expect(panel).not.toContain('立即压缩')
   })
 
   it('keeps drafts per task and applies only matching stream events', () => {
@@ -136,6 +196,7 @@ describe('global chat store', () => {
     expect(transport.send).toHaveBeenCalledTimes(2)
     expect(store.state.messages.c1.filter(message => message.role === 'user')).toHaveLength(1)
     expect(transport.send).toHaveBeenLastCalledWith(expect.objectContaining({ content: 'retry me', retry: true }))
+    expect(store.state.runUserMessageIds.c1).toBe(store.state.messages.c1.find(message => message.role === 'user')?.id)
   })
 
   it('hydrates retry state from persisted user and assistant messages', async () => {

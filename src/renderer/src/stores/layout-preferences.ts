@@ -1,4 +1,4 @@
-import { reactive, ref, type Ref } from 'vue'
+import { reactive } from 'vue'
 import {
   WORKBENCH_LEFT_WIDTH_MAX,
   WORKBENCH_LEFT_WIDTH_MIN,
@@ -10,6 +10,7 @@ import {
   workbenchThemeSchema,
   type WorkbenchLayoutPatch,
   type WorkbenchPreferences,
+  type ShellFontSize,
   type ShellRowHeightPercent,
   type WorkbenchTheme,
 } from '../../../shared/contracts'
@@ -26,15 +27,20 @@ export const SHELL_ROW_HEIGHT_PRESETS: ReadonlyArray<{ label: string; value: She
   { label: '紧凑', value: 48 },
   { label: '标准', value: 64 },
   { label: '宽松', value: 80 },
+  { label: '占满', value: 100 },
 ]
 
-export function shellGridStyle(columns: number, rowHeightPercent: ShellRowHeightPercent, focused: boolean): Record<string, string> {
-  return focused
-    ? { gridTemplateColumns: 'minmax(0, 1fr)', gridAutoRows: 'minmax(0, 1fr)' }
-    : {
-        gridTemplateColumns: `repeat(${Math.max(1, columns)}, minmax(210px, 1fr))`,
-        gridAutoRows: `${rowHeightPercent}%`,
-      }
+export const SHELL_FONT_SIZE_PRESETS: ReadonlyArray<{ label: string; value: ShellFontSize }> = [
+  { label: '小', value: 11 },
+  { label: '标准', value: 12 },
+  { label: '大', value: 13 },
+]
+
+export function shellGridStyle(columns: number, rowHeightPercent: ShellRowHeightPercent): Record<string, string> {
+  return {
+    gridTemplateColumns: `repeat(${Math.max(1, columns)}, minmax(210px, 1fr))`,
+    gridAutoRows: `${rowHeightPercent}%`,
+  }
 }
 
 export function createDelayedLayoutSaver(
@@ -133,33 +139,6 @@ export function keyboardSidebarWidth(
   return clampSidebarWidth(side, width + (side === 'left' ? visualDelta : -visualDelta))
 }
 
-export function createShellCanvasState(): {
-  maximizedSessionId: Ref<string | null>
-  toggleMaximize(sessionId: string): void
-  restore(): void
-} {
-  const maximizedSessionId = ref<string | null>(null)
-  return {
-    maximizedSessionId,
-    toggleMaximize(sessionId) {
-      maximizedSessionId.value = maximizedSessionId.value === sessionId ? null : sessionId
-    },
-    restore() { maximizedSessionId.value = null },
-  }
-}
-
-export function shellPanePresentations(
-  mountedSessionIds: readonly string[],
-  visibleSessionIds: readonly string[],
-  maximizedSessionId: string | null,
-): Array<{ sessionId: string; visible: boolean }> {
-  const visible = new Set(visibleSessionIds)
-  return mountedSessionIds.map(sessionId => ({
-    sessionId,
-    visible: maximizedSessionId === null ? visible.has(sessionId) : sessionId === maximizedSessionId,
-  }))
-}
-
 function currentPreferences(state: WorkbenchPreferences & { ready: boolean; error: string }): WorkbenchPreferences {
   return {
     theme: state.theme,
@@ -170,5 +149,6 @@ function currentPreferences(state: WorkbenchPreferences & { ready: boolean; erro
     visibleCount: state.visibleCount,
     columns: state.columns,
     rowHeightPercent: state.rowHeightPercent,
+    fontSize: state.fontSize,
   }
 }

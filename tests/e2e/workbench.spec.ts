@@ -529,7 +529,9 @@ test('transfers a running Shell before deleting its live chat', async ({ launchA
     await connect(page, sshServer.port)
     await connect(page, sshServer.port, '127.0.0.2')
     await removeActiveTask(page)
-    const transferredChatId = await page.locator('.history-item.active').getAttribute('data-chat-id')
+    const transferredTask = page.locator('.history-item.active')
+    await expect(transferredTask.getByText('2 个 Shell', { exact: true })).toBeVisible()
+    const transferredChatId = await transferredTask.getAttribute('data-chat-id')
     if (!transferredChatId) throw new Error('Expected a fallback task after deleting the live task')
 
     const firstSessionTab = page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })
@@ -660,7 +662,7 @@ test('preserves the authoritative workspace layout across another live chat and 
     await expect(page.getByLabel('Shell 布局设置')).toHaveCount(0)
 
     await page.getByRole('button', { name: '选择任务 聊天 B', exact: true }).click()
-    await page.getByRole('button', { name: '最大化终端会话 127.0.0.4', exact: true }).click()
+    await expect(page.getByRole('button', { name: /最大化终端会话/ })).toHaveCount(0)
     await page.getByRole('button', { name: '选择任务 聊天 A', exact: true }).click()
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.2', exact: true })).toBeVisible()
     await expect(page.locator('[data-testid^="terminal-pane-"]:visible')).toHaveCount(1)
@@ -696,12 +698,15 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
     await page.getByLabel('当前展示数量').selectOption('2')
     await page.getByLabel('每行数量').selectOption('1')
-    await page.getByLabel('单行高度（占工作区）').selectOption('48')
+    await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('100')
+    await expect(page.getByLabel('Shell 字体大小')).toHaveValue('13')
+    await page.getByLabel('单行高度（占工作区）').selectOption('100')
+    await page.getByLabel('Shell 字体大小').selectOption('11')
 
     const grid = page.getByLabel('可见终端面板')
     await expect(allPanes.filter({ visible: true })).toHaveCount(2)
     await expect(grid).toHaveAttribute('data-columns', '1')
-    await expect(grid).toHaveAttribute('data-row-height-percent', '48')
+    await expect(grid).toHaveAttribute('data-row-height-percent', '100')
     for (const pane of originalPanes) expect(await pane.evaluate(node => node.isConnected)).toBe(true)
 
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
@@ -714,7 +719,8 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({
       visibleCount: 2,
       columns: 1,
-      rowHeightPercent: 48,
+      rowHeightPercent: 100,
+      fontSize: 11,
     })
     await page.evaluate(() => window.terminalAgent.settings.appearance.saveTheme('graphite'))
     const activeTaskButton = page.locator('button.chat-select[aria-current="page"]')
@@ -727,7 +733,8 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await page.getByRole('button', { name: 'Shell 布局', exact: true }).click()
     await expect(page.getByLabel('当前展示数量')).toHaveValue('2')
     await expect(page.getByLabel('每行数量')).toHaveValue('1')
-    await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('48')
+    await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('100')
+    await expect(page.getByLabel('Shell 字体大小')).toHaveValue('11')
     await page.setViewportSize({ width: 900, height: 700 })
     const narrowGeometry = await page.evaluate(() => {
       const element = (selector: string): HTMLElement => {
@@ -1076,7 +1083,7 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
   }
 })
 
-test('maximize and restore preserve every connected terminal DOM node', async ({ launchApp }) => {
+test('removes per-terminal maximize and defaults to a full-height Shell row', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -1089,20 +1096,12 @@ test('maximize and restore preserve every connected terminal DOM node', async ({
     const panes = page.locator('[data-testid^="terminal-pane-"]')
     const originalPanes = await panes.elementHandles()
 
-    await page.getByRole('button', { name: '最大化终端会话 127.0.0.2', exact: true }).click()
-    await expect(panes.filter({ visible: true })).toHaveCount(1)
-    await expect(page.getByRole('button', { name: '还原终端会话 127.0.0.2', exact: true })).toBeVisible()
-    await expect(page.locator('.shell-toolbar-content')).toBeHidden()
-    await expect(page.locator('.session-tabs')).toBeHidden()
-    const canvasBox = await page.locator('.canvas-content').boundingBox()
-    const maximizedFrameBox = await page.locator('.terminal-frame:visible').boundingBox()
-    if (!canvasBox || !maximizedFrameBox) throw new Error('Expected maximized Shell canvas geometry')
-    expect(maximizedFrameBox.height).toBeGreaterThanOrEqual(canvasBox.height - 22)
-    expect(maximizedFrameBox.width).toBeGreaterThanOrEqual(canvasBox.width - 22)
-    for (const pane of originalPanes) expect(await pane.evaluate(node => node.isConnected)).toBe(true)
-
-    await page.getByRole('button', { name: '还原终端会话 127.0.0.2', exact: true }).click()
     await expect(panes.filter({ visible: true })).toHaveCount(3)
+    await expect(page.getByRole('button', { name: /最大化终端会话/ })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /还原终端会话/ })).toHaveCount(0)
+    await expect(page.locator('.shell-toolbar-content')).toBeVisible()
+    await expect(page.locator('.session-tabs')).toBeVisible()
+    await expect(page.getByLabel('可见终端面板')).toHaveAttribute('data-row-height-percent', '100')
     for (const pane of originalPanes) expect(await pane.evaluate(node => node.isConnected)).toBe(true)
 
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.3', exact: true }).click()
@@ -1853,6 +1852,9 @@ async function connect(page: Awaited<ReturnType<ElectronApplication['firstWindow
   await launcher.getByRole('button', { name: '连接', exact: true }).click()
   await expect(panes).toHaveCount(previousPaneCount + 1)
   if (opensDialog) await expect(connectionDialog).toHaveCount(0)
+  // The optional host-memory consent dialog intentionally masks the workbench.
+  // A new pane plus its mounted tab is the connection-complete condition here.
+  await expect(page.locator('.session-tabs .select').last()).toBeAttached()
 }
 
 async function waitForWorkbenchReady(page: Awaited<ReturnType<ElectronApplication['firstWindow']>>): Promise<void> {
@@ -1865,8 +1867,13 @@ function chatItem(page: Awaited<ReturnType<ElectronApplication['firstWindow']>>,
 
 async function removeActiveTask(page: Awaited<ReturnType<ElectronApplication['firstWindow']>>): Promise<void> {
   const activeTask = page.locator('.history-item.active')
+  const activeChatId = await activeTask.getAttribute('data-chat-id')
+  if (!activeChatId) throw new Error('Expected the active task to have a durable chat id')
   await activeTask.getByRole('button', { name: /^任务操作 / }).click()
   await activeTask.getByRole('menuitem', { name: '删除', exact: true }).click()
+  // Deleting a live task first transfers its Shells, then removes the source task.
+  await expect(chatItem(page, activeChatId)).toHaveCount(0)
+  await expect(page.locator('.history-item.active')).toHaveCount(1)
 }
 
 async function createNamedChat(

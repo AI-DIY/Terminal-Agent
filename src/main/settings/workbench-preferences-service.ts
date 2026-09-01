@@ -44,6 +44,23 @@ const version2WorkbenchPreferencesDocumentSchema = z.object({
   memory: z.object({}).strict(),
 }).strict()
 
+const version3RowHeightSchema = z.union([z.literal(48), z.literal(64), z.literal(80)])
+const version3WorkbenchPreferencesDocumentSchema = z.object({
+  version: z.literal(3),
+  appearance: z.object({ theme: workbenchThemeSchema }).strict(),
+  layout: z.object({
+    leftWidth: z.number().int(),
+    rightWidth: z.number().int(),
+    leftCollapsed: z.boolean(),
+    rightCollapsed: z.boolean(),
+    visibleCount: z.number().int(),
+    columns: z.number().int(),
+    rowHeightPercent: version3RowHeightSchema,
+  }).strict(),
+  routing: z.object({}).strict(),
+  memory: z.object({}).strict(),
+}).strict()
+
 export class WorkbenchPreferencesService {
   private readonly store: AtomicJsonStore<WorkbenchPreferencesDocument>
 
@@ -82,7 +99,7 @@ export class WorkbenchPreferencesService {
 function createDefaultDocument(): WorkbenchPreferencesDocument {
   const { theme, ...layout } = createDefaultWorkbenchPreferences()
   return {
-    version: 3,
+    version: 4,
     appearance: { theme },
     layout,
     routing: {},
@@ -98,23 +115,36 @@ function migrateWorkbenchPreferencesDocument(persisted: unknown): { value: unkno
     return {
       value: {
         ...legacy.data,
-        version: 3,
-        layout: { ...layout, rowHeightPercent },
+        version: 4,
+        layout: { ...layout, rowHeightPercent, fontSize: 13 },
       },
       changed: true,
     }
   }
 
   const version2 = version2WorkbenchPreferencesDocumentSchema.safeParse(persisted)
-  if (!version2.success) return { value: persisted, changed: false }
+  if (version2.success) {
+    return {
+      value: {
+        ...version2.data,
+        version: 4,
+        layout: {
+          ...version2.data.layout,
+          rowHeightPercent: tallerRowHeight(version2.data.layout.rowHeightPercent),
+          fontSize: 13,
+        },
+      },
+      changed: true,
+    }
+  }
+
+  const version3 = version3WorkbenchPreferencesDocumentSchema.safeParse(persisted)
+  if (!version3.success) return { value: persisted, changed: false }
   return {
     value: {
-      ...version2.data,
-      version: 3,
-      layout: {
-        ...version2.data.layout,
-        rowHeightPercent: tallerRowHeight(version2.data.layout.rowHeightPercent),
-      },
+      ...version3.data,
+      version: 4,
+      layout: { ...version3.data.layout, fontSize: 13 },
     },
     changed: true,
   }

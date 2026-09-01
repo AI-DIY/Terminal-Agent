@@ -12,8 +12,12 @@ export const WORKBENCH_RIGHT_WIDTH_MAX = 520
 export const workbenchThemeSchema = z.enum(['pearl', 'graphite'])
 export type WorkbenchTheme = z.infer<typeof workbenchThemeSchema>
 
-export const shellRowHeightPercentSchema = z.union([z.literal(48), z.literal(64), z.literal(80)])
+export const shellRowHeightPercentSchema = z.union([z.literal(48), z.literal(64), z.literal(80), z.literal(100)])
 export type ShellRowHeightPercent = z.infer<typeof shellRowHeightPercentSchema>
+
+// Keep the prior 13px terminal type size as the largest/default option.
+export const shellFontSizeSchema = z.union([z.literal(11), z.literal(12), z.literal(13)])
+export type ShellFontSize = z.infer<typeof shellFontSizeSchema>
 
 export const workbenchLayoutSchema = z.object({
   leftWidth: z.number().int().min(WORKBENCH_LEFT_WIDTH_MIN).max(WORKBENCH_LEFT_WIDTH_MAX),
@@ -23,6 +27,7 @@ export const workbenchLayoutSchema = z.object({
   visibleCount: z.number().int().min(1).max(4),
   columns: z.number().int().min(1).max(4),
   rowHeightPercent: shellRowHeightPercentSchema,
+  fontSize: shellFontSizeSchema,
 }).strict()
 export type WorkbenchLayout = z.infer<typeof workbenchLayoutSchema>
 
@@ -36,7 +41,7 @@ export const workbenchPreferencesSchema = z.object({
 export type WorkbenchPreferences = z.infer<typeof workbenchPreferencesSchema>
 
 export const workbenchPreferencesDocumentSchema = z.object({
-  version: z.literal(3),
+  version: z.literal(4),
   appearance: z.object({ theme: workbenchThemeSchema }).strict(),
   layout: workbenchLayoutSchema,
   routing: z.object({}).strict(),
@@ -53,7 +58,8 @@ export function createDefaultWorkbenchPreferences(): WorkbenchPreferences {
     rightCollapsed: false,
     visibleCount: 3,
     columns: 3,
-    rowHeightPercent: 64,
+    rowHeightPercent: 100,
+    fontSize: 13,
   }
 }
 

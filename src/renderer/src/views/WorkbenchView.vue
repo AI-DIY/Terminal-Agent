@@ -69,7 +69,7 @@ const historyPlayback = computed(() => historyPlaybackRecords.value.map(record =
   terminal: readOnlyHistoryTerminal(shellHistory.state.details[record.id] ?? null),
 })))
 const historyGridColumns = computed(() => Math.max(1, Math.min(layoutPreferences.state.columns, historyPlayback.value.length || 1)))
-const historyGridStyle = computed(() => shellGridStyle(historyGridColumns.value, layoutPreferences.state.rowHeightPercent, false))
+const historyGridStyle = computed(() => shellGridStyle(historyGridColumns.value, layoutPreferences.state.rowHeightPercent))
 const showHistoryDialog = ref(false)
 const hostMemoryDisclosureQueue = createHostMemoryDisclosureQueue()
 const pendingHostMemoryDisclosure = hostMemoryDisclosureQueue.current

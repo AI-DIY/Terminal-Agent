@@ -142,7 +142,7 @@ export class ShellHistoryService {
       id: collector.historyId ?? this.createId(),
       chatId: collector.chatId,
       sessionId: collector.sessionId,
-      hostname: sanitizeShellHistoryDisplay(collector.hostname),
+      hostname: sanitizeShellHistoryDisplay(parsed.hostname ?? collector.hostname),
       title: sanitizeShellHistoryDisplay(collector.title),
       startedAt: collector.startedAt,
       endedAt: parsed.endedAt,

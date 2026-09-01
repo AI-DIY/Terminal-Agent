@@ -1,16 +1,15 @@
 <script setup lang="ts">
-import { History, LayoutGrid, Maximize2, Minimize2, MoreHorizontal, Plus, X } from '@lucide/vue'
+import { History, LayoutGrid, MoreHorizontal, Plus, X } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import type { ShellHistorySummary } from '../../../../shared/contracts'
 import SessionTabs from '../SessionTabs.vue'
 import TerminalPane from '../TerminalPane.vue'
-import { sessionDisplayLabel, type SessionView } from '../../stores/sessions'
+import { sessionDisplayLabel, sessionLabel, type SessionView } from '../../stores/sessions'
 import {
-  createShellCanvasState,
   getLayoutPreferencesStore,
+  SHELL_FONT_SIZE_PRESETS,
   SHELL_ROW_HEIGHT_PRESETS,
   shellGridStyle,
-  shellPanePresentations,
 } from '../../stores/layout-preferences'
 
 const props = defineProps<{
@@ -37,36 +36,28 @@ const emit = defineEmits<{
 }>()
 
 const layout = getLayoutPreferencesStore()
-const canvas = createShellCanvasState()
 const layoutMenuOpen = ref(false)
 const menuSessionId = ref<string | null>(null)
 const menuHistoryId = ref<string | null>(null)
-const focused = computed(() => canvas.maximizedSessionId.value !== null)
 const currentSessionIds = computed(() => new Set(props.currentSessions.map(session => session.id)))
 const displayedSessionIds = computed(() => props.visibleSessionIds.slice(0, layout.state.visibleCount))
-const presentations = computed(() => shellPanePresentations(
-  props.sessions.map(session => session.id),
-  props.isLive ? displayedSessionIds.value : [],
-  props.isLive ? canvas.maximizedSessionId.value : null,
-))
-const visibleBySessionId = computed(() => new Map(presentations.value.map(item => [item.sessionId, item.visible])))
+const displayedSessionIdSet = computed(() => new Set(displayedSessionIds.value))
 const gridColumns = computed(() => Math.max(1, Math.min(layout.state.columns, displayedSessionIds.value.length || 1)))
-const gridStyle = computed(() => shellGridStyle(gridColumns.value, layout.state.rowHeightPercent, focused.value))
+const gridStyle = computed(() => shellGridStyle(gridColumns.value, layout.state.rowHeightPercent))
 const layoutSummary = computed(() => {
   const count = Math.min(displayedSessionIds.value.length, props.currentSessions.length)
   return count === 0 ? '尚未接入 Shell' : `${count} 个 Shell · ${Math.ceil(count / gridColumns.value)} 行`
 })
 
 function paneVisible(sessionId: string): boolean {
-  return currentSessionIds.value.has(sessionId) && visibleBySessionId.value.get(sessionId) === true
+  return currentSessionIds.value.has(sessionId) && displayedSessionIdSet.value.has(sessionId)
 }
 
 function selectSession(sessionId: string): void {
-  if (canvas.maximizedSessionId.value) canvas.maximizedSessionId.value = sessionId
   emit('select', sessionId)
 }
 
-function updateLayout(field: 'visibleCount' | 'columns' | 'rowHeightPercent', event: Event): void {
+function updateLayout(field: 'visibleCount' | 'columns' | 'rowHeightPercent' | 'fontSize', event: Event): void {
   const value = Number((event.target as HTMLSelectElement).value)
   const patch = { [field]: value }
   layout.previewLayout(patch)
@@ -74,13 +65,7 @@ function updateLayout(field: 'visibleCount' | 'columns' | 'rowHeightPercent', ev
 }
 
 function closeSession(sessionId: string): void {
-  if (canvas.maximizedSessionId.value === sessionId) canvas.restore()
   emit('close', sessionId)
-}
-
-function toggleMaximize(sessionId: string): void {
-  layoutMenuOpen.value = false
-  canvas.toggleMaximize(sessionId)
 }
 
 function openTerminalMenu(sessionId: string): void {
@@ -110,7 +95,7 @@ function reconnectHistory(historyId: string): void {
 function openSessionHistory(session: SessionView): void {
   menuSessionId.value = null
   menuHistoryId.value = null
-  emit('history', session.hostname)
+  emit('history', sessionLabel(session))
 }
 
 function openHistoricalSessionHistory(hostname: string): void {
@@ -120,9 +105,8 @@ function openHistoricalSessionHistory(hostname: string): void {
 
 watch(
   () => props.currentSessions.map(session => session.id),
-  sessionIds => {
+  () => {
     layoutMenuOpen.value = false
-    if (canvas.maximizedSessionId.value && !sessionIds.includes(canvas.maximizedSessionId.value)) canvas.restore()
   },
 )
 watch(
@@ -136,8 +120,8 @@ watch(
 </script>
 
 <template>
-  <section class="shell-canvas" :class="{ focused, empty: isLive && currentSessions.length === 0 }">
-    <header v-show="!focused && (currentSessions.length > 0 || !isLive)" class="shell-toolbar-content">
+  <section class="shell-canvas" :class="{ empty: isLive && currentSessions.length === 0 }">
+    <header v-show="currentSessions.length > 0 || !isLive" class="shell-toolbar-content">
       <SessionTabs
         v-if="isLive && currentSessions.length"
         :sessions="currentSessions"
@@ -176,6 +160,11 @@ watch(
             <option v-for="value in 4" :key="value" :value="value">{{ value }}</option>
           </select>
         </label>
+        <label>Shell 字体大小
+          <select :value="layout.state.fontSize" @change="updateLayout('fontSize', $event)">
+            <option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option>
+          </select>
+        </label>
         <label>单行高度（占工作区）
           <select :value="layout.state.rowHeightPercent" @change="updateLayout('rowHeightPercent', $event)">
             <option v-for="preset in SHELL_ROW_HEIGHT_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option>
@@ -184,7 +173,7 @@ watch(
         <span>{{ layoutSummary }}</span>
       </section>
     </header>
-    <section v-if="historyHosts.length" v-show="!focused" class="history-shell-toolbar" aria-label="历史 Shell 连接">
+    <section v-if="historyHosts.length" class="history-shell-toolbar" aria-label="历史 Shell 连接">
       <div class="history-shell-heading"><strong>历史 Shell 连接</strong><span>{{ selectedHistoryHosts.length }} / {{ historyHosts.length }} 台已选择</span></div>
       <div class="history-shell-tabs">
         <div v-for="host in historyHosts" :key="host.hostname" class="history-host-item">
@@ -213,6 +202,7 @@ watch(
         <strong>历史 Shell 布局</strong>
         <label>当前展示数量<select :value="layout.state.visibleCount" @change="updateLayout('visibleCount', $event)"><option v-for="value in 4" :key="value" :value="value">{{ value }}</option></select></label>
         <label>每行数量<select :value="layout.state.columns" @change="updateLayout('columns', $event)"><option v-for="value in 4" :key="value" :value="value">{{ value }}</option></select></label>
+        <label>Shell 字体大小<select :value="layout.state.fontSize" @change="updateLayout('fontSize', $event)"><option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option></select></label>
         <label>单行高度（占工作区）<select :value="layout.state.rowHeightPercent" @change="updateLayout('rowHeightPercent', $event)"><option v-for="preset in SHELL_ROW_HEIGHT_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option></select></label>
       </section>
     </section>
@@ -231,7 +221,6 @@ watch(
           v-show="paneVisible(session.id)"
           :key="session.id"
           class="terminal-frame"
-          :class="{ maximized: canvas.maximizedSessionId.value === session.id }"
           @contextmenu.prevent="openTerminalMenu(session.id)"
         >
           <header>
@@ -239,12 +228,6 @@ watch(
             <span>已连接</span>
             <div class="terminal-actions">
               <button type="button" :aria-label="`查看 Shell 历史 ${sessionDisplayLabel(session, currentSessions)}`" title="历史会话" @click="openSessionHistory(session)"><History :size="14" aria-hidden="true" /></button>
-              <button
-                type="button"
-                :aria-label="`${canvas.maximizedSessionId.value === session.id ? '还原' : '最大化'}终端会话 ${sessionDisplayLabel(session, currentSessions)}`"
-                :title="canvas.maximizedSessionId.value === session.id ? '还原' : '最大化'"
-                @click="toggleMaximize(session.id)"
-              ><Minimize2 v-if="canvas.maximizedSessionId.value === session.id" :size="14" aria-hidden="true" /><Maximize2 v-else :size="14" aria-hidden="true" /></button>
               <button type="button" :aria-label="`终端操作 ${sessionDisplayLabel(session, currentSessions)}`" title="终端操作" @click="openTerminalMenu(session.id)"><MoreHorizontal :size="15" aria-hidden="true" /></button>
               <button type="button" :aria-label="`关闭画布终端会话 ${sessionDisplayLabel(session, currentSessions)}`" title="关闭 Shell" class="close-terminal" @click="closeSession(session.id)"><X :size="15" aria-hidden="true" /></button>
             </div>
@@ -254,7 +237,7 @@ watch(
             <button type="button" role="menuitem" disabled title="仅已关闭且仍保留安全连接描述的 Shell 可以重新连接">重新连接</button>
             <button type="button" role="menuitem" @click="openSessionHistory(session)">查看 Shell 历史</button>
           </section>
-          <TerminalPane :session="session" :active="session.id === activeSessionId" @activate="selectSession(session.id)" />
+          <TerminalPane :session="session" :active="session.id === activeSessionId" :font-size="layout.state.fontSize" @activate="selectSession(session.id)" />
         </article>
       </section>
 
@@ -266,8 +249,6 @@ watch(
 
 <style scoped>
 .shell-canvas { position: relative; display: grid; grid-template-rows: 42px auto minmax(0, 1fr); width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
-.shell-canvas.focused { grid-template-rows: minmax(0, 1fr); }
-.shell-canvas.focused .canvas-content { grid-row: 1; }
 .shell-canvas.empty { grid-template-rows: minmax(0, 1fr); }
 .shell-canvas.empty .canvas-content { grid-row: 1; }
 .shell-toolbar-content { position: relative; display: flex; align-items: stretch; min-width: 0; height: 42px; border-bottom: 1px solid var(--line); background: var(--panel); }
@@ -296,7 +277,6 @@ watch(
 .terminal-actions button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); }
 .terminal-actions button:hover,.terminal-actions button:focus-visible { background: var(--hover); color: var(--text-strong); }.terminal-actions .close-terminal:hover { color: var(--red); }
 .terminal-frame :deep(.terminal-pane) { height: 100%; border: 0; }
-.terminal-frame.maximized { grid-column: 1 / -1; height: 100%; }
 .terminal-context-menu { position: absolute; z-index: 9; top: 36px; right: 5px; display: grid; min-width: 154px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
 .terminal-context-menu button { min-height: 29px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 11px; text-align: left; }.terminal-context-menu button:hover,.terminal-context-menu button:focus-visible { background: var(--surface-soft); outline: 1px solid var(--accent); }.terminal-context-menu button:disabled { color: var(--muted); cursor: not-allowed; }
 .empty-slot,.history-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; }

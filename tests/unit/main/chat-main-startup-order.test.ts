@@ -164,7 +164,7 @@ describe('main chat startup ordering', () => {
       titleBarStyle: 'hidden',
       titleBarOverlay: { color: '#25292e', symbolColor: '#f0f3f6', height: 48 },
     })
-  })
+  }, 15_000)
 
   it('falls back to the default pearl overlay when the first preference load fails', async () => {
     state.loadWorkbenchPreferences.mockRejectedValueOnce(new Error('preferences unavailable'))

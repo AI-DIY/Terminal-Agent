@@ -10,6 +10,23 @@ const { handle, removeHandler } = vi.hoisted(() => ({ handle: vi.fn(), removeHan
 vi.mock('electron', () => ({ ipcMain: { handle, removeHandler } }))
 
 describe('ShellHistoryService', () => {
+  it('uses the final observed hostname as the persisted history key', async () => {
+    const repository = createRepository()
+    const service = new ShellHistoryService(repository, { createId: () => 'history-observed-hostname' })
+    service.attach({
+      sessionId: 'session-observed-hostname', chatId: 'chat-observed-hostname', hostname: '127.0.0.1', title: 'bastion-web',
+      connectionType: 'access-client-ssh', startedAt: '2026-08-16T08:00:00.000Z',
+    })
+
+    await service.close({
+      sessionId: 'session-observed-hostname', hostname: 'api-prod', endedAt: '2026-08-16T08:01:00.000Z',
+    })
+
+    expect(repository.saved[0]).toMatchObject({ hostname: 'api-prod', title: 'bastion-web' })
+    await expect(service.list({ hostname: 'api-prod' })).resolves.toHaveLength(1)
+    await expect(service.list({ hostname: '127.0.0.1' })).resolves.toHaveLength(0)
+  })
+
   it('keeps output in order, truncates one record to 256 KiB, and redacts secrets before persistence', async () => {
     const repository = createRepository()
     const service = new ShellHistoryService(repository, { createId: () => 'history-a' })

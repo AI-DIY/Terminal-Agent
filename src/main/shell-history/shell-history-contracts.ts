@@ -113,6 +113,7 @@ export type ShellHistoryAudit = z.infer<typeof shellHistoryAuditSchema>
 
 export const shellHistoryCloseSchema = z.object({
   sessionId: terminalSessionIdSchema,
+  hostname: hostnameSchema.optional(),
   endedAt: chatTimestampSchema,
 }).strict()
 export type ShellHistoryClose = z.infer<typeof shellHistoryCloseSchema>

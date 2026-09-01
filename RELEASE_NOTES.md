@@ -1,3 +1,28 @@
+# Terminal-Agent v2.0.5
+
+Release date: 2026-08-31
+
+## 安装与 AccessClient 快速开始
+
+- 重写中文 README，并新增带截图的 AccessClient 安装、原始 `putty.exe` 备份、桥接程序替换和堡垒机会话配置指引。
+- Release 随附独立的 `quick-start.pdf`，将图文说明嵌入 PDF，下载后无需依赖仓库中的图片路径。
+
+## 工作台微调
+
+- “设置 → 外观”和 Shell 工作区的“布局”菜单新增持久化字体大小设置；保留原有 `13px` 为默认最大值，并可缩小至 `12px` 或 `11px`。
+- Shell 单行高度新增并默认使用“占满（100%）”；移除单个 Shell 的最大化/还原按钮，多个连接继续按布局同时展示。
+- Shell 历史优先以已观测的真实主机名归档和筛选，避免 AccessClient 堡垒机或中转地址导致同一主机被拆分。
+- AI 输入框改为裸 `Enter` 发送，`Shift+Enter`、`Ctrl+Enter`、`Alt+Enter` 和 `Meta+Enter` 保持换行；输入法组合态不会误发。
+- 恢复可展开的上下文详情入口，并将“正在思考”等运行状态紧贴在触发该轮的用户问题下方。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-2.0.5.exe`
+- `putty.exe`
+- `quick-start.pdf`
+
+---
+
 # Terminal-Agent v2.0.4
 
 Release date: 2026-08-30
