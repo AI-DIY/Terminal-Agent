@@ -4,6 +4,26 @@ import { Ssh2ClientAdapter } from '../../../src/main/ssh/ssh2-client-adapter'
 const state = vi.hoisted(() => {
   const sftp = {
     end: vi.fn(),
+    readdir: vi.fn((_remote: string, callback: (error?: Error, entries?: unknown[]) => void) => {
+      callback(undefined, [
+        {
+          filename: 'logs',
+          longname: 'drwxr-xr-x 2 ops ops 4096 Jan 1 00:00 logs',
+          attrs: {
+            mode: 0o40755, uid: 1000, gid: 1000, size: 4096, atime: 0, mtime: 1_700_000_000,
+            isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false,
+          },
+        },
+        {
+          filename: 'report.txt',
+          longname: '-rw-r--r-- 1 ops ops 4 Jan 1 00:00 report.txt',
+          attrs: {
+            mode: 0o100644, uid: 1000, gid: 1000, size: 4, atime: 0, mtime: 1_700_000_001,
+            isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false,
+          },
+        },
+      ])
+    }),
     fastPut: vi.fn((_local: string, _remote: string, options: { step?: (total: number, chunk: number, size: number) => void }, callback: (error?: Error | null) => void) => {
       options.step?.(4, 4, 4)
       callback()
@@ -55,11 +75,40 @@ describe('Ssh2ClientAdapter SFTP transfer channel', () => {
     expect(state.client.shell).not.toHaveBeenCalled()
   })
 
+  it('lists remote directory metadata over a separate SFTP channel', async () => {
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+
+    await expect(connection.fileTransfer?.listDirectory?.('/var/log')).resolves.toEqual([
+      {
+        name: 'logs', kind: 'directory', size: 4096, modifiedAt: '2023-11-14T22:13:20.000Z', mode: 0o755, uid: 1000, gid: 1000,
+      },
+      {
+        name: 'report.txt', kind: 'file', size: 4, modifiedAt: '2023-11-14T22:13:21.000Z', mode: 0o644, uid: 1000, gid: 1000,
+      },
+    ])
+    expect(state.client.sftp).toHaveBeenCalled()
+    expect(state.sftp.readdir).toHaveBeenCalledWith('/var/log', expect.any(Function))
+  })
+
   it('rejects an SFTP setup error without ending the interactive client', async () => {
     state.client.sftp.mockImplementationOnce((callback: (error: Error | null, value: typeof state.sftp) => void) => callback(new Error('subsystem unavailable'), state.sftp))
     const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
 
     await expect(connection.fileTransfer?.uploadFile('C:/report.txt', '/tmp/report.txt')).rejects.toThrow('subsystem unavailable')
     expect(state.client.end).not.toHaveBeenCalled()
+  })
+
+  it('rejects instead of leaving the invoke pending when a transfer callback never arrives', async () => {
+    vi.useFakeTimers()
+    state.sftp.fastGet.mockImplementationOnce(() => undefined)
+    try {
+      const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+      const pending = connection.fileTransfer?.downloadFile('/tmp/archive.zip', 'C:/archive.zip')
+      const rejection = expect(pending).rejects.toThrow('SFTP 操作超时')
+      await vi.advanceTimersByTimeAsync(30_000)
+      await rejection
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

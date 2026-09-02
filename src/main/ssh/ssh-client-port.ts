@@ -20,12 +20,26 @@ export type SshFileTransferProgress = {
   totalBytes?: number
 }
 
+export type SshDirectoryEntryKind = 'file' | 'directory' | 'symlink' | 'other'
+
+export type SshDirectoryEntry = {
+  name: string
+  kind: SshDirectoryEntryKind
+  size: number
+  modifiedAt?: string
+  mode?: number
+  uid?: number
+  gid?: number
+}
+
 /**
  * SFTP is optional because the raw AccessClient bridge is a TCP stream and
  * cannot provide a file-transfer subsystem.  Implementations must use a
  * separate SFTP channel so an active interactive shell is left untouched.
  */
 export type SshFileTransfer = {
+  /** Optional for older/custom transports that only implement file copies. */
+  listDirectory?(remotePath: string): Promise<readonly SshDirectoryEntry[]>
   uploadFile(
     localPath: string,
     remotePath: string,

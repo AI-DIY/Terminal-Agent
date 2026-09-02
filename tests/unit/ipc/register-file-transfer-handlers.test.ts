@@ -16,6 +16,29 @@ describe('registerFileTransferHandlers', () => {
     removeHandler.mockReset()
   })
 
+  it('lists remote directory metadata through the active session without opening a native dialog', async () => {
+    const sender = createSender()
+    const listDirectory = vi.fn().mockResolvedValue([
+      { name: 'logs', kind: 'directory', size: 4_096, modifiedAt: '2023-11-14T22:13:20.000Z', mode: 0o755, uid: 1000, gid: 1000 },
+      { name: 'report.txt', kind: 'file', size: 4 },
+    ])
+    registerFileTransferHandlers({ listDirectory, uploadFile: vi.fn(), downloadFile: vi.fn() }, sender as never)
+
+    const result = await handlerFor('file-transfer:list')(trustedEvent(sender), {
+      sessionId: 'session-1', remotePath: '/tmp',
+    })
+    expect(result).toEqual({
+      sessionId: 'session-1',
+      remotePath: '/tmp',
+      entries: expect.arrayContaining([
+        expect.objectContaining({ name: 'logs', kind: 'directory' }),
+        expect.objectContaining({ name: 'report.txt', kind: 'file' }),
+      ]),
+    })
+    expect(listDirectory).toHaveBeenCalledWith('session-1', '/tmp')
+    expect(sender.send).not.toHaveBeenCalled()
+  })
+
   it('keeps native file selection in the main process and reports upload progress', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-transfer-'))
     const localPath = join(directory, 'report.txt')
@@ -49,6 +72,26 @@ describe('registerFileTransferHandlers', () => {
     }
   })
 
+  it('appends the selected basename when upload target denotes a remote directory', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-transfer-directory-'))
+    const localPath = join(directory, 'release package.txt')
+    await writeFile(localPath, 'data', 'utf8')
+    const sender = createSender()
+    const uploadFile = vi.fn().mockResolvedValue(4)
+    registerFileTransferHandlers({ uploadFile, downloadFile: vi.fn() }, sender as never, {
+      selectUploadFile: vi.fn().mockResolvedValue({ canceled: false, filePath: localPath }),
+    })
+
+    try {
+      await handlerFor('file-transfer:upload')(trustedEvent(sender), {
+        sessionId: 'session-1', remotePath: '/tmp/incoming/',
+      })
+      expect(uploadFile).toHaveBeenCalledWith('session-1', localPath, '/tmp/incoming/release package.txt', expect.any(Function))
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('returns a typed canceled result when the user closes the save dialog', async () => {
     const sender = createSender()
     const downloadFile = vi.fn()
@@ -64,6 +107,26 @@ describe('registerFileTransferHandlers', () => {
     expect(sender.send.mock.calls.at(-1)?.[1]).toMatchObject({ phase: 'canceled' })
   })
 
+  it('still settles the transfer when a progress notification cannot reach the renderer', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-transfer-renderer-'))
+    const localPath = join(directory, 'report.txt')
+    await writeFile(localPath, 'data', 'utf8')
+    const sender = createSender()
+    sender.send.mockImplementation(() => { throw new Error('renderer gone') })
+    const uploadFile = vi.fn().mockResolvedValue(4)
+    registerFileTransferHandlers({ uploadFile, downloadFile: vi.fn() }, sender as never, {
+      selectUploadFile: vi.fn().mockResolvedValue({ canceled: false, filePath: localPath }),
+    })
+
+    try {
+      await expect(handlerFor('file-transfer:upload')(trustedEvent(sender), {
+        sessionId: 'session-1', remotePath: '/tmp/report.txt',
+      })).resolves.toMatchObject({ status: 'completed', transferredBytes: 4 })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('rejects untrusted renderers before opening a dialog or invoking a session', async () => {
     const sender = createSender()
     const selectUploadFile = vi.fn()
@@ -77,11 +140,22 @@ describe('registerFileTransferHandlers', () => {
     expect(uploadFile).not.toHaveBeenCalled()
   })
 
+  it('rejects an untrusted directory listing before invoking the session', async () => {
+    const sender = createSender()
+    const listDirectory = vi.fn()
+    registerFileTransferHandlers({ listDirectory, uploadFile: vi.fn(), downloadFile: vi.fn() }, sender as never)
+
+    await expect(handlerFor('file-transfer:list')({ sender: createSender() }, {
+      sessionId: 'session-1', remotePath: '/tmp',
+    })).rejects.toThrow('Untrusted renderer')
+    expect(listDirectory).not.toHaveBeenCalled()
+  })
+
   it('removes both transfer handlers on dispose', () => {
     const dispose = registerFileTransferHandlers({ uploadFile: vi.fn(), downloadFile: vi.fn() }, createSender() as never)
     dispose()
     dispose()
-    expect(removeHandler.mock.calls.map(([channel]) => channel)).toEqual(['file-transfer:upload', 'file-transfer:download'])
+    expect(removeHandler.mock.calls.map(([channel]) => channel)).toEqual(['file-transfer:list', 'file-transfer:upload', 'file-transfer:download'])
   })
 })
 

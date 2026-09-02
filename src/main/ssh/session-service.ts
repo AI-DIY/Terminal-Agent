@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import { AccessClientLaunchFailure } from '../access-client/launch-failure'
 import type { PrivateKeyInput } from './private-key-loader'
-import type { SshClientPort, SshConnection, SshFileTransferProgress, SshShell } from './ssh-client-port'
+import type { SshClientPort, SshConnection, SshDirectoryEntry, SshFileTransferProgress, SshShell } from './ssh-client-port'
 import { MainProcessReconnectDescriptorStore } from './direct-session-repository'
 import { normalizeSafeHostMemoryConnectionIp } from '../../shared/host-memory-safety'
 
@@ -341,6 +341,13 @@ export class SessionService {
 
   supportsFileTransfer(sessionId: string): boolean {
     return Boolean(this.sessions.get(sessionId)?.connection.fileTransfer)
+  }
+
+  async listDirectory(sessionId: string, remotePath: string): Promise<readonly SshDirectoryEntry[]> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('Unknown terminal session')
+    if (!session.connection.fileTransfer?.listDirectory) throw new Error('当前 SSH 会话不支持 SFTP 文件传输。')
+    return session.connection.fileTransfer.listDirectory(remotePath)
   }
 
   async uploadFile(

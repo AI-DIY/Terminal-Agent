@@ -6,10 +6,14 @@ import {
   FILE_TRANSFER_MAX_BYTES,
   fileTransferChannels,
   fileTransferDownloadRequestSchema,
+  fileTransferListRequestSchema,
+  fileTransferListResultSchema,
   fileTransferProgressSchema,
   fileTransferResultSchema,
   fileTransferUploadRequestSchema,
   type FileTransferDirection,
+  type FileTransferDirectoryEntry,
+  type FileTransferListResult,
   type FileTransferProgress,
   type FileTransferResult,
 } from '../../shared/file-transfer-contracts'
@@ -22,6 +26,7 @@ export type FileTransferDialogDependencies = {
 }
 
 type FileTransferSource = {
+  listDirectory?(sessionId: string, remotePath: string): Promise<readonly FileTransferDirectoryEntry[]>
   uploadFile(sessionId: string, localPath: string, remotePath: string, onProgress: (progress: { transferredBytes: number; totalBytes?: number }) => void): Promise<number>
   downloadFile(sessionId: string, remotePath: string, localPath: string, onProgress: (progress: { transferredBytes: number; totalBytes?: number }) => void): Promise<number>
 }
@@ -55,6 +60,22 @@ export function registerFileTransferHandlers(
   dependencies: Partial<FileTransferDialogDependencies> = {},
 ): () => void {
   const dialogs = { ...defaultDialogDependencies, ...dependencies }
+
+  ipcMain.handle(fileTransferChannels.list, async (event, request: unknown): Promise<FileTransferListResult> => {
+    assertTrustedSender(event, trustedSender)
+    const parsed = fileTransferListRequestSchema.safeParse(request)
+    if (!parsed.success) throw new Error('远程目录请求无效。')
+    if (!sessions.listDirectory) throw new Error('当前 SSH 会话不支持 SFTP 文件传输。')
+    try {
+      return fileTransferListResultSchema.parse({
+        sessionId: parsed.data.sessionId,
+        remotePath: parsed.data.remotePath,
+        entries: await sessions.listDirectory(parsed.data.sessionId, parsed.data.remotePath),
+      })
+    } catch (error) {
+      throw new Error(publicDirectoryError(error), { cause: error })
+    }
+  })
 
   ipcMain.handle(fileTransferChannels.upload, async (event, request: unknown): Promise<FileTransferResult> => {
     assertTrustedSender(event, trustedSender)
@@ -97,6 +118,7 @@ export function registerFileTransferHandlers(
     try {
       const localPath = await validateUploadPath(selected.filePath)
       const fileName = displayFileName(localPath)
+      const remoteTarget = uploadRemoteTarget(parsed.data.remotePath, fileName)
       emitProgress(trustedSender, {
         transferId,
         sessionId: parsed.data.sessionId,
@@ -109,7 +131,7 @@ export function registerFileTransferHandlers(
       const transferredBytes = await sessions.uploadFile(
         parsed.data.sessionId,
         localPath,
-        parsed.data.remotePath,
+        remoteTarget,
         progress => emitProgress(trustedSender, {
           transferId,
           sessionId: parsed.data.sessionId,
@@ -220,6 +242,7 @@ export function registerFileTransferHandlers(
   return () => {
     if (disposed) return
     disposed = true
+    ipcMain.removeHandler(fileTransferChannels.list)
     ipcMain.removeHandler(fileTransferChannels.upload)
     ipcMain.removeHandler(fileTransferChannels.download)
   }
@@ -236,7 +259,11 @@ function emitProgress(sender: WebContents, value: FileTransferProgress): void {
     ...(value.totalBytes === undefined ? {} : { totalBytes: boundedBytes(value.totalBytes) }),
   })
   if (typeof sender.isDestroyed === 'function' && sender.isDestroyed()) return
-  sender.send(fileTransferChannels.progress, parsed)
+  // A renderer can close while a native dialog or SFTP operation is active.
+  // Progress is best-effort; swallowing a send failure keeps the in-flight
+  // invoke handler able to settle its promise instead of producing Electron's
+  // misleading "reply was never sent" error.
+  try { sender.send(fileTransferChannels.progress, parsed) } catch { /* Renderer already gone. */ }
 }
 
 function failTransfer(
@@ -300,6 +327,16 @@ function remoteBaseName(remotePath: string): string {
   return name || 'download.bin'
 }
 
+function uploadRemoteTarget(remotePath: string, fileName: string): string {
+  // The browser uses a trailing slash to represent "upload into this
+  // directory".  Resolve that form in the main process after the native file
+  // picker returns the basename; callers cannot inject shell syntax here
+  // because the path is passed directly to SFTP.
+  if (!/[\\/]$/.test(remotePath)) return remotePath
+  if (remotePath === '/' || remotePath === '\\') return `/${fileName}`
+  return `${remotePath}${fileName}`
+}
+
 function safeSuggestedFileName(value: string): string {
   const name = displayFileName(value).replace(/[<>:"/\\|?*]/g, '_').trim()
   return !name || name === '.' || name === '..' ? 'download.bin' : name
@@ -318,4 +355,12 @@ function publicTransferError(direction: FileTransferDirection, error: unknown): 
   return direction === 'upload'
     ? '文件上传失败，请检查 SSH 连接和远程路径。'
     : '文件下载失败，请检查 SSH 连接和远程路径。'
+}
+
+function publicDirectoryError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  if (raw.includes('当前 SSH 会话不支持')) return raw
+  if (raw.includes('Unknown terminal session')) return 'SSH 会话已关闭，请重新连接后重试。'
+  if (raw.includes('目录条目过多')) return raw
+  return '远程目录读取失败，请检查 SSH 连接和远程路径。'
 }

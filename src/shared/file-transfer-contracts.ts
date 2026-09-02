@@ -7,6 +7,8 @@ import { terminalSessionIdSchema } from './contracts'
  */
 export const FILE_TRANSFER_MAX_BYTES = 2 * 1024 * 1024 * 1024
 export const FILE_TRANSFER_MAX_PATH_LENGTH = 4_096
+/** A directory response is metadata-only and is intentionally bounded. */
+export const FILE_TRANSFER_MAX_DIRECTORY_ENTRIES = 10_000
 
 export const fileTransferIdSchema = z.string().uuid()
 export const fileTransferDirectionSchema = z.enum(['upload', 'download'])
@@ -39,6 +41,44 @@ export const fileTransferDownloadRequestSchema = z.object({
 }).strict()
 export type FileTransferDownloadRequest = z.infer<typeof fileTransferDownloadRequestSchema>
 
+export const fileTransferEntryKindSchema = z.enum(['file', 'directory', 'symlink', 'other'])
+export type FileTransferEntryKind = z.infer<typeof fileTransferEntryKindSchema>
+
+/**
+ * Metadata returned by a remote SFTP directory listing.  Names are validated
+ * as single path components so a renderer cannot accidentally turn an entry
+ * into a path traversal when it navigates or starts a transfer.
+ */
+export const fileTransferDirectoryEntrySchema = z.object({
+  name: z.string().min(1).max(255)
+    .refine(value => value.trim().length > 0, '远程文件名无效。')
+    .refine(value => value !== '.' && value !== '..', '远程文件名无效。')
+    .refine(value => !/[\\/]/.test(value), '远程文件名无效。')
+    .refine(value => !containsControlCharacters(value), '远程文件名包含不可用字符。'),
+  kind: fileTransferEntryKindSchema,
+  // Listing is metadata-only, so a large remote file remains visible even
+  // when it exceeds the per-transfer size limit.
+  size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  modifiedAt: z.string().datetime({ offset: true }).optional(),
+  mode: z.number().int().nonnegative().max(0o7777).optional(),
+  uid: z.number().int().nonnegative().max(0xffffffff).optional(),
+  gid: z.number().int().nonnegative().max(0xffffffff).optional(),
+}).strict()
+export type FileTransferDirectoryEntry = z.infer<typeof fileTransferDirectoryEntrySchema>
+
+export const fileTransferListRequestSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  remotePath: fileTransferRemotePathSchema,
+}).strict()
+export type FileTransferListRequest = z.infer<typeof fileTransferListRequestSchema>
+
+export const fileTransferListResultSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  remotePath: fileTransferRemotePathSchema,
+  entries: z.array(fileTransferDirectoryEntrySchema).max(FILE_TRANSFER_MAX_DIRECTORY_ENTRIES),
+}).strict()
+export type FileTransferListResult = z.infer<typeof fileTransferListResultSchema>
+
 export const fileTransferProgressSchema = z.object({
   transferId: fileTransferIdSchema,
   sessionId: terminalSessionIdSchema,
@@ -64,6 +104,7 @@ export type FileTransferResult = z.infer<typeof fileTransferResultSchema>
 export const fileTransferChannels = Object.freeze({
   upload: 'file-transfer:upload',
   download: 'file-transfer:download',
+  list: 'file-transfer:list',
   progress: 'file-transfer:progress',
 } as const)
 

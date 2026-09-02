@@ -1,10 +1,17 @@
 import { Client } from 'ssh2'
-import type { ClientChannel, SFTPWrapper, TransferOptions } from 'ssh2'
+import type { ClientChannel, FileEntryWithStats, SFTPWrapper, TransferOptions } from 'ssh2'
 import { StringDecoder } from 'node:string_decoder'
 import { isIP } from 'node:net'
 import { stat } from 'node:fs/promises'
-import type { SshClientPort, SshConnectOptions, SshConnection, SshShell } from './ssh-client-port'
+import { FILE_TRANSFER_MAX_DIRECTORY_ENTRIES } from '../../shared/file-transfer-contracts'
+import type { SshClientPort, SshConnectOptions, SshConnection, SshDirectoryEntry, SshShell } from './ssh-client-port'
 import type { SshFileTransferProgress } from './ssh-client-port'
+
+// A server that does not implement the SFTP subsystem can otherwise leave an
+// invoke promise pending forever.  Bound both channel setup and operations so
+// the renderer receives a normal rejection instead of Electron's
+// "reply was never sent" diagnostic.
+const SFTP_OPERATION_TIMEOUT_MS = 30_000
 
 export class Ssh2ClientAdapter implements SshClientPort {
   async connect(options: SshConnectOptions): Promise<SshConnection> {
@@ -23,6 +30,7 @@ export class Ssh2ClientAdapter implements SshClientPort {
       // SFTP opens an independent SSH channel.  The PTY channel returned by
       // openShell remains alive while either operation is in progress.
       fileTransfer: {
+        listDirectory: remotePath => listDirectory(client, remotePath),
         uploadFile: (localPath, remotePath, onProgress) => transferFile(client, 'upload', localPath, remotePath, onProgress),
         downloadFile: (remotePath, localPath, onProgress) => transferFile(client, 'download', remotePath, localPath, onProgress),
       },
@@ -56,9 +64,11 @@ async function transferFile(
   let settled = false
 
   return await new Promise<number>((resolve, reject) => {
+    const timeout = setTimeout(() => finish(new Error('SFTP 操作超时，请检查远程服务是否启用 SFTP。')), SFTP_OPERATION_TIMEOUT_MS)
     const finish = (error?: Error | null): void => {
       if (settled) return
       settled = true
+      if (timeout) clearTimeout(timeout)
       try { sftp.end() } catch { /* The channel may already be closed. */ }
       if (error) {
         reject(error)
@@ -79,10 +89,21 @@ async function transferFile(
       // monotonic value even with unusual server implementations.
       lastTransferred = Math.max(lastTransferred, Number.isFinite(total) ? Math.max(0, Math.floor(total)) : 0)
       const totalBytes = Number.isFinite(fileSize) && fileSize >= 0 ? Math.floor(fileSize) : undefined
-      onProgress?.({ transferredBytes: lastTransferred, ...(totalBytes === undefined ? {} : { totalBytes }) })
+      try {
+        onProgress?.({ transferredBytes: lastTransferred, ...(totalBytes === undefined ? {} : { totalBytes }) })
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)))
+      }
     }
     const options: TransferOptions = { step }
     const callback = (error?: Error | null): void => finish(error)
+    const onSftpError = (error: unknown): void => finish(error instanceof Error ? error : new Error(String(error)))
+    const onSftpClose = (): void => {
+      if (!settled) finish(new Error('SFTP channel closed before transfer completed'))
+    }
+    listenSftpEvent(sftp, 'error', onSftpError)
+    listenSftpEvent(sftp, 'close', onSftpClose)
+    timeout.unref?.()
     try {
       if (direction === 'upload') sftp.fastPut(sourcePath, targetPath, options, callback)
       else sftp.fastGet(sourcePath, targetPath, options, callback)
@@ -94,18 +115,145 @@ async function transferFile(
 
 function openSftp(client: Client): Promise<SFTPWrapper> {
   return new Promise((resolve, reject) => {
+    let settled = false
+    const timeout = setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(new Error('SFTP 通道建立超时，请检查远程服务是否启用 SFTP。'))
+    }, SFTP_OPERATION_TIMEOUT_MS)
+    timeout.unref?.()
+    const finish = (error?: Error, sftp?: SFTPWrapper): void => {
+      if (settled) {
+        if (sftp) {
+          try { sftp.end() } catch { /* The late channel is already closed. */ }
+        }
+        return
+      }
+      settled = true
+      clearTimeout(timeout)
+      if (error) reject(error)
+      else if (!sftp) reject(new Error('SSH server returned no SFTP channel'))
+      else resolve(sftp)
+    }
     try {
       client.sftp((error, sftp) => {
         if (error) {
-          reject(error)
+          finish(error)
           return
         }
-        resolve(sftp)
+        finish(undefined, sftp)
       })
     } catch (error) {
-      reject(error instanceof Error ? error : new Error(String(error)))
+      finish(error instanceof Error ? error : new Error(String(error)))
     }
   })
+}
+
+async function listDirectory(client: Client, remotePath: string): Promise<readonly SshDirectoryEntry[]> {
+  const sftp = await openSftp(client)
+  return await new Promise<readonly SshDirectoryEntry[]>((resolve, reject) => {
+    let settled = false
+    const timeout = setTimeout(() => finish(new Error('SFTP 目录读取超时，请检查远程服务是否启用 SFTP。')), SFTP_OPERATION_TIMEOUT_MS)
+    const finish = (error?: Error, entries?: readonly SshDirectoryEntry[]): void => {
+      if (settled) return
+      settled = true
+      if (timeout) clearTimeout(timeout)
+      try { sftp.end() } catch { /* The channel may already be closed. */ }
+      if (error) reject(error)
+      else resolve(entries ?? [])
+    }
+
+    const onError = (error: unknown): void => finish(error instanceof Error ? error : new Error(String(error)))
+    const onClose = (): void => {
+      if (!settled) finish(new Error('SFTP channel closed before directory listing completed'))
+    }
+    listenSftpEvent(sftp, 'error', onError)
+    listenSftpEvent(sftp, 'close', onClose)
+    timeout.unref?.()
+    try {
+      sftp.readdir(remotePath, (error, entries) => {
+        if (error) {
+          finish(error)
+          return
+        }
+        if (!entries) {
+          finish(new Error('SFTP server returned no directory listing'))
+          return
+        }
+        if (entries.length > FILE_TRANSFER_MAX_DIRECTORY_ENTRIES) {
+          finish(new Error('远程目录条目过多，请缩小目录范围后重试。'))
+          return
+        }
+        try {
+          finish(undefined, entries.map(toDirectoryEntry).filter((entry): entry is SshDirectoryEntry => entry !== undefined))
+        } catch (conversionError) {
+          finish(conversionError instanceof Error ? conversionError : new Error(String(conversionError)))
+        }
+      })
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+}
+
+function toDirectoryEntry(entry: FileEntryWithStats): SshDirectoryEntry | undefined {
+  const name = typeof entry.filename === 'string' ? entry.filename : ''
+  if (!name || !name.trim() || name === '.' || name === '..' || name.length > 255 || /[\\/]/.test(name) || containsControlCharacters(name)) {
+    return undefined
+  }
+  const attrs = entry.attrs
+  const kind = isAttrKind(attrs, 'directory')
+    ? 'directory'
+    : isAttrKind(attrs, 'file')
+      ? 'file'
+      : isAttrKind(attrs, 'symlink')
+        ? 'symlink'
+        : 'other'
+  const size = finiteNonNegativeInteger(attrs.size) ?? 0
+  const modifiedAt = toIsoTimestamp(attrs.mtime)
+  const mode = finiteNonNegativeInteger(attrs.mode)
+  const uid = finiteNonNegativeInteger(attrs.uid)
+  const gid = finiteNonNegativeInteger(attrs.gid)
+  return {
+    name,
+    kind,
+    size,
+    ...(modifiedAt ? { modifiedAt } : {}),
+    ...(mode === undefined ? {} : { mode: mode & 0o7777 }),
+    ...(uid === undefined ? {} : { uid }),
+    ...(gid === undefined ? {} : { gid }),
+  }
+}
+
+function isAttrKind(attrs: FileEntryWithStats['attrs'], kind: 'directory' | 'file' | 'symlink'): boolean {
+  const method = kind === 'directory' ? attrs.isDirectory : kind === 'file' ? attrs.isFile : attrs.isSymbolicLink
+  return typeof method === 'function' ? method.call(attrs) : false
+}
+
+function listenSftpEvent(
+  sftp: SFTPWrapper,
+  event: 'error' | 'close',
+  listener: (...args: unknown[]) => void,
+): void {
+  const candidate = sftp as SFTPWrapper & { once?: (name: string, callback: (...args: unknown[]) => void) => unknown }
+  if (typeof candidate.once === 'function') candidate.once(event, listener)
+}
+
+function finiteNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+function toIsoTimestamp(value: unknown): string | undefined {
+  const seconds = typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  if (seconds === undefined) return undefined
+  const milliseconds = seconds * 1_000
+  if (!Number.isFinite(milliseconds)) return undefined
+  const date = new Date(milliseconds)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
+function containsControlCharacters(value: string): boolean {
+  return [...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
 }
 
 function executeCommand(client: Client, command: string, maxOutputBytes = 256 * 1024): Promise<string> {

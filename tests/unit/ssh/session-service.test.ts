@@ -599,6 +599,63 @@ describe('SessionService', () => {
 
     expect(connection.execute).toHaveBeenCalledWith('hostname', 256 * 1024)
   })
+
+  it('routes remote directory listings through the active SSH connection', async () => {
+    const shell = createShell()
+    const fileTransfer = {
+      listDirectory: vi.fn().mockResolvedValue([
+        { name: 'report.txt', kind: 'file' as const, size: 4 },
+      ]),
+      uploadFile: vi.fn(),
+      downloadFile: vi.fn(),
+    }
+    const connection = {
+      close: vi.fn(),
+      openShell: vi.fn().mockResolvedValue(shell),
+      fileTransfer,
+    }
+    const service = new SessionService({ connect: vi.fn().mockResolvedValue(connection) }, { load: vi.fn() })
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    await expect(service.listDirectory(session.id, '/tmp')).resolves.toEqual([
+      { name: 'report.txt', kind: 'file', size: 4 },
+    ])
+    expect(service.supportsFileTransfer(session.id)).toBe(true)
+    expect(fileTransfer.listDirectory).toHaveBeenCalledWith('/tmp')
+  })
+
+  it('keeps SFTP available for AccessClient SSH while leaving Raw bridge sessions unsupported', async () => {
+    const accessFileTransfer = {
+      listDirectory: vi.fn().mockResolvedValue([]),
+      uploadFile: vi.fn(),
+      downloadFile: vi.fn(),
+    }
+    const accessConnection = {
+      close: vi.fn(),
+      openShell: vi.fn().mockResolvedValue(createShell()),
+      fileTransfer: accessFileTransfer,
+    }
+    const rawConnection = {
+      close: vi.fn(),
+      openShell: vi.fn().mockResolvedValue(createShell()),
+    }
+    const service = new SessionService(
+      { connect: vi.fn().mockResolvedValue(accessConnection) },
+      { load: vi.fn() },
+      { connect: vi.fn().mockResolvedValue(rawConnection) },
+    )
+
+    const access = await service.connectAccessSsh({
+      host: 'access.example.com', port: 22, username: 'ops', title: 'Access SSH', columns: 80, rows: 24,
+    })
+    const raw = await service.connectRaw({ host: '127.0.0.1', port: 22022 })
+
+    expect(service.supportsFileTransfer(access.id)).toBe(true)
+    expect(service.supportsFileTransfer(raw.id)).toBe(false)
+    await expect(service.listDirectory(raw.id, '/')).rejects.toThrow('不支持 SFTP')
+  })
 })
 
 function createShell() {

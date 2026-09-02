@@ -45,10 +45,14 @@ import type {
 import {
   fileTransferChannels,
   fileTransferDownloadRequestSchema,
+  fileTransferListRequestSchema,
+  fileTransferListResultSchema,
   fileTransferProgressSchema,
   fileTransferResultSchema,
   fileTransferUploadRequestSchema,
   type FileTransferDownloadRequest,
+  type FileTransferListRequest,
+  type FileTransferListResult,
   type FileTransferProgress,
   type FileTransferResult,
   type FileTransferUploadRequest,
@@ -129,6 +133,7 @@ export type TerminalAgentApi = {
     onUpdated(listener: (session: ConnectedSession) => void): () => void
   }
   fileTransfer: {
+    list(request: FileTransferListRequest): Promise<FileTransferListResult>
     upload(request: FileTransferUploadRequest): Promise<FileTransferResult>
     download(request: FileTransferDownloadRequest): Promise<FileTransferResult>
     onProgress(listener: (event: FileTransferProgress) => void): () => void
@@ -285,6 +290,9 @@ export function createTerminalAgentApi(ipcRenderer: {
       },
     }),
     fileTransfer: Object.freeze({
+      list: async (request: FileTransferListRequest) => fileTransferListResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.list, fileTransferListRequestSchema.parse(request)),
+      ),
       upload: async (request: FileTransferUploadRequest) => fileTransferResultSchema.parse(
         // Parse before IPC so malformed requests never reach the main process.
         // The native file picker still runs exclusively in the main process.

@@ -2,10 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { createTerminalAgentApi } from '../../../src/preload/api'
 
 function createIpc() {
-  return { invoke: vi.fn().mockResolvedValue({
+  return { invoke: vi.fn().mockImplementation(async (channel: string) => channel === 'file-transfer:list'
+    ? {
+      sessionId: 'session-1', remotePath: '/tmp', entries: [{ name: 'report.txt', kind: 'file', size: 4 }],
+    }
+    : {
     transferId: '11111111-1111-4111-8111-111111111111',
     sessionId: 'session-1', direction: 'upload', status: 'completed', transferredBytes: 4, fileName: 'report.txt',
-  }), on: vi.fn(), removeListener: vi.fn() }
+    }), on: vi.fn(), removeListener: vi.fn() }
 }
 
 describe('file transfer preload API', () => {
@@ -23,6 +27,18 @@ describe('file transfer preload API', () => {
     })
 
     await expect(api.fileTransfer.upload({ sessionId: 'session-1', remotePath: '' })).rejects.toThrow()
+    expect(ipc.invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('validates and routes remote directory listing requests', async () => {
+    const ipc = createIpc()
+    const api = createTerminalAgentApi(ipc)
+
+    await expect(api.fileTransfer.list({ sessionId: 'session-1', remotePath: '/tmp' })).resolves.toEqual({
+      sessionId: 'session-1', remotePath: '/tmp', entries: [{ name: 'report.txt', kind: 'file', size: 4 }],
+    })
+    expect(ipc.invoke).toHaveBeenCalledWith('file-transfer:list', { sessionId: 'session-1', remotePath: '/tmp' })
+    await expect(api.fileTransfer.list({ sessionId: 'session-1', remotePath: '' })).rejects.toThrow()
     expect(ipc.invoke).toHaveBeenCalledTimes(1)
   })
 
