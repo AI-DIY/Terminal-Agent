@@ -17,12 +17,11 @@ import HostMemoryConsentDialog from '../components/workbench/HostMemoryConsentDi
 import UpgradeDialog from '../components/UpgradeDialog.vue'
 import { closeSession } from '../stores/close-session'
 import { createFrameBatcher } from '../stores/data-batcher'
-import { createSessionsStore, type SessionView } from '../stores/sessions'
-import { reconcileVisiblePanes, selectVisiblePane } from '../stores/visible-panes'
+import { createSessionsStore, uniqueSessionHostCount, type SessionView } from '../stores/sessions'
 import { getLayoutPreferencesStore, shellGridStyle } from '../stores/layout-preferences'
 import { createShellHistoryStore, filterHistoryByHosts, latestHistoryByHost, readOnlyHistoryTerminal, reconcileHistoryHostSelection, toggleHistoryHostSelection } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
-import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionDuplicate, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
+import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 
 const emit = defineEmits<{ showSettings: [] }>()
 const store = createSessionsStore()
@@ -63,7 +62,11 @@ const currentChatSessionIds = computed(() => new Set(
     ? (chatStore.state.selected?.shells ?? []).filter(shell => shell.status === 'open' && shell.sessionId).map(shell => shell.sessionId!)
     : [],
 ))
-const currentChatSessions = computed(() => sessions.value.filter(session => currentChatSessionIds.value.has(session.id)))
+const currentChatSessions = computed(() => orderSessions(
+  sessions.value.filter(session => currentChatSessionIds.value.has(session.id)),
+  visibleSessionIds.value,
+))
+const currentChatUniqueHostCount = computed(() => uniqueSessionHostCount(currentChatSessions.value))
 const onlineChatIds = computed(() => new Set(
   chatStore.state.chats
     .filter(chat => chatStore.hasOnlineShells(chat.id))
@@ -71,7 +74,7 @@ const onlineChatIds = computed(() => new Set(
 ))
 const historyHosts = computed(() => latestHistoryByHost(shellHistory.state.records))
 const selectedHistoryHosts = ref<string[]>([])
-const historyPlaybackRecords = computed(() => filterHistoryByHosts(historyHosts.value, selectedHistoryHosts.value, layoutPreferences.state.visibleCount))
+const historyPlaybackRecords = computed(() => filterHistoryByHosts(historyHosts.value, selectedHistoryHosts.value, Math.max(1, historyHosts.value.length)))
 const historyPlayback = computed(() => historyPlaybackRecords.value.map(record => ({
   record,
   terminal: readOnlyHistoryTerminal(shellHistory.state.details[record.id] ?? null),
@@ -134,6 +137,34 @@ function dismissHostMemory(): void {
   void window.terminalAgent.settings.dismissHostMemory(disclosure.token).catch(() => undefined)
 }
 
+/**
+ * Keep the user's tab order as a single source of truth for both the title
+ * strip and the terminal canvas.  Stale IDs are discarded and newly opened
+ * sessions are appended in connection order, so restoring an older task view
+ * can never hide a live connection.
+ */
+function orderSessions(candidates: readonly SessionView[], preferredIds: readonly string[]): SessionView[] {
+  const byId = new Map(candidates.map(session => [session.id, session]))
+  const ordered: SessionView[] = []
+  for (const sessionId of preferredIds) {
+    const session = byId.get(sessionId)
+    if (session) ordered.push(session)
+  }
+  for (const session of candidates) {
+    if (!ordered.some(item => item.id === session.id)) ordered.push(session)
+  }
+  return ordered
+}
+
+function normalizeSessionOrder(preferredIds: readonly string[], availableIds: readonly string[]): string[] {
+  const available = new Set(availableIds)
+  const ordered = [...new Set(preferredIds)].filter(sessionId => available.has(sessionId))
+  for (const sessionId of availableIds) {
+    if (!ordered.includes(sessionId)) ordered.push(sessionId)
+  }
+  return ordered
+}
+
 function sync(): void { sessions.value = store.all() }
 const dataBatcher = createFrameBatcher<TerminalDataEvent>(
   events => {
@@ -146,15 +177,22 @@ const dataBatcher = createFrameBatcher<TerminalDataEvent>(
 
 function select(sessionId: string): boolean {
   if (!currentChatSessionIds.value.has(sessionId) || !store.byId(sessionId)) return false
-  visibleSessionIds.value = selectVisiblePane(
-    visibleSessionIds.value,
-    sessionId,
-    activeSessionId.value,
-    layoutPreferences.state.visibleCount,
+  visibleSessionIds.value = normalizeSessionOrder(
+    [...visibleSessionIds.value, sessionId],
+    sessions.value.filter(session => currentChatSessionIds.value.has(session.id)).map(session => session.id),
   )
   activeSessionId.value = sessionId
   saveLiveShellView()
   return true
+}
+
+function reorderSessions(sessionIds: string[]): void {
+  if (!isLiveChat.value) return
+  const availableIds = sessions.value
+    .filter(session => currentChatSessionIds.value.has(session.id))
+    .map(session => session.id)
+  visibleSessionIds.value = normalizeSessionOrder(sessionIds, availableIds)
+  saveLiveShellView()
 }
 
 function addSession(session: Omit<SessionView, 'buffer'>, activate = true): void {
@@ -170,15 +208,11 @@ function removeSession(sessionId: string): void {
   const wasActive = activeSessionId.value === sessionId
   store.remove(sessionId)
   visibleSessionIds.value = visibleSessionIds.value.filter(id => id !== sessionId)
-
-  const replacement = store.all().find(session => currentChatSessionIds.value.has(session.id) && !visibleSessionIds.value.includes(session.id))
-  if (replacement) visibleSessionIds.value = selectVisiblePane(
-    visibleSessionIds.value,
-    replacement.id,
-    null,
-    layoutPreferences.state.visibleCount,
-  )
-  if (wasActive) activeSessionId.value = visibleSessionIds.value[0] ?? replacement?.id ?? null
+  const remainingIds = sessions.value
+    .filter(session => session.id !== sessionId && currentChatSessionIds.value.has(session.id))
+    .map(session => session.id)
+  visibleSessionIds.value = normalizeSessionOrder(visibleSessionIds.value, remainingIds)
+  if (wasActive) activeSessionId.value = visibleSessionIds.value[0] ?? null
   sync()
   saveLiveShellView()
 }
@@ -193,16 +227,14 @@ function restoreLiveShellView(): void {
   const chatId = isLiveChat.value ? chatStore.state.selectedId : null
   if (!chatId) return
   const snapshot = shellViews.get(chatId)
-  const available = new Set(currentChatSessions.value.map(session => session.id))
+  const availableIds = sessions.value
+    .filter(session => currentChatSessionIds.value.has(session.id))
+    .map(session => session.id)
+  const available = new Set(availableIds)
+  visibleSessionIds.value = normalizeSessionOrder(snapshot?.visibleSessionIds ?? [], availableIds)
   activeSessionId.value = snapshot?.activeSessionId && available.has(snapshot.activeSessionId)
     ? snapshot.activeSessionId
-    : snapshot?.visibleSessionIds.find(id => available.has(id)) ?? currentChatSessions.value[0]?.id ?? null
-  visibleSessionIds.value = reconcileVisiblePanes(
-    snapshot?.visibleSessionIds ?? [],
-    currentChatSessions.value.map(session => session.id),
-    activeSessionId.value,
-    layoutPreferences.state.visibleCount,
-  )
+    : visibleSessionIds.value[0] ?? null
 }
 
 async function createChat(invalidateOperation = true): Promise<void> {
@@ -313,9 +345,7 @@ async function attachSession(
       if (isCurrent() && store.byId(session.id)) select(session.id)
     }
     if (isCurrent() && chatStore.state.selectedId === workspace.id && store.byId(session.id)) {
-      if (!activate && visibleSessionIds.value.length < layoutPreferences.state.visibleCount && !visibleSessionIds.value.includes(session.id)) {
-        visibleSessionIds.value = [...visibleSessionIds.value, session.id]
-      }
+      if (!visibleSessionIds.value.includes(session.id)) visibleSessionIds.value = [...visibleSessionIds.value, session.id]
       saveLiveShellView()
     }
   } finally {
@@ -342,27 +372,6 @@ function closeShellHistory(): void {
   historyDialogFocusOrigin = null
   void nextTick(() => { if (focusOrigin?.isConnected) focusOrigin.focus() })
   if (hadHostFilter) void refreshHistoryPlayback()
-}
-
-async function duplicateShell(sessionId: string): Promise<void> {
-  connectionError.value = ''
-  const targetChatId = activeWorkbenchChatId.value
-  if (!targetChatId) {
-    connectionError.value = '无法确定复制 SSH 的目标聊天。'
-    return
-  }
-  const isTargetCurrent = () => chatStore.state.selectedId === targetChatId
-  try {
-    await runWorkbenchSessionDuplicate({
-      sessionId,
-      targetChatId,
-      duplicate: (sourceSessionId, chatId) => shellHistory.duplicate(sourceSessionId, chatId),
-      attach: (session, chatId, isCurrent) => attachSession(session, true, isCurrent, chatId),
-      isCurrent: isTargetCurrent,
-    })
-  } catch (error) {
-    if (isTargetCurrent()) connectionError.value = error instanceof Error ? error.message : '无法复制 SSH 通道。'
-  }
 }
 
 async function reconnectShell(historyId: string): Promise<void> {
@@ -703,24 +712,19 @@ watch(
   },
 )
 watch(
-  [
-    () => layoutPreferences.state.visibleCount,
-    () => currentChatSessions.value.map(session => session.id).join('\u0000'),
-  ],
+  () => currentChatSessionIds.value,
   () => {
     if (!isLiveChat.value) return
-    const availableSessionIds = currentChatSessions.value.map(session => session.id)
+    const availableSessionIds = sessions.value
+      .filter(session => currentChatSessionIds.value.has(session.id))
+      .map(session => session.id)
     if (!activeSessionId.value || !availableSessionIds.includes(activeSessionId.value)) {
       activeSessionId.value = availableSessionIds[0] ?? null
     }
-    visibleSessionIds.value = reconcileVisiblePanes(
-      visibleSessionIds.value,
-      availableSessionIds,
-      activeSessionId.value,
-      layoutPreferences.state.visibleCount,
-    )
+    visibleSessionIds.value = normalizeSessionOrder(visibleSessionIds.value, availableSessionIds)
     saveLiveShellView()
   },
+  { deep: true },
 )
 
 onMounted(() => {
@@ -796,7 +800,7 @@ onBeforeUnmount(() => {
     :modal-open="showConnection || showSavedSessions || showHistoryDialog || showUpgrade || pendingHostMemoryDisclosure !== null"
     :current-version="appVersion"
     :current-chat-title="chatStore.state.selected?.title ?? '未选择任务'"
-    :current-chat-shell-count="isLiveChat ? currentChatSessions.length : 0"
+    :current-chat-shell-count="isLiveChat ? currentChatUniqueHostCount : 0"
   >
     <template #app-actions>
       <p v-if="connectionError" class="connection-error" role="alert">{{ connectionError }}</p>
@@ -831,7 +835,7 @@ onBeforeUnmount(() => {
         :current-sessions="currentChatSessions"
         :visible-session-ids="visibleSessionIds"
         :active-session-id="activeSessionId"
-        :shell-count="isLiveChat ? currentChatSessions.length : 0"
+        :shell-count="isLiveChat ? currentChatUniqueHostCount : 0"
         :is-live="isLiveChat"
         :live-chat-available="Boolean(chatStore.state.liveChatId)"
         :history-hosts="historyHosts"
@@ -840,11 +844,11 @@ onBeforeUnmount(() => {
         @close="close"
         @connect="createConnection"
         @restore-live="chatStore.state.liveChatId ? selectChat(chatStore.state.liveChatId) : undefined"
-        @duplicate="duplicateShell"
         @history="openShellHistory"
         @history-menu="openHistoricalShellMenu"
         @reconnect="reconnectShell"
         @toggle-history-host="toggleHistoricalHost"
+        @reorder="reorderSessions"
       >
         <template #history>
           <section class="history-playback" aria-label="任务 SSH 历史回放">
@@ -889,7 +893,7 @@ onBeforeUnmount(() => {
       <GlobalChatPanel
         :chat="chatStore.state.selected"
         :read-only="!isLiveChat"
-        :shell-count="isLiveChat ? currentChatSessions.length : 0"
+        :shell-count="isLiveChat ? currentChatUniqueHostCount : 0"
         @collapse="collapse"
       />
     </template>
@@ -945,7 +949,13 @@ onBeforeUnmount(() => {
 .empty-state { display: grid; min-width: 0; min-height: 0; overflow: auto; background: var(--surface); }
 .agent-empty { display: grid; gap: 7px; padding: 16px; }
 .history-playback { height: 100%; min-width: 0; min-height: 0; overflow: hidden; padding: 8px; background: var(--surface-soft); }
-.history-shell-grid { display: grid; align-content: start; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 8px; overflow-x: auto; overflow-y: hidden; }
+.history-shell-grid { display: grid; align-content: start; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 8px; overflow-x: auto; overflow-y: auto; scrollbar-gutter: stable; scrollbar-color: transparent transparent; }
+.history-shell-grid:hover,.history-shell-grid:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }
+.history-shell-grid::-webkit-scrollbar { width: 8px; height: 8px; }
+.history-shell-grid::-webkit-scrollbar-track { background: transparent; }
+.history-shell-grid::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }
+.history-shell-grid:hover::-webkit-scrollbar-thumb,.history-shell-grid:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
+.history-shell-grid:hover::-webkit-scrollbar-thumb:hover,.history-shell-grid:focus-within::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .history-shell-card { display: grid; grid-template-rows: 30px auto auto minmax(0, 1fr); gap: 5px; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); background: var(--terminal); }
 .history-shell-card > header { padding: 0 5px 0 9px; border-bottom: 1px solid #343a42; background: #20262d; color: #d8dade; }
 .history-shell-card > span,.history-shell-card > b { padding: 0 9px; }

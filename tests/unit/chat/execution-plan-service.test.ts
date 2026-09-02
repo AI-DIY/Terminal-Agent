@@ -23,14 +23,14 @@ function plan() {
 }
 
 describe('ExecutionPlanService', () => {
-  it('binds a same-host plan to the first online association in stored order', async () => {
+  it('binds a shared model target to the stable #1 session regardless of association order', async () => {
     const write = vi.fn()
     const service = new ExecutionPlanService({
       get: vi.fn(async () => ({ chat: {
         messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: plan() }],
         shells: [
-          { sessionId: 'session-first', hostname: 'web-01', status: 'open' },
           { sessionId: 'session-second', hostname: 'web-01', status: 'open' },
+          { sessionId: 'session-first', hostname: 'web-01', status: 'open' },
         ],
       } })),
       updateMessage: vi.fn(async () => undefined),

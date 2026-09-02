@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { Bot, Check, ChevronDown, ChevronUp, CircleAlert, PanelRightClose, Send, Square, Trash2, UserRound, X } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { ChatProgressStage, ChatWorkspace } from '../../../../shared/contracts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../stores/global-chat'
 import { chatContentText } from '../../../../shared/chat-content'
 import { estimateChatMessages } from '../../../../shared/chat-token-estimator'
-import { hostnameDisplayLabels, resolvedHostnames } from '../../../../shared/shell-display-label'
-import { resolveModelShellTargets } from '../../../../shared/model-shell-target'
-import { shouldSendOnPlainEnter } from './chat-composer-shortcuts'
+import { shouldInsertNewlineOnModifiedEnter, shouldSendOnPlainEnter } from './chat-composer-shortcuts'
+import { planTargetLabelForShells } from './plan-target-label'
 
 const props = defineProps<{ chat: ChatWorkspace | null; readOnly?: boolean; shellCount?: number }>()
 const emit = defineEmits<{ collapse: [] }>()
 const store = createGlobalChatStore(window.terminalAgent.chat)
 const modelContextLimit = ref(12_000)
 const contextDetailsExpanded = ref(true)
+const compactError = ref('')
+const composerInput = ref<HTMLTextAreaElement | null>(null)
 const chatId = computed(() => props.chat?.id ?? '')
 const assertiveError = ref<{ id: number; content: string } | null>(null)
 const assistantResponse = ref<{ id: number; content: string } | null>(null)
@@ -55,11 +56,53 @@ const actionError = computed(() => chatId.value ? actionErrors[chatId.value] ?? 
 const stepDrafts = reactive<Record<string, string>>({})
 const contextUsed = computed(() => estimateChatMessages(messages.value))
 const contextPercent = computed(() => Math.min(100, Math.round((contextUsed.value / modelContextLimit.value) * 100)))
+const sshContextLines = computed(() => store.state.sshContextLines)
+const compacting = computed(() => chatId.value ? Boolean(store.state.compacting[chatId.value]) : false)
 function updateDraft(event: Event): void { if (chatId.value) store.setDraft(chatId.value, (event.target as HTMLTextAreaElement).value) }
-function send(): void { if (chatId.value) { const content = store.composeUserContent(chatId.value); if (content) void store.send(chatId.value, content) } }
+function send(): void {
+  if (chatId.value && !compacting.value) {
+    const content = store.composeUserContent(chatId.value)
+    if (content) void store.send(chatId.value, content)
+  }
+}
 function cancel(): void { if (chatId.value) void store.cancel(chatId.value).catch(() => undefined) }
-function onKeydown(event: KeyboardEvent): void { if (shouldSendOnPlainEnter(event)) { event.preventDefault(); send() } }
+function onKeydown(event: KeyboardEvent): void {
+  if (shouldInsertNewlineOnModifiedEnter(event)) {
+    event.preventDefault()
+    insertNewline()
+    return
+  }
+  if (shouldSendOnPlainEnter(event)) {
+    event.preventDefault()
+    if (compacting.value) return
+    send()
+  }
+}
 function toggleContextDetails(): void { contextDetailsExpanded.value = !contextDetailsExpanded.value }
+function updateSshContextLines(event: Event): void {
+  store.setSshContextLines(Number((event.target as HTMLInputElement).value))
+}
+async function compactContext(): Promise<void> {
+  if (!chatId.value || props.readOnly || compacting.value) return
+  compactError.value = ''
+  try {
+    await store.compact(chatId.value)
+  } catch (error) {
+    compactError.value = error instanceof Error ? error.message : '上下文压缩失败，请稍后再试。'
+  }
+}
+function insertNewline(): void {
+  const input = composerInput.value
+  if (!input || props.readOnly || !chatId.value) return
+  const start = input.selectionStart
+  const end = input.selectionEnd
+  const next = `${draft.value.slice(0, start)}\n${draft.value.slice(end)}`
+  store.setDraft(chatId.value, next)
+  void nextTick(() => {
+    input.selectionStart = input.selectionEnd = start + 1
+    input.focus()
+  })
+}
 function formatTokens(value: number): string { return new Intl.NumberFormat('zh-CN').format(value) }
 function progressLabel(stage: ChatProgressStage | null): string {
   return stage === 'thinking' ? '正在思考' : stage === 'executing' ? '正在执行' : stage === 'observing' ? '正在整理观察结果' : stage === 'repairing' ? '正在修正计划' : ''
@@ -80,22 +123,7 @@ function planTargetLabel(target: string): string {
   const allShells = props.chat?.shells ?? []
   const liveShells = allShells.filter(shell => shell.status === 'open')
   const shells = liveShells.length > 0 ? liveShells : allShells
-  const resolved = resolvedHostnames(shells.map(shell => ({
-    hostname: shell.hostname,
-    observedHostname: shell.observedHostname,
-    displayName: shell.title,
-  })))
-  const modelTargets = resolveModelShellTargets(shells.map(shell => ({
-    stableKey: shell.sessionId,
-    hostname: shell.hostname,
-    observedHostname: shell.observedHostname,
-    displayName: shell.title,
-  })))
-  const index = shells.findIndex((shell, shellIndex) => [
-    modelTargets[shellIndex], resolved[shellIndex], shell.observedHostname, shell.title, shell.hostname,
-  ].some(identity => identity?.trim() === target.trim()))
-  if (index < 0) return target
-  return hostnameDisplayLabels(shells.map(shell => ({ hostname: shell.hostname, observedHostname: shell.observedHostname, displayName: shell.title })))[index]?.displayLabel ?? target
+  return planTargetLabelForShells(target, shells)
 }
 function stepDraftKey(messageId: string, stepId: string): string { return `${messageId}:${stepId}` }
 function setStepDraft(messageId: string, stepId: string, event: Event): void { stepDrafts[stepDraftKey(messageId, stepId)] = (event.target as HTMLInputElement).value }
@@ -154,7 +182,15 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
       <div class="ai-safety-badge"><Check :size="12" aria-hidden="true" /><span>计划需手动确认</span></div>
       <section class="context-meter" aria-label="AI 上下文用量">
         <div class="context-meter-head"><strong>上下文</strong><span class="context-meter-summary">{{ formatTokens(contextUsed) }} / {{ formatTokens(modelContextLimit) }} tokens</span><b>{{ contextPercent }}%</b><button type="button" class="context-toggle" :aria-expanded="contextDetailsExpanded" aria-controls="chat-context-details" :aria-label="contextDetailsExpanded ? '收起上下文详情' : '展开上下文详情'" :title="contextDetailsExpanded ? '收起上下文详情' : '展开上下文详情'" @click="toggleContextDetails"><ChevronUp v-if="contextDetailsExpanded" :size="14" aria-hidden="true" /><ChevronDown v-else :size="14" aria-hidden="true" /></button></div>
-        <div v-if="contextDetailsExpanded" id="chat-context-details" class="context-meter-details"><div class="context-progress" role="progressbar" aria-label="上下文使用比例" :aria-valuenow="contextPercent" aria-valuemin="0" aria-valuemax="100"><span :style="{ width: `${contextPercent}%` }" /></div><div class="context-meter-foot"><span>根据当前聊天文本和模型上限估算</span></div></div>
+        <div v-if="contextDetailsExpanded" id="chat-context-details" class="context-meter-details">
+          <div class="context-progress" role="progressbar" aria-label="上下文使用比例" :aria-valuenow="contextPercent" aria-valuemin="0" aria-valuemax="100"><span :style="{ width: `${contextPercent}%` }" /></div>
+          <div class="context-meter-foot"><span>根据当前聊天文本和模型上限估算</span></div>
+          <div class="context-settings">
+            <button type="button" class="secondary-action" :disabled="readOnly || compacting || !chatId" @click="compactContext">{{ compacting ? '正在压缩…' : '立即压缩' }}</button>
+            <label class="ssh-context-setting"><span>SSH 上下文追加行数</span><input type="number" min="0" max="200" step="1" :value="sshContextLines" :disabled="readOnly" aria-label="SSH 上下文追加的上下文行数" @change="updateSshContextLines"></label>
+          </div>
+          <p v-if="compactError" class="context-error">{{ compactError }}</p>
+        </div>
       </section>
     </header>
 
@@ -195,21 +231,21 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 
     <footer class="composer">
       <div class="composer-shell">
-        <textarea :value="draft" :disabled="readOnly || !chatId" aria-label="聊天输入" placeholder="告诉 AI 要完成什么；AI 会根据当前任务的 SSH 信息回答。" @input="updateDraft" @keydown="onKeydown" />
-        <div class="composer-foot"><span>{{ readOnly ? '历史聊天只读' : `${props.shellCount ?? chat?.shellCount ?? 0} 个在线 SSH` }}</span><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="send-button" :disabled="readOnly || !chatId || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
+        <textarea ref="composerInput" :value="draft" :disabled="readOnly || !chatId" aria-label="聊天输入" placeholder="告诉 AI 要完成什么；AI 会根据当前任务的 SSH 信息回答。" @input="updateDraft" @keydown="onKeydown" />
+        <div class="composer-foot"><span>{{ readOnly ? '历史聊天只读' : `${props.shellCount ?? chat?.shellCount ?? 0} 个在线 SSH` }}</span><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="line-break-button" :disabled="readOnly || !chatId" title="换行（Alt+Enter、Ctrl+Enter、Shift+Enter）" aria-label="插入换行（Alt+Enter、Ctrl+Enter、Shift+Enter）" @click="insertNewline">↵ 换行</button><button type="button" class="send-button" :disabled="readOnly || !chatId || compacting || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
       </div>
     </footer>
   </section>
 </template>
 
 <style scoped>
-.global-chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--panel); color: var(--text); }.global-chat-panel.context-details-expanded { grid-template-rows: 176px minmax(0, 1fr) auto; }
+.global-chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--panel); color: var(--text); }.global-chat-panel.context-details-expanded { grid-template-rows: minmax(210px, auto) minmax(0, 1fr) auto; }
 .ai-head { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; align-content: start; gap: 7px 9px; min-width: 0; min-height: 0; padding: 10px 11px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--surface); }
 .ai-avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 6px; background: var(--text-strong); color: var(--surface); font-size: 10px; font-weight: 800; }
 .ai-head-copy { min-width: 0; }.ai-head-copy h3 { margin: 0; overflow: hidden; color: var(--text-strong); font-size: 15px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }.ai-head-copy span { display: block; margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .collapse-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 10px; font-weight: 650; white-space: nowrap; }.collapse-button:hover { border-color: var(--focus); background: var(--hover); }
 .ai-safety-badge { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--accent); font-size: 10px; font-weight: 650; }
-.context-meter { grid-column: 1 / -1; min-width: 0; padding-top: 7px; border-top: 1px solid var(--line-soft); }.context-meter-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto 26px; align-items: center; gap: 6px; min-width: 0; }.context-meter-head strong { color: var(--text-strong); font-size: 10px; }.context-meter-summary { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }.context-meter-head b { color: var(--text-strong); font-size: 9px; }.context-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.context-toggle:hover { border-color: var(--focus); color: var(--text-strong); }.context-meter-details { min-width: 0; }.context-progress { height: 5px; margin-top: 6px; overflow: hidden; border-radius: 3px; background: var(--line); }.context-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }.context-meter-foot { margin-top: 6px; color: var(--muted); font-size: 8.5px; }
+.context-meter { grid-column: 1 / -1; min-width: 0; padding-top: 7px; border-top: 1px solid var(--line-soft); }.context-meter-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto 26px; align-items: center; gap: 6px; min-width: 0; }.context-meter-head strong { color: var(--text-strong); font-size: 10px; }.context-meter-summary { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }.context-meter-head b { color: var(--text-strong); font-size: 9px; }.context-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.context-toggle:hover { border-color: var(--focus); color: var(--text-strong); }.context-meter-details { min-width: 0; }.context-progress { height: 5px; margin-top: 6px; overflow: hidden; border-radius: 3px; background: var(--line); }.context-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }.context-meter-foot { margin-top: 6px; color: var(--muted); font-size: 8.5px; }.context-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 9px; }.context-settings .secondary-action { min-height: 27px; }.ssh-context-setting { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 9px; }.ssh-context-setting span { white-space: nowrap; }.ssh-context-setting input { width: 62px; height: 27px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 10px; font-variant-numeric: tabular-nums; }.ssh-context-setting input:focus { border-color: var(--focus); outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }.context-error { margin: 7px 0 0; color: var(--red); font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
 .messages { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 12px 12px 16px; scrollbar-gutter: stable; }
 .visually-hidden-alert { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .progress-item { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 10px; }.message-progress { margin-top: 9px; }.progress-item svg { color: var(--accent); }.progress-dots { letter-spacing: 2px; color: var(--accent); }
@@ -217,6 +253,6 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 .execution-plan { display: grid; gap: 8px; margin-top: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }.plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); }.plan-head > div { display: grid; gap: 3px; min-width: 0; }.plan-head strong { color: var(--text-strong); font-size: 11px; overflow-wrap: anywhere; }.plan-head span { color: var(--muted); font-size: 9px; }.plan-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent) !important; font-weight: 650; }.plan-step { display: grid; gap: 5px; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }.plan-step:last-of-type { border-bottom: 0; }.plan-step-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; }.plan-step-head strong { color: var(--text-strong); font-size: 10px; }.plan-step-head span { color: var(--muted); font-size: 9px; }.plan-step p { color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-risk { display: flex; align-items: flex-start; gap: 5px; color: var(--amber); font-size: 9px; line-height: 1.45; }.plan-risk svg { flex: 0 0 auto; margin-top: 1px; }.plan-command { display: grid; gap: 3px; min-width: 0; }.plan-command span { color: var(--faint); font-size: 8px; }.plan-command code { display: block; min-width: 0; overflow: auto; padding: 5px 6px; border: 1px solid var(--line-soft); background: var(--surface-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-step-actions,.plan-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }.plan-step-actions { margin-top: 2px; }.plan-edit-input { min-width: 0; flex: 1; height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; }.icon-button,.secondary-action,.primary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; white-space: nowrap; }.icon-button { width: 27px; padding: 0; }.icon-button:hover,.secondary-action:hover { border-color: var(--focus); color: var(--text-strong); }.primary-action { border-color: var(--accent); background: var(--accent); color: #fff; }.plan-actions { justify-content: flex-end; padding-top: 2px; }.plan-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .empty { display: grid; justify-items: center; gap: 6px; padding: 34px 18px; color: var(--muted); text-align: center; }.empty strong { color: var(--text-strong); font-size: 12px; }.empty span { max-width: 270px; font-size: 10px; line-height: 1.55; }
 .error { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0 37px; padding: 9px 10px; border-left: 2px solid var(--red); background: var(--surface); color: var(--red); font-size: 10px; line-height: 1.5; }.error span { min-width: 0; flex: 1; overflow-wrap: anywhere; }.error button { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); }
-.composer { min-width: 0; padding: 10px; border-top: 1px solid var(--line); background: var(--surface); }.composer-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }.composer:focus-within .composer-shell { border-color: var(--focus); box-shadow: 0 0 0 2px var(--accent-soft); }.composer textarea { display: block; width: 100%; height: 64px; resize: none; padding: 10px 11px 7px; border: 0; background: transparent; color: var(--text-strong); font-size: 11px; line-height: 1.5; }.composer textarea::placeholder { color: var(--faint); }.composer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-height: 39px; padding: 6px 7px 7px 10px; border-top: 1px solid var(--line-soft); }.composer-foot > span { min-width: 0; margin-right: auto; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.composer-foot button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 29px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; font-weight: 650; }.composer-foot .send-button { border-color: var(--accent); background: var(--accent); color: #fff; }.composer-foot .cancel-button:hover { border-color: var(--red); color: var(--red); }
+.composer { min-width: 0; padding: 10px; border-top: 1px solid var(--line); background: var(--surface); }.composer-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }.composer:focus-within .composer-shell { border-color: var(--focus); box-shadow: 0 0 0 2px var(--accent-soft); }.composer textarea { display: block; width: 100%; height: 64px; resize: none; padding: 10px 11px 7px; border: 0; background: transparent; color: var(--text-strong); font-size: 11px; line-height: 1.5; }.composer textarea::placeholder { color: var(--faint); }.composer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-height: 39px; padding: 6px 7px 7px 10px; border-top: 1px solid var(--line-soft); }.composer-foot > span { min-width: 0; margin-right: auto; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.composer-foot button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 29px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; font-weight: 650; }.composer-foot button:disabled { cursor: not-allowed; opacity: .55; }.composer-foot .send-button { border-color: var(--accent); background: var(--accent); color: #fff; }.composer-foot .line-break-button:hover { border-color: var(--focus); color: var(--text-strong); }.composer-foot .cancel-button:hover { border-color: var(--red); color: var(--red); }
 @media (max-width: 1180px) { .collapse-button span { display: none; }.collapse-button { width: 30px; padding: 0; }.ai-head-copy span { display: none; } }
 </style>

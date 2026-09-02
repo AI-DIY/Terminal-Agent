@@ -108,8 +108,11 @@ export type ChatSummary = z.infer<typeof chatSummarySchema>
 
 const chatMessageRoleSchema = z.enum(['user', 'assistant', 'system'])
 const chatMessageStateSchema = z.enum(['complete', 'streaming', 'error'])
+export const chatMessageTypeSchema = z.enum(['execution_audit', 'context_summary'])
+export type ChatMessageType = z.infer<typeof chatMessageTypeSchema>
+
 const chatMessageInternalFields = {
-  messageType: z.literal('execution_audit').optional(),
+  messageType: chatMessageTypeSchema.optional(),
   executionPlan: chatExecutionPlanSchema.optional(),
 }
 
@@ -128,6 +131,9 @@ export const chatMessageRecordSchema = z.object({
   }
   if (message.messageType === 'execution_audit' && (message.role !== 'user' || message.state !== 'complete' || Array.isArray(message.content))) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['messageType'], message: 'Execution audits must be complete user text messages' })
+  }
+  if (message.messageType === 'context_summary' && (message.role !== 'system' || message.state !== 'complete' || Array.isArray(message.content))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['messageType'], message: 'Context summaries must be complete system text messages' })
   }
   if (message.executionPlan && (message.role !== 'assistant' || message.state !== 'complete' || Array.isArray(message.content))) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['executionPlan'], message: 'Execution plans must be complete assistant text messages' })
@@ -240,8 +246,19 @@ export const chatRunRequestSchema = z.object({
   runId: z.string().uuid(),
   content: chatMessageContentSchema.refine(content => typeof content !== 'string' || content.trim().length > 0, 'Text content cannot be blank'),
   retry: z.boolean().optional(),
+  sshContextLines: z.number().int().min(0).max(200).optional(),
 }).strict()
 export type ChatRunRequest = z.infer<typeof chatRunRequestSchema>
+
+/** The renderer-controlled number of recent terminal lines included per unique host. */
+export const chatSshContextLinesSchema = z.number().int().min(0).max(200)
+
+export const chatCompactRequestSchema = z.object({
+  requestId: chatRequestIdSchema,
+  chatId: chatIdentifierSchema,
+  sshContextLines: chatSshContextLinesSchema.optional(),
+}).strict()
+export type ChatCompactRequest = z.infer<typeof chatCompactRequestSchema>
 
 export const chatProgressStageSchema = z.enum(['thinking', 'executing', 'observing', 'repairing'])
 export type ChatProgressStage = z.infer<typeof chatProgressStageSchema>
@@ -269,6 +286,9 @@ export const chatAppendMessageRequestSchema = z.object({
   if (message.messageType === 'execution_audit' && (message.role !== 'user' || message.state !== 'complete' || Array.isArray(message.content))) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['messageType'], message: 'Execution audits must be complete user text messages' })
   }
+  if (message.messageType === 'context_summary' && (message.role !== 'system' || message.state !== 'complete' || Array.isArray(message.content))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['messageType'], message: 'Context summaries must be complete system text messages' })
+  }
   if (message.executionPlan && (message.role !== 'assistant' || message.state !== 'complete' || Array.isArray(message.content))) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['executionPlan'], message: 'Execution plans must be complete assistant text messages' })
   }
@@ -289,6 +309,9 @@ export const chatUpdateMessageRequestSchema = z.object({
   }
   if (message.messageType === 'execution_audit' && message.state !== 'complete') {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['messageType'], message: 'Execution audits must be complete' })
+  }
+  if (message.messageType === 'context_summary' && message.state !== 'complete') {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['messageType'], message: 'Context summaries must be complete' })
   }
   if (message.executionPlan && message.state !== 'complete') {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['executionPlan'], message: 'Execution plans must be complete' })

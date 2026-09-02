@@ -29,7 +29,12 @@ export function sessionDisplayLabel(session: SessionView, orderedSessions: reado
 export function sessionDisplayParts(session: SessionView, orderedSessions: readonly SessionView[]): HostnameDisplayLabel | null {
   const index = orderedSessions.findIndex(item => item.id === session.id)
   if (index < 0) return null
-  return sshHostnameDisplayLabels(orderedSessions.map(item => ({ hostname: item.hostname, observedHostname: item.observedHostname, displayName: item.title })))[index] ?? null
+  return sshHostnameDisplayLabels(orderedSessions.map(item => ({
+    hostname: item.hostname,
+    observedHostname: item.observedHostname,
+    displayName: item.title,
+    stableKey: item.id,
+  })))[index] ?? null
 }
 
 export function sessionHasDuplicateHost(session: SessionView, orderedSessions: readonly SessionView[]): boolean {
@@ -37,13 +42,29 @@ export function sessionHasDuplicateHost(session: SessionView, orderedSessions: r
   return orderedSessions.filter(item => sshHostIdentity({ hostname: item.hostname, observedHostname: item.observedHostname, displayName: item.title }) === identity).length > 1
 }
 
+/** Number of distinct remote host identities represented by live sessions. */
+export function uniqueSessionHostCount(sessions: readonly SessionView[]): number {
+  return new Set(sessions.map(session => sshHostIdentity({
+    hostname: session.hostname,
+    observedHostname: session.observedHostname,
+    displayName: session.title,
+  }))).size
+}
+
 export function createSessionsStore() {
   const sessions = new Map<string, SessionView>()
+  // A shell can emit its greeting immediately after the main process opens
+  // the channel, before the renderer receives the corresponding session
+  // summary. Keep a bounded tail so that first output is not lost in that
+  // small IPC ordering window.
+  const pendingBuffers = new Map<string, string>()
 
   return {
     add(session: NewSessionView): SessionView {
       const current = sessions.get(session.id)
-      const entry = { ...current, ...session, buffer: current?.buffer ?? '' }
+      const pending = pendingBuffers.get(session.id) ?? ''
+      const entry = { ...current, ...session, buffer: current?.buffer ?? pending }
+      pendingBuffers.delete(session.id)
       if (!Object.prototype.hasOwnProperty.call(session, 'observedHostname')) delete entry.observedHostname
       sessions.set(entry.id, entry)
       return entry
@@ -52,6 +73,9 @@ export function createSessionsStore() {
       const session = sessions.get(sessionId)
       if (session) {
         session.buffer = `${session.buffer}${data}`.slice(-MAX_SESSION_BUFFER_CHARS)
+      } else if (data) {
+        const previous = pendingBuffers.get(sessionId) ?? ''
+        pendingBuffers.set(sessionId, `${previous}${data}`.slice(-MAX_SESSION_BUFFER_CHARS))
       }
     },
     byId(sessionId: string): SessionView | undefined {
@@ -62,6 +86,7 @@ export function createSessionsStore() {
     },
     remove(sessionId: string): void {
       sessions.delete(sessionId)
+      pendingBuffers.delete(sessionId)
     },
   }
 }

@@ -6,13 +6,20 @@ describe('electron startup wiring', () => {
   it('configures a hidden title bar overlay without disabling the native frame', () => {
     const source = readFileSync(new URL('../../src/main/main.ts', import.meta.url), 'utf8')
 
-    expect(source).toContain("import { app, BrowserWindow, Menu } from 'electron'")
+    expect(source).toContain("import { app, BrowserWindow, Menu, session } from 'electron'")
     expect(source).toContain('Menu.setApplicationMenu(null)')
     expect(source).toContain('autoHideMenuBar: true')
     expect(source).toContain("titleBarStyle: 'hidden'")
     expect(source).toContain('titleBarOverlay: titleBarOverlayForTheme(initialTheme)')
     expect(source).toContain('setTitleBarOverlay(titleBarOverlayForTheme(theme))')
     expect(source).not.toContain('frame: false')
+  })
+
+  it('routes updater traffic through Electron defaultSession so Chromium proxy policy applies', () => {
+    const source = readFileSync(new URL('../../src/main/main.ts', import.meta.url), 'utf8')
+
+    expect(source).toContain("import { createElectronSessionUpdaterFetcher } from './updater/electron-session-fetcher'")
+    expect(source).toContain('fetch: createElectronSessionUpdaterFetcher(() => session.defaultSession)')
   })
 
   it('bundles zod into the sandbox preload instead of externalizing it', () => {

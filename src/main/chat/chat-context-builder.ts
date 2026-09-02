@@ -28,7 +28,11 @@ export function buildChatContext(input: ChatContextInput): ChatMessage[] {
       ...(item.at ? { at: stripIpLiterals(item.at) } : {}),
     })),
   }
-  const recent = [...input.messages]
+  // A compaction summary is a durable context boundary. The transcript stays
+  // available in the UI, while future model requests receive the summary and
+  // only the conversation that followed it.
+  const compacted = messagesSinceLatestSummary(input.messages, maxMessages)
+  const recent = compacted
     .slice(-maxMessages)
     .map(message => ({
       role: message.role,
@@ -45,6 +49,20 @@ export function buildChatContext(input: ChatContextInput): ChatMessage[] {
     },
     ...recent,
   ]
+}
+
+function messagesSinceLatestSummary<T extends { messageType?: string }>(messages: readonly T[], maxMessages: number): T[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.messageType === 'context_summary') {
+      // Keep the summary itself even when the post-summary transcript is
+      // longer than the rolling message window.  It is the durable boundary
+      // that explains the omitted history to the next model request.
+      const summary = messages[index]
+      const following = messages.slice(index + 1)
+      return [summary, ...following.slice(-(Math.max(0, maxMessages - 1)))]
+    }
+  }
+  return [...messages]
 }
 
 type ContextShell = NonNullable<ChatContextInput['shells']>[number]

@@ -81,6 +81,8 @@ async function finalizeWindowsReleaseArtifacts({
   const cleanupArchivePath = releaseAssetPath(releaseDirectory, `Terminal-Agent-Uninstall-Cleanup-${validatedVersion}.zip`)
   const packagedBridgePath = releaseAssetPath(releaseDirectory, join('win-unpacked', 'putty.exe'))
   const bridgePath = releaseAssetPath(releaseDirectory, 'putty.exe')
+  const quickInstallSourcePath = resolve(projectRoot, 'quick-install.cmd')
+  const quickInstallPath = releaseAssetPath(releaseDirectory, 'quick-install.cmd')
   const latestYmlPath = releaseAssetPath(releaseDirectory, 'latest.yml')
   const installer = await requireNonEmptyFile(installerPath, 'Windows installer')
   await requireNonEmptyFile(blockmapPath, 'installer blockmap')
@@ -90,6 +92,13 @@ async function finalizeWindowsReleaseArtifacts({
   await mkdir(releaseDirectory, { recursive: true })
   await copyFile(packagedBridgePath, bridgePath)
   await requireNonEmptyFile(bridgePath, 'release bridge')
+
+  // Keep the one-click quick installer beside the release PDF, bridge and
+  // setup package.  A release without this file would reintroduce the manual
+  // quick-start flow, so fail the packaging step instead of silently omitting it.
+  await requireNonEmptyFile(quickInstallSourcePath, 'quick installer')
+  await copyFile(quickInstallSourcePath, quickInstallPath)
+  await requireNonEmptyFile(quickInstallPath, 'release quick installer')
 
   const publishedAt = releaseDate ?? installer.mtime
   if (!(publishedAt instanceof Date) || Number.isNaN(publishedAt.valueOf())) {

@@ -7,6 +7,8 @@ export type HostnameDisplayEntry = {
   hostname: string
   displayName?: string
   observedHostname?: string
+  /** Optional stable connection key used to keep duplicate ordinals steady while tabs are reordered. */
+  stableKey?: string
 }
 
 /**
@@ -47,17 +49,51 @@ export function canonicalHostname(entry: HostnameDisplayEntry): string {
 export function sshHostnameDisplayLabels(entries: readonly HostnameDisplayEntry[]): HostnameDisplayLabel[] {
   const identities = entries.map(sshHostIdentity)
   const totals = countValues(identities)
-  const ordinals = new Map<string, number>()
+  const ordinals = stableOrdinals(entries, identities)
   return entries.map((entry, index) => {
     const identity = identities[index]!
-    const ordinal = (ordinals.get(identity) ?? 0) + 1
-    ordinals.set(identity, ordinal)
+    const ordinal = ordinals[index]!
     const displayName = entry.observedHostname?.trim() || entry.displayName?.trim() || entry.hostname.trim()
     return {
       displayLabel: totals.get(identity)! > 1 ? `${displayName} #${ordinal}` : displayName,
       ordinal,
     }
   })
+}
+
+/**
+ * Derive ordinals from a stable connection key when one is available.  The
+ * renderer supplies the session id, so dragging a tab changes presentation
+ * order without changing which connection is #1.  Callers that do not have a
+ * key (for example persisted model metadata) retain source-order semantics.
+ */
+function stableOrdinals(entries: readonly HostnameDisplayEntry[], identities: readonly string[]): number[] {
+  const hasStableKeys = entries.some(entry => Boolean(entry.stableKey?.trim()))
+  if (!hasStableKeys) {
+    const counters = new Map<string, number>()
+    return identities.map(identity => {
+      const ordinal = (counters.get(identity) ?? 0) + 1
+      counters.set(identity, ordinal)
+      return ordinal
+    })
+  }
+
+  const groups = new Map<string, number[]>()
+  identities.forEach((identity, index) => {
+    const group = groups.get(identity) ?? []
+    group.push(index)
+    groups.set(identity, group)
+  })
+  const result = Array.from({ length: entries.length }, () => 1)
+  for (const indexes of groups.values()) {
+    indexes.sort((left, right) => {
+      const leftKey = entries[left]?.stableKey?.trim() ?? ''
+      const rightKey = entries[right]?.stableKey?.trim() ?? ''
+      return leftKey.localeCompare(rightKey) || left - right
+    })
+    indexes.forEach((index, ordinalIndex) => { result[index] = ordinalIndex + 1 })
+  }
+  return result
 }
 
 export function resolvedHostnames(entries: readonly HostnameDisplayEntry[]): string[] {

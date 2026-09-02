@@ -2,7 +2,7 @@ import { Annotation, END, START, StateGraph } from '@langchain/langgraph'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
 import type { ChatProgressStage } from '../../shared/contracts'
 import { assistantPlanOutputSchema, parseAssistantPlanOutput } from '../../shared/chat-plan'
-import { hostnameDisplayLabels } from '../../shared/shell-display-label'
+import { sshHostnameDisplayLabels } from '../../shared/shell-display-label'
 import {
   modelDisplayName,
   modelHostname,
@@ -80,8 +80,17 @@ export function buildStructuredShellContext(
       ...(session.recentLines ? { recentLines: session.recentLines.map(stripIpLiterals) } : {}),
     }
   })
-  const identityEntries = entries.map(entry => ({ hostname: entry.hostname, displayName: entry.title, observedHostname: entry.observedHostname }))
-  const labels = hostnameDisplayLabels(identityEntries)
+  // Use the live session id as the stable key so AI-facing #1/#2 labels stay
+  // aligned with the renderer when the user drags tabs or terminal cards.
+  // The association order is still retained for command binding; it must not
+  // silently change merely because the presentation order changed.
+  const identityEntries = entries.map((entry, index) => ({
+    hostname: entry.hostname,
+    displayName: entry.title,
+    observedHostname: entry.observedHostname,
+    stableKey: candidates[index]?.session.id,
+  }))
+  const labels = sshHostnameDisplayLabels(identityEntries)
   return entries.map((entry, index) => {
     const { displayLabel, ordinal } = labels[index]!
     return {
@@ -89,6 +98,30 @@ export function buildStructuredShellContext(
       displayLabel,
       ordinal,
     }
+  })
+}
+
+/**
+ * Collapse live connection entries to one model-facing Shell per canonical
+ * hostname.  A task may have several transport channels to the same remote
+ * host; the model should see that host once and, when it is duplicated in the
+ * UI, retain the first connection as the explicit `#1` entry.
+ */
+export function dedupeStructuredShellsForPrompt(shells: readonly StructuredChatShell[]): StructuredChatShell[] {
+  // Prefer the same stable #1 entry that the renderer presents.  Association
+  // order is intentionally not used here: it can differ after a tab/card
+  // reorder, while execution binding still independently uses stored order.
+  const preferred = new Map<string, StructuredChatShell>()
+  for (const shell of shells) {
+    const key = shell.hostname.trim().toLowerCase()
+    if (!preferred.has(key) || shell.ordinal === 1) preferred.set(key, shell)
+  }
+  const emitted = new Set<string>()
+  return shells.flatMap(shell => {
+    const key = shell.hostname.trim().toLowerCase()
+    if (emitted.has(key) || preferred.get(key) !== shell) return []
+    emitted.add(key)
+    return [shell]
   })
 }
 
@@ -160,7 +193,7 @@ export class StructuredChatAgent {
 
     // 图定义保证节点职责清晰；运行时使用同一状态转移，避免 LangGraph 对动态条件边的序列化差异。
     void graph
-    const availableShells = projectShellsForPrompt(request.availableShells ?? [])
+    const availableShells = dedupeStructuredShellsForPrompt(projectShellsForPrompt(request.availableShells ?? []))
     // Keep the target allow-list in sync with the projected Shell entries.
     // This also makes direct callers resilient when they provide only the
     // structured Shell list (including an IP-only session) and no separate

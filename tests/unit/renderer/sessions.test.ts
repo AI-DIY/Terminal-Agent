@@ -36,6 +36,22 @@ describe('sessions store', () => {
     expect(store.byId('a')).toMatchObject({ hostname: 'alpha', title: '生产终端', buffer: 'ready\r\n' })
   })
 
+  it('buffers output that arrives before the renderer mounts the session summary', () => {
+    const store = createSessionsStore()
+    store.appendData('early', 'ready\r\n')
+    store.add({ id: 'early', hostname: 'alpha', mode: 'copilot' })
+
+    expect(store.byId('early')?.buffer).toBe('ready\r\n')
+  })
+
+  it('bounds pre-mount output just like an already-mounted session', () => {
+    const store = createSessionsStore()
+    store.appendData('early', 'x'.repeat(MAX_SESSION_BUFFER_CHARS + 10))
+    store.add({ id: 'early', hostname: 'alpha', mode: 'copilot' })
+
+    expect(store.byId('early')?.buffer).toHaveLength(MAX_SESSION_BUFFER_CHARS)
+  })
+
   it('labels a session with its safe public title before the connection host', () => {
     expect(sessionLabel({
       id: 'a', hostname: '10.0.0.12', title: '生产终端', mode: 'copilot', buffer: '',

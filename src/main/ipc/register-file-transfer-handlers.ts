@@ -1,0 +1,321 @@
+import { dialog, ipcMain, type WebContents } from 'electron'
+import { randomUUID } from 'node:crypto'
+import { dirname, isAbsolute, win32 } from 'node:path'
+import { lstat, stat } from 'node:fs/promises'
+import {
+  FILE_TRANSFER_MAX_BYTES,
+  fileTransferChannels,
+  fileTransferDownloadRequestSchema,
+  fileTransferProgressSchema,
+  fileTransferResultSchema,
+  fileTransferUploadRequestSchema,
+  type FileTransferDirection,
+  type FileTransferProgress,
+  type FileTransferResult,
+} from '../../shared/file-transfer-contracts'
+
+type TransferDialogResult = { canceled: boolean; filePath?: string }
+
+export type FileTransferDialogDependencies = {
+  selectUploadFile: () => Promise<TransferDialogResult>
+  selectDownloadPath: (defaultFileName: string) => Promise<TransferDialogResult>
+}
+
+type FileTransferSource = {
+  uploadFile(sessionId: string, localPath: string, remotePath: string, onProgress: (progress: { transferredBytes: number; totalBytes?: number }) => void): Promise<number>
+  downloadFile(sessionId: string, remotePath: string, localPath: string, onProgress: (progress: { transferredBytes: number; totalBytes?: number }) => void): Promise<number>
+}
+
+const defaultDialogDependencies: FileTransferDialogDependencies = {
+  selectUploadFile: async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择要上传的文件',
+      properties: ['openFile'],
+    })
+    return { canceled: result.canceled, filePath: result.filePaths[0] }
+  },
+  selectDownloadPath: async defaultFileName => {
+    const result = await dialog.showSaveDialog({
+      title: '选择下载保存位置',
+      defaultPath: defaultFileName,
+    })
+    return { canceled: result.canceled, filePath: result.filePath }
+  },
+}
+
+/**
+ * Register the isolated SFTP IPC surface.  Native dialogs remain in the main
+ * process, so an untrusted renderer cannot turn this API into an arbitrary
+ * local-file reader/writer.  Only a selected file's display name and byte
+ * counts are sent back to the renderer.
+ */
+export function registerFileTransferHandlers(
+  sessions: FileTransferSource,
+  trustedSender: WebContents,
+  dependencies: Partial<FileTransferDialogDependencies> = {},
+): () => void {
+  const dialogs = { ...defaultDialogDependencies, ...dependencies }
+
+  ipcMain.handle(fileTransferChannels.upload, async (event, request: unknown): Promise<FileTransferResult> => {
+    assertTrustedSender(event, trustedSender)
+    const parsed = fileTransferUploadRequestSchema.safeParse(request)
+    if (!parsed.success) throw new Error('文件上传请求无效。')
+    const transferId = parsed.data.transferId ?? randomUUID()
+    const direction: FileTransferDirection = 'upload'
+    emitProgress(trustedSender, {
+      transferId,
+      sessionId: parsed.data.sessionId,
+      direction,
+      phase: 'selecting',
+      transferredBytes: 0,
+    })
+
+    let selected: TransferDialogResult
+    try {
+      selected = await dialogs.selectUploadFile()
+    } catch (error) {
+      throw failTransfer(trustedSender, transferId, parsed.data.sessionId, direction, error)
+    }
+    if (selected.canceled || !selected.filePath) {
+      emitProgress(trustedSender, {
+        transferId,
+        sessionId: parsed.data.sessionId,
+        direction,
+        phase: 'canceled',
+        transferredBytes: 0,
+        message: '已取消文件上传。',
+      })
+      return fileTransferResultSchema.parse({
+        transferId,
+        sessionId: parsed.data.sessionId,
+        direction,
+        status: 'canceled',
+        transferredBytes: 0,
+      })
+    }
+
+    try {
+      const localPath = await validateUploadPath(selected.filePath)
+      const fileName = displayFileName(localPath)
+      emitProgress(trustedSender, {
+        transferId,
+        sessionId: parsed.data.sessionId,
+        direction,
+        phase: 'transferring',
+        transferredBytes: 0,
+        totalBytes: (await lstat(localPath)).size,
+        fileName,
+      })
+      const transferredBytes = await sessions.uploadFile(
+        parsed.data.sessionId,
+        localPath,
+        parsed.data.remotePath,
+        progress => emitProgress(trustedSender, {
+          transferId,
+          sessionId: parsed.data.sessionId,
+          direction,
+          phase: 'transferring',
+          transferredBytes: progress.transferredBytes,
+          ...(progress.totalBytes === undefined ? {} : { totalBytes: progress.totalBytes }),
+          fileName,
+        }),
+      )
+      emitProgress(trustedSender, {
+        transferId,
+        sessionId: parsed.data.sessionId,
+        direction,
+        phase: 'completed',
+        transferredBytes,
+        totalBytes: transferredBytes,
+        fileName,
+        message: '文件上传完成。',
+      })
+      return fileTransferResultSchema.parse({ transferId, sessionId: parsed.data.sessionId, direction, status: 'completed', transferredBytes: boundedBytes(transferredBytes), fileName })
+    } catch (error) {
+      throw failTransfer(trustedSender, transferId, parsed.data.sessionId, direction, error)
+    }
+  })
+
+  ipcMain.handle(fileTransferChannels.download, async (event, request: unknown): Promise<FileTransferResult> => {
+    assertTrustedSender(event, trustedSender)
+    const parsed = fileTransferDownloadRequestSchema.safeParse(request)
+    if (!parsed.success) throw new Error('文件下载请求无效。')
+    const transferId = parsed.data.transferId ?? randomUUID()
+    const direction: FileTransferDirection = 'download'
+    emitProgress(trustedSender, {
+      transferId,
+      sessionId: parsed.data.sessionId,
+      direction,
+      phase: 'selecting',
+      transferredBytes: 0,
+    })
+
+    const suggestedName = safeSuggestedFileName(parsed.data.fileName ?? remoteBaseName(parsed.data.remotePath))
+    let selected: TransferDialogResult
+    try {
+      selected = await dialogs.selectDownloadPath(suggestedName)
+    } catch (error) {
+      throw failTransfer(trustedSender, transferId, parsed.data.sessionId, direction, error)
+    }
+    if (selected.canceled || !selected.filePath) {
+      emitProgress(trustedSender, {
+        transferId,
+        sessionId: parsed.data.sessionId,
+        direction,
+        phase: 'canceled',
+        transferredBytes: 0,
+        message: '已取消文件下载。',
+      })
+      return fileTransferResultSchema.parse({
+        transferId,
+        sessionId: parsed.data.sessionId,
+        direction,
+        status: 'canceled',
+        transferredBytes: 0,
+      })
+    }
+
+    try {
+      const localPath = await validateDownloadPath(selected.filePath)
+      const fileName = displayFileName(localPath)
+      emitProgress(trustedSender, {
+        transferId,
+        sessionId: parsed.data.sessionId,
+        direction,
+        phase: 'transferring',
+        transferredBytes: 0,
+        fileName,
+      })
+      const transferredBytes = await sessions.downloadFile(
+        parsed.data.sessionId,
+        parsed.data.remotePath,
+        localPath,
+        progress => emitProgress(trustedSender, {
+          transferId,
+          sessionId: parsed.data.sessionId,
+          direction,
+          phase: 'transferring',
+          transferredBytes: progress.transferredBytes,
+          ...(progress.totalBytes === undefined ? {} : { totalBytes: progress.totalBytes }),
+          fileName,
+        }),
+      )
+      emitProgress(trustedSender, {
+        transferId,
+        sessionId: parsed.data.sessionId,
+        direction,
+        phase: 'completed',
+        transferredBytes,
+        totalBytes: transferredBytes,
+        fileName,
+        message: '文件下载完成。',
+      })
+      return fileTransferResultSchema.parse({ transferId, sessionId: parsed.data.sessionId, direction, status: 'completed', transferredBytes: boundedBytes(transferredBytes), fileName })
+    } catch (error) {
+      throw failTransfer(trustedSender, transferId, parsed.data.sessionId, direction, error)
+    }
+  })
+
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    ipcMain.removeHandler(fileTransferChannels.upload)
+    ipcMain.removeHandler(fileTransferChannels.download)
+  }
+}
+
+function assertTrustedSender(event: { sender: WebContents }, trustedSender: WebContents): void {
+  if (event.sender !== trustedSender) throw new Error('Untrusted renderer')
+}
+
+function emitProgress(sender: WebContents, value: FileTransferProgress): void {
+  const parsed = fileTransferProgressSchema.parse({
+    ...value,
+    transferredBytes: boundedBytes(value.transferredBytes),
+    ...(value.totalBytes === undefined ? {} : { totalBytes: boundedBytes(value.totalBytes) }),
+  })
+  if (typeof sender.isDestroyed === 'function' && sender.isDestroyed()) return
+  sender.send(fileTransferChannels.progress, parsed)
+}
+
+function failTransfer(
+  sender: WebContents,
+  transferId: string,
+  sessionId: string,
+  direction: FileTransferDirection,
+  error: unknown,
+): Error {
+  const message = publicTransferError(direction, error)
+  emitProgress(sender, {
+    transferId,
+    sessionId,
+    direction,
+    phase: 'failed',
+    transferredBytes: 0,
+    message,
+  })
+  return new Error(message)
+}
+
+async function validateUploadPath(value: string): Promise<string> {
+  const path = validateLocalPath(value, '上传')
+  const details = await lstat(path).catch(() => undefined)
+  if (!details || !details.isFile() || details.isSymbolicLink()) throw new Error('请选择存在的普通本地文件。')
+  if (details.size > FILE_TRANSFER_MAX_BYTES) throw new Error('文件超过允许的大小限制。')
+  return path
+}
+
+async function validateDownloadPath(value: string): Promise<string> {
+  const path = validateLocalPath(value, '下载')
+  const parent = await stat(dirname(path)).catch(() => undefined)
+  if (!parent?.isDirectory()) throw new Error('本地保存目录不存在。')
+  const existing = await lstat(path).catch(() => undefined)
+  if (existing && (existing.isDirectory() || existing.isSymbolicLink() || !existing.isFile())) {
+    throw new Error('本地保存路径必须是普通文件。')
+  }
+  return path
+}
+
+function validateLocalPath(value: string, operation: string): string {
+  if (typeof value !== 'string') throw new Error(`${operation}路径无效。`)
+  const path = value.trim()
+  if (!path || path.length > 4_096 || containsControlCharacters(path) || !(isAbsolute(path) || win32.isAbsolute(path))) {
+    throw new Error(`${operation}路径无效。`)
+  }
+  return path
+}
+
+function containsControlCharacters(value: string): boolean {
+  return [...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+}
+
+function displayFileName(path: string): string {
+  const name = path.split(/[\\/]/).pop()?.trim()
+  return name && name.length <= 255 ? name : '未命名文件'
+}
+
+function remoteBaseName(remotePath: string): string {
+  const name = remotePath.split(/[\\/]/).filter(Boolean).at(-1)
+  return name || 'download.bin'
+}
+
+function safeSuggestedFileName(value: string): string {
+  const name = displayFileName(value).replace(/[<>:"/\\|?*]/g, '_').trim()
+  return !name || name === '.' || name === '..' ? 'download.bin' : name
+}
+
+function boundedBytes(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(FILE_TRANSFER_MAX_BYTES, Math.floor(value)))
+}
+
+function publicTransferError(direction: FileTransferDirection, error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  if (raw.includes('当前 SSH 会话不支持')) return raw
+  if (raw.includes('Unknown terminal session')) return 'SSH 会话已关闭，请重新连接后重试。'
+  if (raw.includes('普通本地文件') || raw.includes('本地保存')) return raw
+  return direction === 'upload'
+    ? '文件上传失败，请检查 SSH 连接和远程路径。'
+    : '文件下载失败，请检查 SSH 连接和远程路径。'
+}

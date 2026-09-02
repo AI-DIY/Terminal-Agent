@@ -565,6 +565,80 @@ describe('chat runtime', () => {
     expect(events.some(event => event.kind === 'chat:delta')).toBe(false)
     expect(events.at(-1)).toMatchObject({ kind: 'chat:error', retryable: true })
   })
+
+  it('keeps the compaction lock through summary persistence before starting a new send', async () => {
+    const persistence = deferred<{ persisted: true }>()
+    let persistenceStarted!: () => void
+    const persistenceBegan = new Promise<void>(resolve => { persistenceStarted = resolve })
+    const calls: string[] = []
+    const runStructured = vi.fn(async (_settings: unknown, input: { messages: Array<{ content?: unknown }> }) => {
+      const isCompaction = input.messages.some(message => typeof message.content === 'string' && message.content.includes('上下文压缩'))
+      calls.push(isCompaction ? 'compact' : 'send')
+      return { version: 1 as const, reply: isCompaction ? '任务摘要' : '新回复', plan: null }
+    })
+    const appendMessage = vi.fn(async (request: { requestId: string }) => ({ messageId: request.requestId }))
+    const runtime = new ChatRuntime({
+      appendMessage,
+      getContext: vi.fn(async () => [{ role: 'user' as const, content: '历史问题' }]),
+      resolveModel: vi.fn(async () => ({ endpoint: 'http://model', model: 'm', contextLimit: 1000, apiKey: null })),
+      runStructured,
+      stream: vi.fn(async () => undefined),
+    })
+
+    const compacting = runtime.compactAndPersist(
+      { requestId: 'compact-lock-1', chatId: 'c1' },
+      async summary => {
+        expect(summary).toBe('任务摘要')
+        persistenceStarted()
+        return persistence.promise
+      },
+    )
+    await persistenceBegan
+
+    const sending = runtime.send({ chatId: 'c1', runId: '90909090-9090-4090-8090-909090909090', content: '新请求' }, () => undefined)
+    await Promise.resolve()
+    expect(calls).toEqual(['compact'])
+    expect(appendMessage.mock.calls.some(([request]) => request.requestId === '90909090-9090-4090-8090-909090909090:user')).toBe(false)
+
+    persistence.resolve({ persisted: true })
+    await expect(compacting).resolves.toEqual({ persisted: true })
+    await expect(sending).resolves.toBeUndefined()
+    expect(calls).toEqual(['compact', 'send'])
+  })
+
+  it('serializes concurrent compactions for one chat while allowing independent chats to proceed', async () => {
+    const firstSummary = deferred<void>()
+    let sameChatCalls = 0
+    let otherChatCalls = 0
+    const runStructured = vi.fn(async (_settings: unknown, input: { messages: Array<{ content?: unknown }> }) => {
+      const chatMarker = input.messages.find(message => message.content === 'same-chat' || message.content === 'other-chat')?.content
+      if (chatMarker === 'same-chat') {
+        const ordinal = ++sameChatCalls
+        if (ordinal === 1) await firstSummary.promise
+        return { version: 1 as const, reply: `same-${ordinal}`, plan: null }
+      }
+      otherChatCalls += 1
+      return { version: 1 as const, reply: 'other-1', plan: null }
+    })
+    const runtime = new ChatRuntime({
+      appendMessage: vi.fn(async (request: { requestId: string }) => ({ messageId: request.requestId })),
+      getContext: vi.fn(async chatId => [{ role: 'user' as const, content: chatId }]),
+      resolveModel: vi.fn(async () => ({ endpoint: 'http://model', model: 'm', contextLimit: 1000, apiKey: null })),
+      runStructured,
+      stream: vi.fn(async () => undefined),
+    })
+
+    const first = runtime.compact({ requestId: 'compact-one', chatId: 'same-chat' })
+    await vi.waitFor(() => expect(sameChatCalls).toBe(1))
+    const second = runtime.compact({ requestId: 'compact-two', chatId: 'same-chat' })
+    const independent = runtime.compact({ requestId: 'compact-three', chatId: 'other-chat' })
+    await vi.waitFor(() => expect(otherChatCalls).toBe(1))
+    firstSummary.resolve()
+    await expect(independent).resolves.toBe('other-1')
+    await expect(first).resolves.toBe('same-1')
+    await expect(second).resolves.toBe('same-2')
+    expect(sameChatCalls).toBe(2)
+  })
 })
 
 async function settlesWithin<T>(promise: Promise<T>, timeoutMs = 100): Promise<T> {

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { shouldSendOnPlainEnter } from '../../../src/renderer/src/components/chat/chat-composer-shortcuts'
+import type { ChatWorkspaceSnapshot } from '../../../src/shared/contracts'
+import { shouldInsertNewlineOnModifiedEnter, shouldSendOnPlainEnter } from '../../../src/renderer/src/components/chat/chat-composer-shortcuts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../../src/renderer/src/stores/global-chat'
 
 function api() {
@@ -104,8 +105,15 @@ describe('global chat store', () => {
     expect(shouldSendOnPlainEnter({ ...plainEnter, metaKey: true })).toBe(false)
     expect(shouldSendOnPlainEnter({ ...plainEnter, key: 'a' })).toBe(false)
 
+    expect(shouldInsertNewlineOnModifiedEnter({ ...plainEnter, shiftKey: true })).toBe(true)
+    expect(shouldInsertNewlineOnModifiedEnter({ ...plainEnter, ctrlKey: true })).toBe(true)
+    expect(shouldInsertNewlineOnModifiedEnter({ ...plainEnter, altKey: true })).toBe(true)
+    expect(shouldInsertNewlineOnModifiedEnter({ ...plainEnter, shiftKey: true, isComposing: true })).toBe(false)
+    expect(shouldInsertNewlineOnModifiedEnter({ ...plainEnter, shiftKey: true, metaKey: true })).toBe(false)
+
     const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
-    expect(panel).toContain('function onKeydown(event: KeyboardEvent): void { if (shouldSendOnPlainEnter(event)) { event.preventDefault(); send() } }')
+    expect(panel).toContain('shouldInsertNewlineOnModifiedEnter(event)')
+    expect(panel).toContain('function onKeydown(event: KeyboardEvent): void {')
   })
 
   it('anchors active progress below the user message that started the matching task run', async () => {
@@ -149,7 +157,67 @@ describe('global chat store', () => {
     expect(panel).toContain(':aria-expanded="contextDetailsExpanded"')
     expect(panel).toContain('aria-controls="chat-context-details"')
     expect(panel).toContain('v-if="contextDetailsExpanded" id="chat-context-details"')
-    expect(panel).not.toContain('立即压缩')
+    expect(panel).toContain('立即压缩')
+    expect(panel).toContain('function compactContext(): Promise<void>')
+    expect(panel).toContain('store.state.compacting[chatId.value]')
+  })
+
+  it('blocks sends and coalesces duplicate compaction requests while preserving the draft', async () => {
+    const compactResponse = deferred<ChatWorkspaceSnapshot>()
+    const transport = {
+      ...api(),
+      compact: vi.fn(() => compactResponse.promise),
+    }
+    const store = createGlobalChatStore(transport)
+    store.setDraft('c1', 'queued while compacting')
+
+    const first = store.compact('c1')
+    const second = store.compact('c1')
+    expect(store.state.compacting.c1).toBe(true)
+
+    await store.send('c1', store.draft('c1'))
+    expect(transport.send).not.toHaveBeenCalled()
+    expect(store.draft('c1')).toBe('queued while compacting')
+    expect(transport.compact).toHaveBeenCalledOnce()
+
+    compactResponse.resolve({
+      revision: 2,
+      chat: {
+        id: 'c1',
+        title: '任务',
+        titleState: 'new',
+        pinnedAt: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        shellCount: 0,
+        mode: 'copilot',
+        live: true,
+        messages: [
+          { id: 'u1', chatId: 'c1', role: 'user', content: '历史', createdAt: '2026-01-01T00:00:00.000Z', state: 'complete' },
+          { id: 'summary', chatId: 'c1', role: 'system', content: '摘要', createdAt: '2026-01-01T00:00:00.000Z', state: 'complete', messageType: 'context_summary' },
+        ],
+        shells: [],
+      },
+      liveChatId: 'c1',
+    })
+    await expect(first).resolves.toMatchObject({ revision: 2 })
+    await expect(second).resolves.toMatchObject({ revision: 2 })
+    expect(store.state.compacting.c1).toBe(false)
+    expect(store.state.messages.c1).toEqual([{ id: 'u1', role: 'user', content: '历史', state: 'complete' }])
+  })
+
+  it('clears the compaction guard after an IPC failure so a later send can proceed', async () => {
+    const transport = {
+      ...api(),
+      compact: vi.fn(async () => { throw new Error('network unavailable') }),
+    }
+    const store = createGlobalChatStore(transport)
+    store.setDraft('c1', 'retry after failure')
+
+    await expect(store.compact('c1')).rejects.toThrow('network unavailable')
+    expect(store.state.compacting.c1).toBe(false)
+    await store.send('c1', store.draft('c1'))
+    expect(transport.send).toHaveBeenCalledWith(expect.objectContaining({ content: 'retry after failure' }))
   })
 
   it('keeps drafts per task and applies only matching stream events', () => {
@@ -335,7 +403,8 @@ describe('global chat store', () => {
 
     expect(panel).toContain('function planTargetLabel(target: string)')
     expect(panel).toContain('{{ planTargetLabel(step.target) }}')
-    expect(panel).toContain('hostnameDisplayLabels')
+    expect(panel).toContain("import { planTargetLabelForShells } from './plan-target-label'")
+    expect(panel).toContain('return planTargetLabelForShells(target, shells)')
     expect(panel).toContain('个在线 SSH')
   })
 
@@ -362,3 +431,10 @@ describe('global chat store', () => {
     expect(transport.send).not.toHaveBeenCalled()
   })
 })
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((accept, fail) => { resolve = accept; reject = fail })
+  return { promise, resolve, reject }
+}

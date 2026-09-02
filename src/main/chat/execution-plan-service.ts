@@ -1,7 +1,7 @@
 import type { AssistantPlanOutput, ChatExecutionPlan, ChatPlanEditStepRequest, ChatPlanRemoveStepRequest, ChatPlanCancelRequest, ChatPlanExecuteRequest } from '../../shared/chat-plan'
 import type { ChatMessageContent } from '../../shared/chat-content'
 import { resolvedHostnames } from '../../shared/shell-display-label'
-import { resolveModelShellTargets } from '../../shared/model-shell-target'
+import { resolveModelShellTargets, sameModelShellTarget, selectStableModelTargetIndex } from '../../shared/model-shell-target'
 
 type FenceMatcher = { match(command: string): { id: string; name: string } | null }
 type Sessions = { snapshot(): Array<{ id: string; hostname: string; observedHostname?: string; title?: string }>; write(sessionId: string, data: string): void | Promise<void> }
@@ -79,6 +79,17 @@ function findSessionForTarget(
     displayName: session.title ?? shell.title,
     fallbackDisplayName: shell.title,
   })))
+  // The model deliberately receives one target per host.  When that host has
+  // multiple connections, use the same stable session-id #1 that its prompt
+  // context presents, rather than whichever association happens to be stored
+  // first.  This keeps the reviewed plan label, model context, and write
+  // destination aligned after a tab/card reorder.
+  const stableModelIndex = selectStableModelTargetIndex(
+    target,
+    modelTargets,
+    candidates.map(({ session }) => session.id),
+  )
+  if (stableModelIndex !== undefined) return candidates[stableModelIndex]?.session.id
   return candidates.find(({ shell, session }, index) => {
     const identities = [
       modelTargets[index],
@@ -90,19 +101,8 @@ function findSessionForTarget(
       session.hostname,
       shell.hostname,
     ]
-    return identities.some(identity => sameTarget(identity, target))
+    return identities.some(identity => sameModelShellTarget(identity, target))
   })?.session.id
-}
-
-/** Match model-facing host identities without changing the stored target. */
-function sameTarget(left: string | undefined, right: string): boolean {
-  const normalize = (value: string | undefined): string | undefined => {
-    const normalized = value?.trim().replace(/\.$/, '').toLowerCase()
-    return normalized || undefined
-  }
-  const normalizedLeft = normalize(left)
-  const normalizedRight = normalize(right)
-  return normalizedLeft !== undefined && normalizedLeft === normalizedRight
 }
 
 function phaseRequestId(requestId: string, phase: 'executing' | 'result'): string {

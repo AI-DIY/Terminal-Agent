@@ -131,4 +131,31 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(canvas).not.toContain('toggleMaximize')
     expect(shell).toContain('grid-template-rows: 48px minmax(0, 1fr)')
   })
+
+  it('reconciles buffered output once after a terminal pane mounts', () => {
+    const terminal = readFileSync(new URL('../../../src/renderer/src/components/TerminalPane.vue', import.meta.url), 'utf8')
+
+    expect(terminal).toContain('function syncTerminalBuffer(): void')
+    expect(terminal).toContain('const buffered = props.session.buffer')
+    expect(terminal).toContain('initialBufferFrame = window.requestAnimationFrame')
+    expect(terminal).toContain('if (event.sessionId === props.session.id) writeTerminalData(event.data)')
+    expect(terminal).toContain('window.cancelAnimationFrame(initialBufferFrame)')
+  })
+
+  it('allows reordering terminal cards from their title bars', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+    expect(canvas).toContain('const draggingSessionId = ref<string | null>(null)')
+    expect(canvas).toContain('function dropSession(sessionId: string, event: DragEvent)')
+    expect(canvas).toContain('draggable="true"')
+    expect(canvas).toContain('@dragstart="beginSessionDrag(session.id, $event)"')
+    expect(canvas).toContain('@drop="dropSession(session.id, $event)"')
+    expect(canvas).toContain("emit('reorder', ids)")
+  })
+
+  it('uses the resolved display label for full-host tooltips instead of a relay route', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+    const tabs = readFileSync(new URL('../../../src/renderer/src/components/SessionTabs.vue', import.meta.url), 'utf8')
+    expect(canvas).toContain(':title="sessionDisplayLabel(session, orderedCurrentSessions)"')
+    expect(tabs).toContain(':title="sessionDisplayLabel(session, sessions)"')
+  })
 })

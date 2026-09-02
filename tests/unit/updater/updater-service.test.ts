@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { UpdaterService, type UpdaterHttpResponse } from '../../../src/main/updater/updater-service'
+import { UpdaterService, type UpdaterFetch, type UpdaterHttpResponse } from '../../../src/main/updater/updater-service'
 
 function response(status: number, body: string | Uint8Array, headers: Record<string, string> = {}): UpdaterHttpResponse {
   const bytes = typeof body === 'string' ? Buffer.from(body) : Buffer.from(body)
@@ -19,7 +19,7 @@ describe('UpdaterService', () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-updater-test-'))
     const payload = Buffer.from('installer payload')
     const digest = createHash('sha256').update(payload).digest('hex')
-    const calls: string[] = []
+    const calls: Array<{ url: string; init: Parameters<UpdaterFetch>[1] }> = []
     let relaunched = false
     let exited: number | undefined
     try {
@@ -28,8 +28,8 @@ describe('UpdaterService', () => {
         tempDirectory: directory,
         platform: 'win32',
         architecture: 'x64',
-        fetch: async url => {
-          calls.push(url)
+        fetch: async (url, init) => {
+          calls.push({ url, init })
           if (url.includes('/releases/latest')) {
             return response(200, JSON.stringify({
               tag_name: 'v2.0.6',
@@ -61,6 +61,32 @@ describe('UpdaterService', () => {
       expect(relaunched).toBe(true)
       expect(exited).toBe(0)
       expect(calls).toHaveLength(2)
+      expect(calls[0]).toMatchObject({
+        url: 'https://api.github.com/repos/AI-DIY/Terminal-Agent/releases/latest',
+        init: {
+          method: 'GET',
+          redirect: 'manual',
+          headers: {
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'Terminal-Agent-Updater/1.0',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+          signal: expect.any(AbortSignal),
+        },
+      })
+      expect(calls[1]).toMatchObject({
+        url: 'https://github.com/AI-DIY/Terminal-Agent/releases/download/v2.0.6/Terminal-Agent-Setup-2.0.6.exe',
+        init: {
+          method: 'GET',
+          redirect: 'manual',
+          headers: {
+            Accept: 'application/octet-stream',
+            'User-Agent': 'Terminal-Agent-Updater/1.0',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+          signal: expect.any(AbortSignal),
+        },
+      })
       expect(service.getState().phase).toBe('installed')
     }
     finally {

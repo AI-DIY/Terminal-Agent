@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildStructuredShellContext, StructuredChatAgent } from '../../../src/main/chat/structured-chat-agent'
+import { buildStructuredShellContext, dedupeStructuredShellsForPrompt, StructuredChatAgent } from '../../../src/main/chat/structured-chat-agent'
 
 const request = {
   messages: [{ role: 'user' as const, content: '检查服务' }],
@@ -19,6 +19,19 @@ describe('StructuredChatAgent', () => {
     ])).toEqual([
       { hostname: 'web-01', title: 'primary', displayLabel: 'primary #1', ordinal: 1 },
       { hostname: 'web-01', title: 'secondary', displayLabel: 'secondary #2', ordinal: 2 },
+    ])
+  })
+
+  it('keeps AI duplicate ordinals tied to stable session ids when association order changes', () => {
+    expect(buildStructuredShellContext([
+      { sessionId: 'session-b', hostname: 'web-01', title: 'second', status: 'open' },
+      { sessionId: 'session-a', hostname: 'web-01', title: 'first', status: 'open' },
+    ], [
+      { id: 'session-a', hostname: 'web-01', title: 'first' },
+      { id: 'session-b', hostname: 'web-01', title: 'second' },
+    ])).toEqual([
+      { hostname: 'web-01', title: 'second', displayLabel: 'second #2', ordinal: 2 },
+      { hostname: 'web-01', title: 'first', displayLabel: 'first #1', ordinal: 1 },
     ])
   })
 
@@ -95,6 +108,15 @@ describe('StructuredChatAgent', () => {
     expect(shells[0]?.hostname).not.toBe(shells[1]?.hostname)
     expect(new Set(shells.map(shell => shell.hostname)).size).toBe(2)
     expect(JSON.stringify(shells)).not.toContain('127.0.0.1')
+  })
+
+  it('deduplicates repeated model hosts by retaining the stable #1 entry', () => {
+    expect(dedupeStructuredShellsForPrompt([
+      { hostname: 'web-01', title: 'second', displayLabel: 'second #2', ordinal: 2 },
+      { hostname: 'web-01', title: 'first', displayLabel: 'first #1', ordinal: 1 },
+    ])).toEqual([
+      { hostname: 'web-01', title: 'first', displayLabel: 'first #1', ordinal: 1 },
+    ])
   })
 
   it('includes the safe Shell target in the structured system prompt and allow-list', async () => {

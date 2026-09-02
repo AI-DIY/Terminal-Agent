@@ -54,6 +54,44 @@ export function resolveModelShellTargets(entries: readonly ModelShellTargetInput
   })
 }
 
+/**
+ * Pick the same connection that the stable #1 presentation label represents
+ * when a model-facing target is shared by multiple live Shells.  A plan's
+ * target intentionally names a host rather than a session, so this keeps
+ * execution deterministic without exposing session ids to the model.
+ */
+export function selectStableModelTargetIndex(
+  target: string,
+  modelTargets: readonly string[],
+  stableKeys: readonly (string | undefined)[],
+): number | undefined {
+  let selected: number | undefined
+  for (const [index, modelTarget] of modelTargets.entries()) {
+    if (!sameModelShellTarget(modelTarget, target)) continue
+    if (selected === undefined) {
+      selected = index
+      continue
+    }
+    const selectedKey = stableKeys[selected]?.trim() ?? ''
+    const candidateKey = stableKeys[index]?.trim() ?? ''
+    if (candidateKey.localeCompare(selectedKey) < 0 || (candidateKey === selectedKey && index < selected)) {
+      selected = index
+    }
+  }
+  return selected
+}
+
+/** Match stored/legacy targets without changing the value persisted in a plan. */
+export function sameModelShellTarget(left: string | undefined, right: string | undefined): boolean {
+  const normalize = (value: string | undefined): string | undefined => {
+    const normalized = value?.trim().replace(/\.$/, '').toLowerCase()
+    return normalized || undefined
+  }
+  const normalizedLeft = normalize(left)
+  const normalizedRight = normalize(right)
+  return normalizedLeft !== undefined && normalizedLeft === normalizedRight
+}
+
 function opaqueShellAlias(stableKey: string | undefined, ordinal: number, attempt: number): string {
   if (!stableKey?.trim()) return `online-shell-${ordinal}`
   const token = stableHash(attempt === 0 ? stableKey.trim() : `${stableKey.trim()}#${attempt}`)

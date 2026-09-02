@@ -24,6 +24,7 @@ import type {
   ChatUpdateTitleRequest,
   ChatWorkspaceSnapshot,
   ChatRunRequest,
+  ChatCompactRequest,
   ChatRuntimeEvent,
   RendererSessionRequest,
   SavedDirectSessionInput,
@@ -41,6 +42,17 @@ import type {
   HostMemorySettings,
   HostMemoryDisclosure,
 } from '../shared/contracts'
+import {
+  fileTransferChannels,
+  fileTransferDownloadRequestSchema,
+  fileTransferProgressSchema,
+  fileTransferResultSchema,
+  fileTransferUploadRequestSchema,
+  type FileTransferDownloadRequest,
+  type FileTransferProgress,
+  type FileTransferResult,
+  type FileTransferUploadRequest,
+} from '../shared/file-transfer-contracts'
 import { modelProfileIdSchema, rendererModelProfileInputSchema, rendererModelSettingsInputSchema, type ModelProfileKind, type ModelRouting, type RendererModelProfileInput, type RendererModelSettingsInput } from '../shared/validation'
 import type { RegexFenceRule } from '../main/agent/regex-fence-service'
 import type { DirectSessionSummary } from '../main/ssh/direct-session-repository'
@@ -78,6 +90,7 @@ export type TerminalAgentApi = {
   }
   chat: {
     send(request: ChatRunRequest): Promise<void>
+    compact(request: ChatCompactRequest): Promise<ChatWorkspaceSnapshot>
     cancel(chatId: string): Promise<void>
     onEvent(listener: (event: ChatRuntimeEvent) => void): () => void
     plans: {
@@ -114,6 +127,11 @@ export type TerminalAgentApi = {
     onClosed(listener: (event: TerminalClosedEvent) => void): () => void
     onOpened(listener: (session: ConnectedSession) => void): () => void
     onUpdated(listener: (session: ConnectedSession) => void): () => void
+  }
+  fileTransfer: {
+    upload(request: FileTransferUploadRequest): Promise<FileTransferResult>
+    download(request: FileTransferDownloadRequest): Promise<FileTransferResult>
+    onProgress(listener: (event: FileTransferProgress) => void): () => void
   }
   sessionModes: {
     upgrade(sessionId: string): Promise<{ sessionId: string; mode: 'autonomous' }>
@@ -204,6 +222,7 @@ export function createTerminalAgentApi(ipcRenderer: {
     }),
     chat: Object.freeze({
       send: (request: ChatRunRequest) => ipcRenderer.invoke('chat:send', request) as Promise<void>,
+      compact: (request: ChatCompactRequest) => ipcRenderer.invoke('chat:compact', request) as Promise<ChatWorkspaceSnapshot>,
       cancel: (chatId: string) => ipcRenderer.invoke('chat:cancel', chatId) as Promise<void>,
       onEvent: (listener: (event: ChatRuntimeEvent) => void) => {
         const handler = (_event: unknown, payload: unknown) => listener(chatRuntimeEventSchema.parse(payload))
@@ -263,6 +282,21 @@ export function createTerminalAgentApi(ipcRenderer: {
         const handler = (_event: unknown, payload: unknown) => listener(payload as ConnectedSession)
         ipcRenderer.on('sessions:updated', handler)
         return () => ipcRenderer.removeListener('sessions:updated', handler)
+      },
+    }),
+    fileTransfer: Object.freeze({
+      upload: async (request: FileTransferUploadRequest) => fileTransferResultSchema.parse(
+        // Parse before IPC so malformed requests never reach the main process.
+        // The native file picker still runs exclusively in the main process.
+        await ipcRenderer.invoke(fileTransferChannels.upload, fileTransferUploadRequestSchema.parse(request)),
+      ),
+      download: async (request: FileTransferDownloadRequest) => fileTransferResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.download, fileTransferDownloadRequestSchema.parse(request)),
+      ),
+      onProgress: (listener: (event: FileTransferProgress) => void) => {
+        const handler = (_event: unknown, payload: unknown) => listener(fileTransferProgressSchema.parse(payload))
+        ipcRenderer.on(fileTransferChannels.progress, handler)
+        return () => ipcRenderer.removeListener(fileTransferChannels.progress, handler)
       },
     }),
     sessionModes: Object.freeze({

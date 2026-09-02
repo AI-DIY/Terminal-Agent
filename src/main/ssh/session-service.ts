@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import { AccessClientLaunchFailure } from '../access-client/launch-failure'
 import type { PrivateKeyInput } from './private-key-loader'
-import type { SshClientPort, SshConnection, SshShell } from './ssh-client-port'
+import type { SshClientPort, SshConnection, SshFileTransferProgress, SshShell } from './ssh-client-port'
 import { MainProcessReconnectDescriptorStore } from './direct-session-repository'
 import { normalizeSafeHostMemoryConnectionIp } from '../../shared/host-memory-safety'
 
@@ -339,12 +339,41 @@ export class SessionService {
 
   connectionIp(sessionId: string): string | undefined { return this.sessions.get(sessionId)?.connectionIp }
 
-  recentLines(sessionId: string): string[] {
+  supportsFileTransfer(sessionId: string): boolean {
+    return Boolean(this.sessions.get(sessionId)?.connection.fileTransfer)
+  }
+
+  async uploadFile(
+    sessionId: string,
+    localPath: string,
+    remotePath: string,
+    onProgress?: (progress: SshFileTransferProgress) => void,
+  ): Promise<number> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('Unknown terminal session')
+    if (!session.connection.fileTransfer) throw new Error('当前 SSH 会话不支持 SFTP 文件传输。')
+    return session.connection.fileTransfer.uploadFile(localPath, remotePath, onProgress)
+  }
+
+  async downloadFile(
+    sessionId: string,
+    remotePath: string,
+    localPath: string,
+    onProgress?: (progress: SshFileTransferProgress) => void,
+  ): Promise<number> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('Unknown terminal session')
+    if (!session.connection.fileTransfer) throw new Error('当前 SSH 会话不支持 SFTP 文件传输。')
+    return session.connection.fileTransfer.downloadFile(remotePath, localPath, onProgress)
+  }
+
+  recentLines(sessionId: string, limit = MAX_RECENT_SHELL_LINES): string[] {
     const output = this.sessions.get(sessionId)?.recentOutput
     if (output === undefined) return []
     const lines = output.split(/\r?\n|\r/)
     if (lines.at(-1) === '') lines.pop()
-    return lines.slice(-MAX_RECENT_SHELL_LINES)
+    const boundedLimit = Math.max(0, Math.min(MAX_RECENT_SHELL_LINES, Math.floor(limit)))
+    return boundedLimit === 0 ? [] : lines.slice(-boundedLimit)
   }
 
   supportsReadOnlyObservation(sessionId: string): boolean {

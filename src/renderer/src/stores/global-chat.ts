@@ -1,13 +1,20 @@
 import { reactive } from 'vue'
-import type { ChatRuntimeEvent, ChatProgressStage, ChatWorkspaceSnapshot } from '../../../shared/contracts'
+import type { ChatRuntimeEvent, ChatProgressStage, ChatWorkspaceSnapshot, ChatMessageType } from '../../../shared/contracts'
 import type { ChatMessageContent, ChatImageUrlPart } from '../../../shared/chat-content'
 import type { ChatExecutionPlan, ChatPlanEditStepRequest, ChatPlanRemoveStepRequest, ChatPlanCancelRequest, ChatPlanExecuteRequest } from '../../../shared/chat-plan'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 type Api = {
-  send(request: { chatId: string; runId: string; content: any; retry?: boolean }): Promise<void>
+  send(request: { chatId: string; runId: string; content: any; retry?: boolean; sshContextLines?: number }): Promise<void>
   cancel(chatId: string): Promise<void>
   onEvent(listener: (event: ChatRuntimeEvent) => void): () => void
+  // Compaction only needs the refreshed transcript. Keep this adapter's
+  // return type intentionally narrow so lightweight renderer transports (and
+  // tests) do not have to manufacture unrelated workspace metadata. The
+  // preload implementation still validates and returns the full snapshot
+  // defined by the shared IPC contract, which is structurally assignable to
+  // this projection.
+  compact?(request: { requestId: string; chatId: string; sshContextLines?: number }): Promise<ChatCompactionSnapshot>
   plans?: {
     editStep(request: ChatPlanEditStepRequest): Promise<ChatWorkspaceSnapshot>
     removeStep(request: ChatPlanRemoveStepRequest): Promise<ChatWorkspaceSnapshot>
@@ -21,13 +28,56 @@ type Message = {
   content: any
   state: 'streaming' | 'complete' | 'error'
   retryable?: boolean
-  messageType?: 'execution_audit'
+  messageType?: ChatMessageType
   executionPlan?: ChatExecutionPlan
 }
 type ErrorAnnouncement = { chatId: string; content: string }
 type AssistantAnnouncement = { chatId: string; content: string }
 
 const terminalCancellationContent = '已取消。'
+
+export const DEFAULT_SSH_CONTEXT_LINES = 50
+export const MIN_SSH_CONTEXT_LINES = 0
+export const MAX_SSH_CONTEXT_LINES = 200
+
+function clampSshContextLines(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_SSH_CONTEXT_LINES
+  return Math.max(MIN_SSH_CONTEXT_LINES, Math.min(MAX_SSH_CONTEXT_LINES, Math.round(value)))
+}
+
+type ChatCompactionSnapshot = {
+  revision: number
+  chat: {
+    id: string
+    messages: Array<{
+      id: string
+      role: 'user' | 'assistant' | 'system'
+      content: any
+      state: 'streaming' | 'complete' | 'error'
+      retryable?: boolean
+      messageType?: ChatMessageType
+      executionPlan?: ChatExecutionPlan
+    }>
+  }
+  liveChatId: string | null
+}
+
+function loadSshContextLines(): number {
+  try {
+    const raw = globalThis.localStorage?.getItem('terminal-agent.ssh-context-lines')
+    return raw === null ? DEFAULT_SSH_CONTEXT_LINES : clampSshContextLines(Number(raw))
+  } catch {
+    return DEFAULT_SSH_CONTEXT_LINES
+  }
+}
+
+function saveSshContextLines(value: number): void {
+  try {
+    globalThis.localStorage?.setItem('terminal-agent.ssh-context-lines', String(value))
+  } catch {
+    // Storage is optional (for example in a restricted/private renderer).
+  }
+}
 
 export function hasVisibleAssistantError(messages: readonly Pick<Message, 'role' | 'state' | 'content'>[], error: string): boolean {
   if (!error) return false
@@ -42,13 +92,21 @@ export function createGlobalChatStore(api: Api) {
     errors: {} as Record<string, string>,
     retryableErrors: {} as Record<string, boolean>,
     readOnly: {} as Record<string, boolean>,
+    /** Tasks whose transcript is currently being compacted. */
+    compacting: {} as Record<string, boolean>,
     activeMessageIds: {} as Record<string, string | null>,
     runUserMessageIds: {} as Record<string, string | null>,
     pendingImages: {} as Record<string, ChatImageUrlPart[]>,
     progress: {} as Record<string, ChatProgressStage | null>,
+    sshContextLines: loadSshContextLines(),
   })
   const lastUserMessage = new Map<string, { id: string; content: string }>()
   const cancelledRuns = new Map<string, string>()
+  // Coalesce duplicate compact requests for the same task.  Apart from
+  // avoiding duplicate summaries this gives every caller the same post-
+  // compaction snapshot and keeps the guard alive until IPC persistence has
+  // completed.
+  const compactOperations = new Map<string, Promise<ChatCompactionSnapshot>>()
   const errorAnnouncementListeners = new Set<(announcement: ErrorAnnouncement) => void>()
   const assistantAnnouncementListeners = new Set<(announcement: AssistantAnnouncement) => void>()
 
@@ -136,6 +194,39 @@ export function createGlobalChatStore(api: Api) {
     draft(chatId: string): string {
       return state.drafts[chatId] ?? ''
     },
+    setSshContextLines(value: number): void {
+      state.sshContextLines = clampSshContextLines(value)
+      saveSshContextLines(state.sshContextLines)
+    },
+    sshContextLines(): number {
+      return state.sshContextLines
+    },
+    async compact(chatId: string): Promise<ChatCompactionSnapshot> {
+      if (!api.compact) throw new Error('上下文压缩不可用')
+      if (state.readOnly[chatId]) throw new Error('历史任务不可压缩')
+      const existing = compactOperations.get(chatId)
+      if (existing) return existing
+
+      state.compacting[chatId] = true
+      const operationRef: { current?: Promise<ChatCompactionSnapshot> } = {}
+      const operation = (async (): Promise<ChatCompactionSnapshot> => {
+        try {
+          const snapshot = await Promise.resolve().then(() => api.compact!({
+            requestId: crypto.randomUUID(),
+            chatId,
+            sshContextLines: state.sshContextLines,
+          }))
+          this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+          return snapshot
+        } finally {
+          state.compacting[chatId] = false
+          if (compactOperations.get(chatId) === operationRef.current) compactOperations.delete(chatId)
+        }
+      })()
+      operationRef.current = operation
+      compactOperations.set(chatId, operation)
+      return operation
+    },
     setPendingImages(chatId: string, images: ChatImageUrlPart[]): void { state.pendingImages[chatId] = structuredClone(images) },
     removePendingImage(chatId: string, index: number): void { state.pendingImages[chatId] = (state.pendingImages[chatId] ?? []).filter((_, i) => i !== index) },
     composeUserContent(chatId: string): ChatMessageContent | null {
@@ -148,7 +239,7 @@ export function createGlobalChatStore(api: Api) {
       content: any
       state: 'complete' | 'streaming' | 'error'
       retryable?: boolean
-      messageType?: 'execution_audit'
+      messageType?: ChatMessageType
       executionPlan?: ChatExecutionPlan
     }[], readOnly = false): void {
       cancelledRuns.delete(chatId)
@@ -180,6 +271,11 @@ export function createGlobalChatStore(api: Api) {
       state.readOnly[chatId] = readOnly
     },
     async send(chatId: string, content: any): Promise<void> {
+      // Keep the draft intact while compaction is in flight.  The runtime also
+      // enforces this ordering for non-renderer callers, but guarding here
+      // avoids showing a new optimistic user message that would immediately
+      // be replaced by the compaction snapshot.
+      if (state.compacting[chatId]) return
       if (typeof content !== 'string') return
       const value = content.trim()
       if (!value || state.readOnly[chatId]) return
@@ -194,10 +290,10 @@ export function createGlobalChatStore(api: Api) {
       ;(state.messages[chatId] ?? (state.messages[chatId] = [])).push({ id: userId, role: 'user', content: value, state: 'complete' })
       lastUserMessage.set(chatId, { id: userId, content: value })
       state.runUserMessageIds[chatId] = userId
-      await api.send({ chatId, runId, content: value })
+      await api.send({ chatId, runId, content: value, sshContextLines: state.sshContextLines })
     },
     async retry(chatId: string): Promise<void> {
-      if (state.readOnly[chatId]) return
+      if (state.readOnly[chatId] || state.compacting[chatId]) return
       const previous = lastUserMessage.get(chatId)
       if (!previous || !previous.content || !state.errors[chatId] || !state.retryableErrors[chatId]) return
       const runId = crypto.randomUUID()
@@ -208,7 +304,7 @@ export function createGlobalChatStore(api: Api) {
       state.retryableErrors[chatId] = false
       state.activeMessageIds[chatId] = null
       state.runUserMessageIds[chatId] = previous.id
-      await api.send({ chatId, runId, content: previous.content, retry: true })
+      await api.send({ chatId, runId, content: previous.content, retry: true, sshContextLines: state.sshContextLines })
     },
     canRetry(chatId: string): boolean {
       return !state.readOnly[chatId] && Boolean(state.errors[chatId]) && state.retryableErrors[chatId]

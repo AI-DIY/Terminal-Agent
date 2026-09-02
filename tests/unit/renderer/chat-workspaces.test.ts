@@ -1217,11 +1217,12 @@ describe('durable chat workbench components', () => {
     expect(view).toContain(':current-sessions="currentChatSessions"')
     expect(view).toContain('workbenchSessionAttachmentTarget(chatStore.state.selectedId, chatStore.state.liveChatId)')
     expect(view).toContain('if (!currentChatSessionIds.value.has(sessionId) || !store.byId(sessionId)) return')
-    expect(view).toContain('const available = new Set(currentChatSessions.value.map(session => session.id))')
+    expect(view).toContain('const availableSessionIds = sessions.value')
+    expect(view).toContain('normalizeSessionOrder(visibleSessionIds.value, availableSessionIds)')
     expect(view).toContain('addSession(session, false)')
     expect(view).toContain('if (isCurrent() && store.byId(session.id)) select(session.id)')
-    expect(canvas).toContain('const currentSessionIds = computed(() => new Set(props.currentSessions.map(session => session.id)))')
-    expect(canvas).toContain('return currentSessionIds.value.has(sessionId) && displayedSessionIdSet.value.has(sessionId)')
+    expect(canvas).toContain('const orderedCurrentSessions = computed(() =>')
+    expect(canvas).toContain('const displayedSessionIds = computed(() => orderedCurrentSessions.value.map(session => session.id))')
   })
 
   it('pins a duplicate request to the chat captured before its async transport resolves', async () => {
@@ -1250,7 +1251,8 @@ describe('durable chat workbench components', () => {
     expect(attached).toEqual([{ chatId: 'chat-a', isCurrent: false }])
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
     expect(view).toContain('const targetChatId = activeWorkbenchChatId.value')
-    expect(view).toContain('runWorkbenchSessionDuplicate({')
+    expect(view).not.toContain('runWorkbenchSessionDuplicate({')
+    expect(view).not.toContain('@duplicate=')
     expect(view).toContain('const reconnectIsCurrent = () => chatStore.state.selectedId === targetChatId')
   })
 
@@ -1416,9 +1418,8 @@ describe('durable chat workbench components', () => {
     const shell = readFileSync(new URL('../../../src/renderer/src/components/workbench/WorkbenchShell.vue', import.meta.url), 'utf8')
 
     expect(view).toContain(':current-chat-title="chatStore.state.selected?.title')
-    expect(view).toContain(':current-chat-shell-count="isLiveChat ? currentChatSessions.length : 0"')
-    expect(view).toContain(':shell-count="isLiveChat ? currentChatSessions.length')
-    expect(view).toContain(':shell-count="isLiveChat ? currentChatSessions.length : 0"')
+    expect(view).toContain(':current-chat-shell-count="isLiveChat ? currentChatUniqueHostCount : 0"')
+    expect(view).toContain(':shell-count="isLiveChat ? currentChatUniqueHostCount : 0"')
     expect(shell).toContain('{{ currentChatTitle }}')
     expect(shell).toContain('{{ currentChatShellCount }} 个 SSH')
     expect(view).not.toContain('sessions.length }} 个 SSH')

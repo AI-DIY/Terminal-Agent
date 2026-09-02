@@ -1,6 +1,7 @@
-import { app, BrowserWindow, Menu } from 'electron'
+import { app, BrowserWindow, Menu, session } from 'electron'
 import { join } from 'node:path'
 import { registerSessionHandlers } from './ipc/register-handlers'
+import { registerFileTransferHandlers } from './ipc/register-file-transfer-handlers'
 import { PpkToOpenSshConverter, PrivateKeyLoader } from './ssh/private-key-loader'
 import { KeyMaterialStore } from './ssh/key-material-store'
 import { SessionService } from './ssh/session-service'
@@ -62,9 +63,10 @@ import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
 import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'
 import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'
 import { UpdaterService } from './updater/updater-service'
+import { createElectronSessionUpdaterFetcher } from './updater/electron-session-fetcher'
 import { registerUpdaterHandlers } from './updater/register-updater-handlers'
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { buildStructuredShellContext, StructuredChatAgent } from './chat/structured-chat-agent'
+import { buildStructuredShellContext, dedupeStructuredShellsForPrompt, StructuredChatAgent } from './chat/structured-chat-agent'
 import { ExecutionPlanService } from './chat/execution-plan-service'
 import { modelHostname, uniqueModelHostnames } from '../shared/model-context'
 
@@ -120,10 +122,14 @@ const chatRuntime = new ChatRuntime({
   },
   updateMessage: async request => { await chats.updateMessage(request) },
   getRetryMessageId: (chatId, content) => chats.findRetryMessage(chatId, content),
-  getContext: async chatId => {
+  getContext: async (chatId, options = {}) => {
     const snapshot = await chats.get(chatId)
-    const onlineSessions = sessions.snapshot().map(session => ({ ...session, recentLines: sessions.recentLines(session.id) }))
-    const availableShells = buildStructuredShellContext(snapshot.chat.shells, onlineSessions)
+    const requestedSshContextLines = options.sshContextLines ?? 50
+    const sshContextLines = Number.isFinite(requestedSshContextLines)
+      ? Math.max(0, Math.min(200, Math.floor(requestedSshContextLines)))
+      : 50
+    const onlineSessions = sessions.snapshot().map(session => ({ ...session, recentLines: sessions.recentLines(session.id, sshContextLines) }))
+    const availableShells = dedupeStructuredShellsForPrompt(buildStructuredShellContext(snapshot.chat.shells, onlineSessions))
     const onlineShellIds = snapshot.chat.shells
       .filter(shell => shell.status === 'open' && shell.sessionId && onlineSessions.some(session => session.id === shell.sessionId))
       .map(shell => shell.sessionId!)
@@ -154,6 +160,7 @@ const chatRuntime = new ChatRuntime({
       shells: availableShells.map(shell => ({ ...shell, status: 'open' as const })),
       facts: facts.filter((record): record is NonNullable<typeof record> => Boolean(record)),
       audit: approvedExecutionAudit.recent(onlineShellIds),
+      ...(options.maxMessages === undefined ? {} : { maxMessages: options.maxMessages }),
     })
     return {
       messages: context,
@@ -189,12 +196,17 @@ const applicationVersion = readApplicationVersion()
 const updater = new UpdaterService({
   currentVersion: applicationVersion,
   tempDirectory: join(app.getPath('temp'), 'terminal-agent-updates'),
+  // Node's fetch ignores Chromium's proxy resolver.  Use the same default
+  // session as the app window so update traffic honours Windows/PAC/VPN proxy
+  // policy without hard-coding a proxy address.
+  fetch: createElectronSessionUpdaterFetcher(() => session.defaultSession),
   relaunch: () => app.relaunch(),
   // Keep the normal persistence/session shutdown path when restarting after
   // an installer launch; `app.exit()` would bypass before-quit handlers.
   exit: code => code === 0 ? app.quit() : app.exit(code),
 })
 let unregisterSessionEvents: (() => void) | undefined
+let unregisterFileTransferHandlers: (() => void) | undefined
 let unregisterAccessClientLaunchEvents: (() => void) | undefined
 let unregisterBastionLaunchEvents: (() => void) | undefined
 let unregisterSessionModeHandlers: (() => void) | undefined
@@ -278,6 +290,8 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
     if (diagnostics === windowDiagnostics) diagnostics = undefined
     unregisterSessionEvents?.()
     unregisterSessionEvents = undefined
+    unregisterFileTransferHandlers?.()
+    unregisterFileTransferHandlers = undefined
     unregisterAccessClientLaunchEvents?.()
     unregisterAccessClientLaunchEvents = undefined
     unregisterBastionLaunchEvents?.()
@@ -306,6 +320,7 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
   })
 
   unregisterSessionEvents = registerSessionHandlers(sessions, keyMaterials, mainWindow.webContents, directSessions)
+  unregisterFileTransferHandlers = registerFileTransferHandlers(sessions, mainWindow.webContents)
   unregisterAccessClientLaunchEvents = registerAccessClientLaunchHandlers(accessClientLaunches, mainWindow.webContents)
   unregisterBastionLaunchEvents = registerBastionLaunchHandlers(bastionLaunches, mainWindow.webContents)
   unregisterSessionModeHandlers = registerSessionModeHandlers(sessionModes, mainWindow.webContents)

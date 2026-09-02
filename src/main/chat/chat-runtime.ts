@@ -4,11 +4,11 @@ import type { ProviderModelSettings } from '../model/model-provider-router'
 import type { ChatMessageContent } from '../../shared/chat-content'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
 import type { StructuredChatRequest, StructuredChatShell } from './structured-chat-agent'
-import type { ChatProgressStage } from '../../shared/contracts'
+import type { ChatCompactRequest, ChatProgressStage } from '../../shared/contracts'
 import { estimateChatMessages } from './token-estimator'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export type ChatRuntimeRequest = { chatId: string; runId: string; content: ChatMessageContent; retry?: boolean }
+export type ChatRuntimeRequest = { chatId: string; runId: string; content: ChatMessageContent; retry?: boolean; sshContextLines?: number }
 export type ChatRuntimeEvent =
   | { kind: 'chat:progress'; chatId: string; runId: string; stage: ChatProgressStage }
   | { kind: 'chat:delta'; chatId: string; runId: string; messageId: string; content: string }
@@ -19,7 +19,7 @@ type RuntimeDeps = {
   appendMessage(request: any): Promise<{ messageId?: string } | unknown>
   updateMessage?(request: any): Promise<unknown>
   getRetryMessageId?(chatId: string, content: any): Promise<string | undefined>
-  getContext(chatId: string): Promise<ChatMessage[] | { messages: ChatMessage[]; hasImages: boolean; availableHostnames: string[]; availableShells?: StructuredChatShell[] }>
+  getContext(chatId: string, options?: { sshContextLines?: number; maxMessages?: number }): Promise<ChatMessage[] | { messages: ChatMessage[]; hasImages: boolean; availableHostnames: string[]; availableShells?: StructuredChatShell[] }>
   resolveModel(input?: { hasImages: boolean }): Promise<ProviderModelSettings>
   runStructured?(settings: ProviderModelSettings, input: StructuredChatRequest, signal: AbortSignal, onStage?: (stage: ChatProgressStage) => void): Promise<AssistantPlanOutput>
   materializePlan?(plan: NonNullable<AssistantPlanOutput['plan']>): import('../../shared/chat-plan').ChatExecutionPlan
@@ -30,9 +30,20 @@ type RuntimeDeps = {
 export class ChatRuntime {
   private readonly active = new Map<string, ActiveChatRun>()
   private readonly generations = new Map<string, number>()
+  /**
+   * A compaction lock is held for the whole compaction transaction.  In
+   * particular, the lock is not released until the caller has persisted the
+   * generated summary (see compactAndPersist).  This prevents a new turn from
+   * taking a transcript snapshot between summary generation and persistence.
+   */
+  private readonly compactions = new Map<string, Promise<void>>()
   constructor(private readonly deps: RuntimeDeps) {}
 
   async send(request: ChatRuntimeRequest, publish: (event: ChatRuntimeEvent) => void): Promise<void> {
+    // A compaction may have cancelled the previous run but still be reading
+    // and summarising its transcript.  Wait for that transaction to finish so
+    // this turn cannot hydrate from the pre-summary snapshot.
+    await this.waitForCompaction(request.chatId)
     const superseded = this.active.get(request.chatId)
     superseded?.controller.abort()
     const controller = new AbortController()
@@ -90,7 +101,7 @@ export class ChatRuntime {
         await finalizeCancellationIfNeeded()
         return
       }
-      const contextResult = await this.deps.getContext(request.chatId)
+      const contextResult = await this.deps.getContext(request.chatId, { sshContextLines: request.sshContextLines })
       const structuredContext = Array.isArray(contextResult) ? null : contextResult
       const context = Array.isArray(contextResult) ? contextResult : contextResult.messages
       const settings = await this.deps.resolveModel({ hasImages: structuredContext?.hasImages ?? false })
@@ -201,6 +212,119 @@ export class ChatRuntime {
       controller.signal.removeEventListener('abort', onAbort)
       if (isOwner()) this.active.delete(request.chatId)
       run.resolveDone()
+    }
+  }
+
+  /**
+   * Generates a compact, model-authored task summary without changing the
+   * visible transcript. The caller persists it as a context-summary message,
+   * which becomes the durable boundary used by buildChatContext().
+   */
+  async compact(request: ChatCompactRequest): Promise<string> {
+    return this.withCompactionLock(request.chatId, () => this.generateCompactionSummary(request))
+  }
+
+  /**
+   * Generate and persist a compaction summary while retaining the per-chat
+   * lock through the persistence callback.  The IPC handler uses this variant
+   * so a send cannot race the summary append between the two operations.
+   */
+  async compactAndPersist<T>(request: ChatCompactRequest, persist: (summary: string) => Promise<T>): Promise<T> {
+    return this.withCompactionLock(request.chatId, async () => {
+      const summary = await this.generateCompactionSummary(request)
+      return persist(summary)
+    })
+  }
+
+  private async generateCompactionSummary(request: ChatCompactRequest): Promise<string> {
+    await this.cancel(request.chatId)
+    const controller = new AbortController()
+    let timedOut = false
+    const timeout = setTimeout(() => { timedOut = true; controller.abort() }, this.deps.timeoutMs ?? 120_000)
+    try {
+      // Compaction needs a wider transcript window than a normal turn. The
+      // context builder still applies its hard safety cap, while preserving
+      // the latest summary boundary when one already exists.
+      const contextResult = await this.deps.getContext(request.chatId, {
+        sshContextLines: request.sshContextLines,
+        maxMessages: 100,
+      })
+      const structuredContext = Array.isArray(contextResult) ? null : contextResult
+      const context = Array.isArray(contextResult) ? contextResult : contextResult.messages
+      const settings = await this.deps.resolveModel({ hasImages: structuredContext?.hasImages ?? false })
+      if (estimateChatMessages(context) > settings.contextLimit) {
+        throw new Error('聊天上下文超出当前模型限制，无法生成摘要。请先减少 SSH 上下文追加行数后重试。')
+      }
+      const summaryPrompt: ChatMessage = {
+        role: 'user',
+        content: '请将此前任务对话压缩成面向后续运维协作的简明摘要。保留目标、已确认的事实、已执行或待执行的步骤、风险和待确认事项；不要编造信息，不要执行命令。此请求仅用于上下文压缩：请在 reply 中给出摘要，plan 必须为 null。',
+      }
+      if (this.deps.runStructured) {
+        const result = await this.deps.runStructured(settings, {
+          messages: [...context, summaryPrompt],
+          availableHostnames: structuredContext?.availableHostnames ?? [],
+          ...(structuredContext?.availableShells ? { availableShells: structuredContext.availableShells } : {}),
+        }, controller.signal)
+        const summary = result.reply.trim()
+        if (summary) return summary
+        throw new Error('AI 未返回可用摘要。')
+      }
+
+      let summary = ''
+      await this.deps.stream(settings, [...context, summaryPrompt], delta => { summary += delta }, undefined, controller.signal)
+      summary = summary.trim()
+      if (summary) return summary
+      throw new Error('AI 未返回可用摘要。')
+    } catch (error) {
+      if (timedOut || controller.signal.aborted) throw new Error('上下文压缩超时，请稍后重试。', { cause: error })
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  /** Wait until all currently queued compaction transactions for a chat finish. */
+  private async waitForCompaction(chatId: string): Promise<void> {
+    while (true) {
+      const pending = this.compactions.get(chatId)
+      if (!pending) return
+      await pending
+      // Another compaction can have been queued immediately after the one we
+      // awaited.  Re-check the map before allowing a send to proceed.
+      if (this.compactions.get(chatId) === pending) return
+    }
+  }
+
+  private async withCompactionLock<T>(chatId: string, operation: () => Promise<T>): Promise<T> {
+    const release = await this.acquireCompactionLock(chatId)
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
+  }
+
+  private async acquireCompactionLock(chatId: string): Promise<() => void> {
+    // Serialise concurrent compaction requests.  The lock is installed
+    // synchronously once no predecessor remains, so two callers cannot both
+    // observe an empty map and enter the critical section.
+    while (true) {
+      const predecessor = this.compactions.get(chatId)
+      if (!predecessor) break
+      await predecessor
+    }
+
+    let resolveLock!: () => void
+    const lock = new Promise<void>(resolve => { resolveLock = resolve })
+    this.compactions.set(chatId, lock)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      if (this.compactions.get(chatId) === lock) {
+        this.compactions.delete(chatId)
+        resolveLock()
+      }
     }
   }
 

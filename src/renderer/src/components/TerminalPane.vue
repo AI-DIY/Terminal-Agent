@@ -3,7 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { SessionView } from '../stores/sessions'
+import { MAX_SESSION_BUFFER_CHARS, type SessionView } from '../stores/sessions'
 import type { ShellFontSize } from '../../../shared/contracts'
 
 const props = defineProps<{ session: SessionView; active: boolean; fontSize: ShellFontSize }>()
@@ -20,6 +20,38 @@ let observer: ResizeObserver | undefined
 let unsubscribe: (() => void) | undefined
 let inputSubscription: { dispose(): void } | undefined
 let selectionSubscription: { dispose(): void } | undefined
+let initialBufferFrame: number | undefined
+let renderedBuffer = ''
+
+/**
+ * Keep the xterm instance aligned with the renderer's retained output.
+ *
+ * An SSH data IPC event can be queued for the workbench's next animation
+ * frame immediately before this pane mounts. In that narrow interval the
+ * event is correctly stored, but this pane has not installed its live data
+ * listener yet. Reconcile the retained buffer after mounting so the initial
+ * greeting is never skipped by that timing boundary.
+ */
+function syncTerminalBuffer(): void {
+  const buffered = props.session.buffer
+  if (!terminal || buffered === renderedBuffer) return
+  if (buffered.startsWith(renderedBuffer)) {
+    writeTerminalData(buffered.slice(renderedBuffer.length))
+    return
+  }
+  // A bounded retained buffer can discard its prefix. Resetting is rare, and
+  // it prevents duplicated/stale text when a pane is remounted after that
+  // rollover.
+  terminal.reset()
+  terminal.write(buffered)
+  renderedBuffer = buffered
+}
+
+function writeTerminalData(data: string): void {
+  if (!terminal || !data) return
+  terminal.write(data)
+  renderedBuffer = `${renderedBuffer}${data}`.slice(-MAX_SESSION_BUFFER_CHARS)
+}
 
 function openContextMenu(event: MouseEvent): void {
   const bounds = paneElement.value?.getBoundingClientRect()
@@ -114,11 +146,19 @@ onMounted(() => {
   fit = new FitAddon()
   terminal.loadAddon(fit)
   terminal.open(terminalElement.value!)
-  terminal.write(props.session.buffer)
+  syncTerminalBuffer()
   inputSubscription = terminal.onData(data => { void window.terminalAgent.sessions.write(props.session.id, data) })
   selectionSubscription = terminal.onSelectionChange(() => { hasSelection.value = terminal?.hasSelection() ?? false })
   unsubscribe = window.terminalAgent.sessions.onData(event => {
-    if (event.sessionId === props.session.id) terminal?.write(event.data)
+    if (event.sessionId === props.session.id) writeTerminalData(event.data)
+  })
+  // The workbench batches data into requestAnimationFrame. Queue a second,
+  // later frame after registering the live listener to bridge the only gap:
+  // data queued before this component mounts but flushed after its first
+  // initial-buffer write.
+  initialBufferFrame = window.requestAnimationFrame(() => {
+    initialBufferFrame = undefined
+    syncTerminalBuffer()
   })
   observer = new ResizeObserver(resize)
   observer.observe(terminalElement.value!)
@@ -126,6 +166,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (initialBufferFrame !== undefined) window.cancelAnimationFrame(initialBufferFrame)
+  initialBufferFrame = undefined
   unsubscribe?.()
   inputSubscription?.dispose()
   selectionSubscription?.dispose()

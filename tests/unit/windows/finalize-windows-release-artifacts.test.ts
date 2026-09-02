@@ -41,6 +41,7 @@ describe('Windows release artifact finalizer', () => {
     const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
     const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
     const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+    const quickInstallSourcePath = join(projectRoot, 'quick-install.cmd')
     const bridgeContents = Buffer.from('packaged bridge')
     const installerContents = Buffer.from('installer payload')
 
@@ -50,6 +51,7 @@ describe('Windows release artifact finalizer', () => {
       await writeFile(installerPath, installerContents)
       await writeFile(blockmapPath, 'blockmap payload')
       await writeFile(cleanupArchivePath, 'cleanup archive payload')
+      await writeFile(quickInstallSourcePath, '@echo off\r\n')
 
       const result = await finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version, releaseDate })
       const expectedSha512 = createHash('sha512').update(installerContents).digest('base64')
@@ -72,6 +74,58 @@ describe('Windows release artifact finalizer', () => {
         `releaseDate: ${releaseDate.toISOString()}`,
         '',
       ].join('\n'))
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('copies the quick installer beside the release assets when the source checkout provides it', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const releaseDate = new Date('2026-08-23T17:30:40.000Z')
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+    const quickInstallSourcePath = join(projectRoot, 'quick-install.cmd')
+    const quickInstallPath = join(projectRoot, 'release', 'quick-install.cmd')
+    const quickInstallContents = Buffer.from('@echo off\r\necho quick install\r\n')
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await writeFile(packagedBridgePath, 'packaged bridge')
+      await writeFile(installerPath, 'installer payload')
+      await writeFile(blockmapPath, 'blockmap payload')
+      await writeFile(cleanupArchivePath, 'cleanup archive payload')
+      await writeFile(quickInstallSourcePath, quickInstallContents)
+
+      await finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version, releaseDate })
+
+      expect(await readFile(quickInstallPath)).toEqual(quickInstallContents)
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('requires the quick installer before publishing a Windows release', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await writeFile(packagedBridgePath, 'packaged bridge')
+      await writeFile(installerPath, 'installer payload')
+      await writeFile(blockmapPath, 'blockmap payload')
+      await writeFile(cleanupArchivePath, 'cleanup archive payload')
+
+      await expect(finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version }))
+        .rejects.toThrow('quick installer')
     }
     finally {
       await rm(projectRoot, { recursive: true, force: true })
@@ -242,6 +296,7 @@ describe('Windows release artifact finalizer', () => {
     const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
     const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
     const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+    const quickInstallSourcePath = join(projectRoot, 'quick-install.cmd')
 
     try {
       await mkdir(dirname(packagedBridgePath), { recursive: true })
@@ -249,6 +304,7 @@ describe('Windows release artifact finalizer', () => {
       await writeFile(installerPath, 'first installer')
       await writeFile(blockmapPath, 'blockmap payload')
       await writeFile(cleanupArchivePath, 'cleanup archive payload')
+      await writeFile(quickInstallSourcePath, '@echo off\r\necho quick install\r\n')
       await finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version, releaseDate })
 
       const currentBridge = Buffer.from('current bridge')

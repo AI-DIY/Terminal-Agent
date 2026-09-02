@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { modelHostnameFromTitle, resolveModelShellTargets } from '../../../src/shared/model-shell-target'
+import { modelHostnameFromTitle, resolveModelShellTargets, sameModelShellTarget, selectStableModelTargetIndex } from '../../../src/shared/model-shell-target'
 
 describe('model Shell target resolution', () => {
   it('prefers observed/valid hostnames and derives only strict user@hostname title hints', () => {
@@ -30,6 +30,16 @@ describe('model Shell target resolution', () => {
     ])
     expect(afterRemoval[0]).toBe(first[1])
     expect(afterRemoval[0]).not.toContain('session-b')
+  })
+
+  it('selects the stable #1 session when a model target has duplicate connections', () => {
+    expect(selectStableModelTargetIndex(
+      'WEB-01.',
+      ['web-01', 'web-01', 'db-01'],
+      ['session-b', 'session-a', 'session-c'],
+    )).toBe(1)
+    expect(sameModelShellTarget('web-01', 'WEB-01.')).toBe(true)
+    expect(selectStableModelTargetIndex('missing', ['web-01'], ['session-a'])).toBeUndefined()
   })
 
   it('rejects address-like or malformed title suffixes', () => {

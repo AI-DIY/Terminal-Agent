@@ -435,7 +435,7 @@ test('filters historical hosts as a multi-select workspace with shared layout an
   }
 })
 
-test('duplicates a live terminal, previews read-only history, and reconnects it into the selected history chat', async ({ launchApp }) => {
+test('opens file transfer without a per-terminal ellipsis menu, previews read-only history, and reconnects it into the selected history chat', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -449,18 +449,22 @@ test('duplicates a live terminal, previews read-only history, and reconnects it 
     await sendCommand(originalPane, page, 'history-preview')
     await expect(originalPane).toContainText('echo:history-preview')
 
-    await page.getByRole('button', { name: '终端操作 127.0.0.1', exact: true }).click()
-    const terminalMenu = page.getByRole('menu', { name: '终端操作 127.0.0.1', exact: true })
-    await expect(terminalMenu.getByRole('menuitem', { name: '重新连接', exact: true })).toBeDisabled()
-    await terminalMenu.getByRole('menuitem', { name: '复制 SSH 通道', exact: true }).click()
-    await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(2)
-    const copyPane = page.locator('[data-testid^="terminal-pane-"]:visible').last()
-    await sendCommand(copyPane, page, 'history-preview-copy')
-    await expect(copyPane).toContainText('echo:history-preview-copy')
+    await expect(page.getByRole('button', { name: '终端操作 127.0.0.1', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('menu', { name: '终端操作 127.0.0.1', exact: true })).toHaveCount(0)
 
-    const closeButtons = page.getByRole('button', { name: /关闭画布终端会话 127\.0\.0\.1(?: #\d+)?$/, exact: false })
-    await closeButtons.last().click()
-    await closeButtons.first().click()
+    const transferButton = page.getByRole('button', { name: '文件传输 127.0.0.1', exact: true })
+    await expect(transferButton).toBeVisible()
+    await transferButton.click()
+    const transferPanel = page.getByLabel('文件传输', { exact: true })
+    await expect(transferPanel).toBeVisible()
+    await expect(transferPanel).toContainText('通过当前 SSH 的独立 SFTP 通道传输，不会中断终端。')
+    await expect(transferPanel.getByLabel('远程路径', { exact: true })).toBeVisible()
+    await expect(transferPanel.getByRole('button', { name: '上传文件', exact: true })).toBeEnabled()
+    await expect(transferPanel.getByRole('button', { name: '下载文件', exact: true })).toBeEnabled()
+    await transferPanel.getByRole('button', { name: '关闭文件传输', exact: true }).click()
+    await expect(transferPanel).toHaveCount(0)
+
+    await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.1', exact: true }).click()
     await expect(page.getByLabel('任务 SSH 历史回放')).toBeVisible()
     const historyPreview = page.getByLabel('只读终端历史 127.0.0.1', { exact: true })
     await expect(historyPreview).toHaveAttribute('data-read-only', 'true')
@@ -681,7 +685,7 @@ test('preserves the authoritative workspace layout across another live chat and 
   }
 })
 
-test('layout controls persist while hidden terminals remain mounted and online', async ({ launchApp }) => {
+test('layout controls persist while all terminal panes remain rendered and scrollable', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -696,7 +700,7 @@ test('layout controls persist while hidden terminals remain mounted and online',
     const originalPanes = await allPanes.elementHandles()
     await expect(allPanes).toHaveCount(4)
     await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
-    await page.getByLabel('当前展示数量').selectOption('2')
+    await expect(page.getByLabel('当前展示数量', { exact: true })).toHaveCount(0)
     await page.getByLabel('每行数量').selectOption('1')
     await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('100')
     await expect(page.getByLabel('SSH 字体大小')).toHaveValue('13')
@@ -704,10 +708,26 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await page.getByLabel('SSH 字体大小').selectOption('11')
 
     const grid = page.getByLabel('可见终端面板')
-    await expect(allPanes.filter({ visible: true })).toHaveCount(2)
+    await expect(allPanes.filter({ visible: true })).toHaveCount(4)
     await expect(grid).toHaveAttribute('data-columns', '1')
     await expect(grid).toHaveAttribute('data-row-height-percent', '100')
     for (const pane of originalPanes) expect(await pane.evaluate(node => node.isConnected)).toBe(true)
+    const gridScroll = await grid.evaluate(node => {
+      const element = node as HTMLElement
+      element.scrollTop = element.scrollHeight
+      const style = getComputedStyle(element)
+      return {
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        scrollTop: element.scrollTop,
+        overflowX: style.overflowX,
+        overflowY: style.overflowY,
+      }
+    })
+    expect(gridScroll.overflowX).toBe('auto')
+    expect(gridScroll.overflowY).toBe('auto')
+    expect(gridScroll.scrollHeight).toBeGreaterThan(gridScroll.clientHeight)
+    expect(gridScroll.scrollTop).toBeGreaterThan(0)
 
     await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
     await page.getByRole('button', { name: '选择终端会话 127.0.0.4', exact: true }).click()
@@ -717,7 +737,6 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await expect(fourthPane).toContainText('echo:after-layout-hide')
 
     await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({
-      visibleCount: 2,
       columns: 1,
       rowHeightPercent: 100,
       fontSize: 11,
@@ -731,7 +750,7 @@ test('layout controls persist while hidden terminals remain mounted and online',
     await expect(page.locator('.workbench-shell')).toHaveClass(/theme-graphite/)
     await page.getByRole('button', { name: activeTaskName!, exact: true }).click()
     await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
-    await expect(page.getByLabel('当前展示数量')).toHaveValue('2')
+    await expect(page.getByLabel('当前展示数量', { exact: true })).toHaveCount(0)
     await expect(page.getByLabel('每行数量')).toHaveValue('1')
     await expect(page.getByLabel('单行高度（占工作区）')).toHaveValue('100')
     await expect(page.getByLabel('SSH 字体大小')).toHaveValue('11')

@@ -8,6 +8,7 @@ import {
   chatSetModeRequestSchema,
   chatTransferSessionsRequestSchema,
   chatRunRequestSchema,
+  chatCompactRequestSchema,
   chatRuntimeEventSchema,
   chatPinRequestSchema,
   chatUnpinRequestSchema,
@@ -22,6 +23,7 @@ import type { ExecutionPlanService } from './execution-plan-service'
 const channels = ['chats:list', 'chats:create', 'chats:get', 'chats:resolve-session', 'chats:set-mode', 'chats:update-title', 'chats:pin', 'chats:unpin', 'chats:remove', 'chats:bind-session', 'chats:transfer-sessions'] as const
 
 type ChatHandlerService = Pick<ChatService, 'list' | 'create' | 'get' | 'resolveSession' | 'setMode' | 'updateTitle' | 'pin' | 'unpin' | 'remove' | 'associateSession' | 'transferSessions' | 'closeSession' | 'reconcileSessions' | 'onChanged'>
+  & Pick<ChatService, 'appendMessage'>
   & Partial<Pick<ChatService, 'syncSessionMetadata'>>
 type SessionLookup = Pick<SessionService, 'snapshot' | 'onClosed'> & Partial<Pick<SessionService, 'onUpdated'>>
 
@@ -114,6 +116,25 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
       assertTrustedSender(event, trustedSender)
       await runtime.cancel(chatIdentifierSchema.parse(chatId))
     })
+    ipcMain.handle('chat:compact', async (event, request: unknown) => {
+      assertTrustedSender(event, trustedSender)
+      const parsed = chatCompactRequestSchema.parse(request)
+      const persistSummary = (summary: string) => service.appendMessage({
+        requestId: parsed.requestId,
+        chatId: parsed.chatId,
+        role: 'system',
+        content: summary,
+        state: 'complete',
+        messageType: 'context_summary',
+      })
+      // Keep compatibility with lightweight test/adaptor runtimes that only
+      // expose the original compact() method.  The production ChatRuntime
+      // always provides compactAndPersist, which holds its lock through this
+      // callback and closes the snapshot race.
+      if (typeof runtime.compactAndPersist === 'function') return runtime.compactAndPersist(parsed, persistSummary)
+      const summary = await runtime.compact(parsed)
+      return persistSummary(summary)
+    })
   }
   if (plans) {
     ipcMain.handle('chat:plan:edit-step', (event, request: unknown) => { assertTrustedSender(event, trustedSender); return plans.editStep(chatPlanEditStepRequestSchema.parse(request)) })
@@ -150,7 +171,7 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
     unsubscribeUpdated?.()
     unsubscribeClosed()
     for (const channel of channels) ipcMain.removeHandler(channel)
-    if (runtime) for (const channel of ['chat:send', 'chat:cancel'] as const) ipcMain.removeHandler(channel)
+    if (runtime) for (const channel of ['chat:send', 'chat:cancel', 'chat:compact'] as const) ipcMain.removeHandler(channel)
     if (plans) for (const channel of ['chat:plan:edit-step', 'chat:plan:remove-step', 'chat:plan:cancel', 'chat:plan:execute'] as const) ipcMain.removeHandler(channel)
   }
 }
