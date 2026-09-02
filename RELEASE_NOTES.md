@@ -1,3 +1,23 @@
+# Terminal-Agent v2.0.8
+
+Release date: 2026-09-02
+
+## SSH 工作台、AI 聊天与文件传输
+
+- 压缩 AI 工作区上下文区域；消息发送后自动跟随到底部，用户手动上滑时暂停跟随，回到底部后恢复。
+- SSH 标题栏和聊天滚动条改为悬浮显示；选中的 SSH 标题和卡片使用红色边框与浅黄色背景，并保持稳定尺寸。
+- 文件传输面板归属对应 SSH 卡片，支持远程目录浏览、路径面包屑、文件/目录右键菜单、上传/下载和可滚动进度日志。
+- 修复 SFTP 通道建立、传输超时和 Electron IPC 应答问题；传输面板在紧凑行高和窄窗口下仍保持日志区域可见。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-2.0.8.exe`
+- `putty.exe`
+- `quick-install.cmd`
+- `quick-start.pdf`
+
+---
+
 # Terminal-Agent v2.0.7
 
 Release date: 2026-09-02

@@ -111,4 +111,29 @@ describe('Ssh2ClientAdapter SFTP transfer channel', () => {
       vi.useRealTimers()
     }
   })
+
+  it('treats transfer progress as activity so long-running copies do not time out', async () => {
+    vi.useFakeTimers()
+    let step: ((total: number, chunk: number, size: number) => void) | undefined
+    let complete: (() => void) | undefined
+    state.sftp.fastGet.mockImplementationOnce((_remote: string, _local: string, options: { step?: (total: number, chunk: number, size: number) => void }, callback: () => void) => {
+      step = options.step
+      complete = callback
+    })
+    try {
+      const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+      const pending = connection.fileTransfer?.downloadFile('/tmp/archive.zip', 'C:/archive.zip')
+      let settled = false
+      void pending?.finally(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(29_000)
+      step?.(1, 1, 7)
+      await vi.advanceTimersByTimeAsync(29_000)
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      complete?.()
+      await expect(pending).resolves.toBe(7)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

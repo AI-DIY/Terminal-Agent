@@ -8,10 +8,12 @@ import type { SshClientPort, SshConnectOptions, SshConnection, SshDirectoryEntry
 import type { SshFileTransferProgress } from './ssh-client-port'
 
 // A server that does not implement the SFTP subsystem can otherwise leave an
-// invoke promise pending forever.  Bound both channel setup and operations so
+// invoke promise pending forever.  Bound channel setup and idle operations so
 // the renderer receives a normal rejection instead of Electron's
-// "reply was never sent" diagnostic.
-const SFTP_OPERATION_TIMEOUT_MS = 30_000
+// "reply was never sent" diagnostic.  Active transfers reset the idle timer
+// whenever ssh2 reports progress, so large but healthy copies can continue.
+const SFTP_CHANNEL_TIMEOUT_MS = 30_000
+const SFTP_TRANSFER_IDLE_TIMEOUT_MS = 30_000
 
 export class Ssh2ClientAdapter implements SshClientPort {
   async connect(options: SshConnectOptions): Promise<SshConnection> {
@@ -64,7 +66,7 @@ async function transferFile(
   let settled = false
 
   return await new Promise<number>((resolve, reject) => {
-    const timeout = setTimeout(() => finish(new Error('SFTP 操作超时，请检查远程服务是否启用 SFTP。')), SFTP_OPERATION_TIMEOUT_MS)
+    let timeout: ReturnType<typeof setTimeout> | undefined
     const finish = (error?: Error | null): void => {
       if (settled) return
       settled = true
@@ -84,6 +86,11 @@ async function transferFile(
         resolve(uploadSize ?? lastTransferred)
       }
     }
+    const armTimeout = (): void => {
+      if (timeout) clearTimeout(timeout)
+      timeout = setTimeout(() => finish(new Error('SFTP 操作超时，请检查远程服务是否启用 SFTP。')), SFTP_TRANSFER_IDLE_TIMEOUT_MS)
+      timeout.unref?.()
+    }
     const step = (total: number, _chunk: number, fileSize: number): void => {
       // ssh2 reports the cumulative transferred amount as `total`; retain a
       // monotonic value even with unusual server implementations.
@@ -91,6 +98,7 @@ async function transferFile(
       const totalBytes = Number.isFinite(fileSize) && fileSize >= 0 ? Math.floor(fileSize) : undefined
       try {
         onProgress?.({ transferredBytes: lastTransferred, ...(totalBytes === undefined ? {} : { totalBytes }) })
+        armTimeout()
       } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)))
       }
@@ -103,7 +111,7 @@ async function transferFile(
     }
     listenSftpEvent(sftp, 'error', onSftpError)
     listenSftpEvent(sftp, 'close', onSftpClose)
-    timeout.unref?.()
+    armTimeout()
     try {
       if (direction === 'upload') sftp.fastPut(sourcePath, targetPath, options, callback)
       else sftp.fastGet(sourcePath, targetPath, options, callback)
@@ -120,7 +128,7 @@ function openSftp(client: Client): Promise<SFTPWrapper> {
       if (settled) return
       settled = true
       reject(new Error('SFTP 通道建立超时，请检查远程服务是否启用 SFTP。'))
-    }, SFTP_OPERATION_TIMEOUT_MS)
+    }, SFTP_CHANNEL_TIMEOUT_MS)
     timeout.unref?.()
     const finish = (error?: Error, sftp?: SFTPWrapper): void => {
       if (settled) {
@@ -153,7 +161,7 @@ async function listDirectory(client: Client, remotePath: string): Promise<readon
   const sftp = await openSftp(client)
   return await new Promise<readonly SshDirectoryEntry[]>((resolve, reject) => {
     let settled = false
-    const timeout = setTimeout(() => finish(new Error('SFTP 目录读取超时，请检查远程服务是否启用 SFTP。')), SFTP_OPERATION_TIMEOUT_MS)
+    const timeout = setTimeout(() => finish(new Error('SFTP 目录读取超时，请检查远程服务是否启用 SFTP。')), SFTP_CHANNEL_TIMEOUT_MS)
     const finish = (error?: Error, entries?: readonly SshDirectoryEntry[]): void => {
       if (settled) return
       settled = true

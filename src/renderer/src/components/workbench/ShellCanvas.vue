@@ -39,7 +39,7 @@ const emit = defineEmits<{
 const layout = getLayoutPreferencesStore()
 const layoutMenuOpen = ref(false)
 const menuHistoryId = ref<string | null>(null)
-const fileTransferSessionId = ref<string | null>(null)
+const fileTransferSessionIds = ref(new Set<string>())
 const draggingSessionId = ref<string | null>(null)
 const dragOverSessionId = ref<string | null>(null)
 const orderedCurrentSessions = computed(() => {
@@ -84,11 +84,16 @@ function closeSession(sessionId: string): void {
 function openFileTransfer(session: SessionView): void {
   layoutMenuOpen.value = false
   menuHistoryId.value = null
-  fileTransferSessionId.value = fileTransferSessionId.value === session.id ? null : session.id
+  const next = new Set(fileTransferSessionIds.value)
+  if (next.has(session.id)) next.delete(session.id)
+  else next.add(session.id)
+  fileTransferSessionIds.value = next
 }
 
-function closeFileTransfer(): void {
-  fileTransferSessionId.value = null
+function closeFileTransfer(sessionId: string): void {
+  const next = new Set(fileTransferSessionIds.value)
+  next.delete(sessionId)
+  fileTransferSessionIds.value = next
 }
 
 function beginSessionDrag(sessionId: string, event: DragEvent): void {
@@ -197,9 +202,8 @@ watch(
   () => props.currentSessions.map(session => session.id),
   () => {
     layoutMenuOpen.value = false
-    if (fileTransferSessionId.value && !props.currentSessions.some(session => session.id === fileTransferSessionId.value)) {
-      fileTransferSessionId.value = null
-    }
+    const validIds = new Set(props.currentSessions.map(session => session.id))
+    fileTransferSessionIds.value = new Set([...fileTransferSessionIds.value].filter(sessionId => validIds.has(sessionId)))
   },
 )
 watch(
@@ -241,26 +245,26 @@ watch(
           @click="layoutMenuOpen = !layoutMenuOpen"
         ><LayoutGrid :size="13" aria-hidden="true" /><span>SSH 窗口布局</span></button>
       </div>
-      <section v-if="layoutMenuOpen && ((isLive && currentSessions.length) || (!isLive && historyHosts.length))" class="layout-menu" aria-label="SSH 窗口布局设置">
-        <strong>SSH 窗口布局</strong>
-        <label>每行数量
-          <select :value="layout.state.columns" @change="updateLayout('columns', $event)">
-            <option v-for="value in 4" :key="value" :value="value">{{ value }}</option>
-          </select>
-        </label>
-        <label>SSH 字体大小
-          <select :value="layout.state.fontSize" @change="updateLayout('fontSize', $event)">
-            <option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option>
-          </select>
-        </label>
-        <label>单行高度（占工作区）
-          <select :value="layout.state.rowHeightPercent" @change="updateLayout('rowHeightPercent', $event)">
-            <option v-for="preset in SHELL_ROW_HEIGHT_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option>
-          </select>
-        </label>
-        <span>{{ layoutSummary }}</span>
-      </section>
     </header>
+    <section v-if="layoutMenuOpen && ((isLive && currentSessions.length) || (!isLive && historyHosts.length))" class="layout-menu" aria-label="SSH 窗口布局设置">
+      <strong>SSH 窗口布局</strong>
+      <label>每行数量
+        <select :value="layout.state.columns" @change="updateLayout('columns', $event)">
+          <option v-for="value in 4" :key="value" :value="value">{{ value }}</option>
+        </select>
+      </label>
+      <label>SSH 字体大小
+        <select :value="layout.state.fontSize" @change="updateLayout('fontSize', $event)">
+          <option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option>
+        </select>
+      </label>
+      <label>单行高度（占工作区）
+        <select :value="layout.state.rowHeightPercent" @change="updateLayout('rowHeightPercent', $event)">
+          <option v-for="preset in SHELL_ROW_HEIGHT_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option>
+        </select>
+      </label>
+      <span>{{ layoutSummary }}</span>
+    </section>
     <section v-if="historyHosts.length" class="history-shell-toolbar" aria-label="历史 SSH 连接">
       <div class="history-shell-heading"><strong>历史 SSH 连接</strong><span>{{ selectedHistoryHosts.length }} / {{ historyHosts.length }} 台已选择</span></div>
       <div class="history-shell-tabs">
@@ -301,7 +305,7 @@ watch(
           v-for="session in orderedCurrentSessions"
           :key="session.id"
           class="terminal-frame"
-          :class="{ selected: session.id === activeSessionId, 'transfer-open': session.id === fileTransferSessionId, dragging: session.id === draggingSessionId, 'drag-over': session.id === dragOverSessionId && session.id !== draggingSessionId }"
+          :class="{ selected: session.id === activeSessionId, 'transfer-open': fileTransferSessionIds.has(session.id), dragging: session.id === draggingSessionId, 'drag-over': session.id === dragOverSessionId && session.id !== draggingSessionId }"
         >
           <header
             draggable="true"
@@ -315,17 +319,17 @@ watch(
             <span v-if="displayOrdinal(session) !== null" class="host-ordinal">#{{ displayOrdinal(session) }}</span>
             <span>已连接</span>
             <div class="terminal-actions">
-              <button type="button" :aria-label="`文件传输 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" :aria-expanded="fileTransferSessionId === session.id" title="文件传输" @click.stop="openFileTransfer(session)"><Files :size="14" aria-hidden="true" /></button>
+              <button type="button" :aria-label="`文件传输 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" :aria-expanded="fileTransferSessionIds.has(session.id)" title="文件传输" @click.stop="openFileTransfer(session)"><Files :size="14" aria-hidden="true" /></button>
               <button type="button" :aria-label="`查看 SSH 历史 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" title="历史会话" @click.stop="openSessionHistory(session)"><History :size="14" aria-hidden="true" /></button>
               <button type="button" :aria-label="`关闭画布终端会话 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" title="关闭 SSH" class="close-terminal" @click.stop="closeSession(session.id)"><X :size="15" aria-hidden="true" /></button>
             </div>
           </header>
           <TerminalPane :session="session" :active="session.id === activeSessionId" :font-size="layout.state.fontSize" @activate="selectSession(session.id)" />
           <FileTransferPanel
-            v-if="fileTransferSessionId === session.id"
+            v-if="fileTransferSessionIds.has(session.id)"
             :session-id="session.id"
             :hostname="session.observedHostname || session.hostname"
-            @close="closeFileTransfer"
+            @close="closeFileTransfer(session.id)"
           />
         </article>
       </section>
@@ -364,7 +368,7 @@ watch(
 .terminal-grid:hover::-webkit-scrollbar-thumb,.terminal-grid:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
 .terminal-grid:hover::-webkit-scrollbar-thumb:hover,.terminal-grid:focus-within::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .terminal-frame { position: relative; display: grid; grid-template-rows: 36px minmax(0, 1fr) auto; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--terminal); container-type: inline-size; }
-.terminal-frame.transfer-open { grid-template-rows: 36px minmax(120px, 1fr) auto; min-height: 390px; }
+.terminal-frame.transfer-open { grid-template-rows: 36px minmax(120px, 1fr) auto; min-height: 458px; }
 .terminal-frame.dragging { opacity: .58; }
 .terminal-frame.drag-over { box-shadow: inset 0 0 0 2px var(--focus); }
 .terminal-frame.selected { border-color: var(--red); background: var(--amber-soft); box-shadow: inset 0 2px 0 var(--red); }
