@@ -364,7 +364,7 @@ watch(
 .terminal-grid:hover::-webkit-scrollbar-thumb,.terminal-grid:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
 .terminal-grid:hover::-webkit-scrollbar-thumb:hover,.terminal-grid:focus-within::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .terminal-frame { position: relative; display: grid; grid-template-rows: 36px minmax(0, 1fr) auto; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--terminal); container-type: inline-size; }
-.terminal-frame.transfer-open { grid-template-rows: 36px minmax(120px, 1fr) auto; }
+.terminal-frame.transfer-open { grid-template-rows: 36px minmax(120px, 1fr) auto; min-height: 390px; }
 .terminal-frame.dragging { opacity: .58; }
 .terminal-frame.drag-over { box-shadow: inset 0 0 0 2px var(--focus); }
 .terminal-frame.selected { border-color: var(--red); background: var(--amber-soft); box-shadow: inset 0 2px 0 var(--red); }
