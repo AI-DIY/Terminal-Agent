@@ -140,10 +140,6 @@ function dropSession(sessionId: string, event: DragEvent): void {
   finishSessionDrag()
 }
 
-const fileTransferSession = computed(() => fileTransferSessionId.value
-  ? orderedCurrentSessions.value.find(session => session.id === fileTransferSessionId.value) ?? null
-  : null)
-
 function openHistoryMenu(historyId: string): void {
   layoutMenuOpen.value = false
   menuHistoryId.value = menuHistoryId.value === historyId ? null : historyId
@@ -305,7 +301,7 @@ watch(
           v-for="session in orderedCurrentSessions"
           :key="session.id"
           class="terminal-frame"
-          :class="{ selected: session.id === activeSessionId, dragging: session.id === draggingSessionId, 'drag-over': session.id === dragOverSessionId && session.id !== draggingSessionId }"
+          :class="{ selected: session.id === activeSessionId, 'transfer-open': session.id === fileTransferSessionId, dragging: session.id === draggingSessionId, 'drag-over': session.id === dragOverSessionId && session.id !== draggingSessionId }"
         >
           <header
             draggable="true"
@@ -319,23 +315,23 @@ watch(
             <span v-if="displayOrdinal(session) !== null" class="host-ordinal">#{{ displayOrdinal(session) }}</span>
             <span>已连接</span>
             <div class="terminal-actions">
-              <button type="button" :aria-label="`文件传输 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" title="文件传输" @click="openFileTransfer(session)"><Files :size="14" aria-hidden="true" /></button>
-              <button type="button" :aria-label="`查看 SSH 历史 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" title="历史会话" @click="openSessionHistory(session)"><History :size="14" aria-hidden="true" /></button>
-              <button type="button" :aria-label="`关闭画布终端会话 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" title="关闭 SSH" class="close-terminal" @click="closeSession(session.id)"><X :size="15" aria-hidden="true" /></button>
+              <button type="button" :aria-label="`文件传输 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" :aria-expanded="fileTransferSessionId === session.id" title="文件传输" @click.stop="openFileTransfer(session)"><Files :size="14" aria-hidden="true" /></button>
+              <button type="button" :aria-label="`查看 SSH 历史 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" title="历史会话" @click.stop="openSessionHistory(session)"><History :size="14" aria-hidden="true" /></button>
+              <button type="button" :aria-label="`关闭画布终端会话 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" title="关闭 SSH" class="close-terminal" @click.stop="closeSession(session.id)"><X :size="15" aria-hidden="true" /></button>
             </div>
           </header>
           <TerminalPane :session="session" :active="session.id === activeSessionId" :font-size="layout.state.fontSize" @activate="selectSession(session.id)" />
+          <FileTransferPanel
+            v-if="fileTransferSessionId === session.id"
+            :session-id="session.id"
+            :hostname="session.observedHostname || session.hostname"
+            @close="closeFileTransfer"
+          />
         </article>
       </section>
 
       <section v-if="!isLive" class="history-slot"><slot name="history" /></section>
       <section v-else-if="currentSessions.length === 0" class="empty-slot"><slot name="empty" /></section>
-      <FileTransferPanel
-        v-if="fileTransferSession"
-        :session-id="fileTransferSession.id"
-        :hostname="fileTransferSession.observedHostname || fileTransferSession.hostname"
-        @close="closeFileTransfer"
-      />
     </div>
   </section>
 </template>
@@ -344,7 +340,7 @@ watch(
 .shell-canvas { position: relative; display: grid; grid-template-rows: 42px auto minmax(0, 1fr); width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
 .shell-canvas.empty { grid-template-rows: minmax(0, 1fr); }
 .shell-canvas.empty .canvas-content { grid-row: 1; }
-.shell-toolbar-content { position: relative; display: flex; align-items: stretch; min-width: 0; height: 42px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.shell-toolbar-content { position: relative; display: flex; align-items: stretch; min-width: 0; height: 42px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--panel); }
 .history-toolbar-title { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 7px; padding: 0 11px; }.history-toolbar-title strong { color: var(--text-strong); font-size: 11px; }.history-toolbar-title span { color: var(--muted); font-size: 9px; }
 .hostbar-tools { position: sticky; z-index: 3; right: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 6px; min-width: max-content; margin-left: auto; padding: 0 8px; border-left: 1px solid var(--line-soft); background: var(--panel); box-shadow: -8px 0 12px var(--panel); }
 .shell-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; }
@@ -367,11 +363,13 @@ watch(
 .terminal-grid::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }
 .terminal-grid:hover::-webkit-scrollbar-thumb,.terminal-grid:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
 .terminal-grid:hover::-webkit-scrollbar-thumb:hover,.terminal-grid:focus-within::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
-.terminal-frame { position: relative; display: grid; grid-template-rows: 36px minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--terminal); container-type: inline-size; }
+.terminal-frame { position: relative; display: grid; grid-template-rows: 36px minmax(0, 1fr) auto; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--terminal); container-type: inline-size; }
+.terminal-frame.transfer-open { grid-template-rows: 36px minmax(120px, 1fr) auto; }
 .terminal-frame.dragging { opacity: .58; }
 .terminal-frame.drag-over { box-shadow: inset 0 0 0 2px var(--focus); }
-.terminal-frame.selected { border-color: var(--red); box-shadow: inset 0 2px 0 var(--red); }
+.terminal-frame.selected { border-color: var(--red); background: var(--amber-soft); box-shadow: inset 0 2px 0 var(--red); }
 .terminal-frame > header { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0 7px 0 10px; border-bottom: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: grab; }
+.terminal-frame.selected > header { background: var(--amber-soft); }
 .terminal-frame > header:active { cursor: grabbing; }
 .terminal-frame > header strong { min-width: 36px; max-width: min(30cqw, 180px); overflow: hidden; color: var(--text-strong); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .terminal-frame > header > span:not(.host-ordinal) { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
@@ -379,13 +377,14 @@ watch(
 .terminal-actions { display: flex; flex: 0 0 auto; gap: 3px; margin-left: auto; }
 .terminal-actions button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); }
 .terminal-actions button:hover,.terminal-actions button:focus-visible { background: var(--hover); color: var(--text-strong); }.terminal-actions .close-terminal:hover { color: var(--red); }
-.terminal-frame :deep(.terminal-pane) { height: 100%; border: 0; }
+.terminal-frame :deep(.terminal-pane) { height: 100%; min-height: 0; border: 0; }
 .history-context-menu { position: absolute; z-index: 9; top: 30px; right: auto; left: 0; display: grid; min-width: 154px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
 .history-context-menu button { min-height: 29px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 11px; text-align: left; }.history-context-menu button:hover,.history-context-menu button:focus-visible { background: var(--surface-soft); outline: 1px solid var(--accent); }.history-context-menu button:disabled { color: var(--muted); cursor: not-allowed; }
 .empty-slot,.history-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .history-shell-toolbar { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; min-height: 38px; padding: 4px 9px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 86%, var(--surface)); }
 .history-shell-heading { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }.history-shell-heading strong { color: var(--text-strong); font-size: 10px; }.history-shell-heading span { color: var(--muted); font-size: 9px; }
-.history-shell-tabs { display: flex; gap: 5px; min-width: 0; overflow-x: auto; overflow-y: hidden; }.history-host-item { position: relative; flex: 0 0 auto; }.history-shell-tab { display: flex; align-items: center; gap: 5px; min-height: 27px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 10px; white-space: nowrap; }.history-shell-tab:hover,.history-shell-tab:focus-visible { border-color: var(--accent); color: var(--text); outline: 0; }.history-shell-tab.selected { border-color: color-mix(in srgb, var(--accent) 68%, var(--line)); background: var(--accent-soft); color: var(--text-strong); }.host-status { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }.history-shell-tab.selected .host-status { background: var(--accent); }
+.history-shell-tabs { display: flex; gap: 5px; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }.history-shell-tabs:hover,.history-shell-tabs:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }.history-shell-tabs::-webkit-scrollbar { width: 0; height: 5px; }.history-shell-tabs::-webkit-scrollbar-track { background: transparent; }.history-shell-tabs::-webkit-scrollbar-thumb { border: 1px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }.history-shell-tabs:hover::-webkit-scrollbar-thumb,.history-shell-tabs:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
+.history-host-item { position: relative; flex: 0 0 auto; }.history-shell-tab { display: flex; align-items: center; gap: 5px; min-height: 27px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 10px; white-space: nowrap; }.history-shell-tab:hover,.history-shell-tab:focus-visible { border-color: var(--accent); color: var(--text); outline: 0; }.history-shell-tab.selected { border-color: var(--red); background: var(--amber-soft); color: var(--text-strong); }.host-status { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }.history-shell-tab.selected .host-status { background: var(--accent); }
 @media (max-width: 1180px) {
   .shell-title { display: none; }
   .history-shell-heading span { display: none; }

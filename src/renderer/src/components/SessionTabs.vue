@@ -91,11 +91,17 @@ function dropOn(sessionId: string, event: DragEvent): void {
 </template>
 
 <style scoped>
-.session-tabs { display: flex; min-width: 0; flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; background: var(--panel); scrollbar-width: thin; scrollbar-gutter: stable; }
-.session-tab { display: flex; height: 41px; flex: 0 0 auto; align-items: center; max-width: 245px; border-right: 1px solid var(--line-soft); border-bottom: 2px solid transparent; background: transparent; color: var(--muted); white-space: nowrap; cursor: grab; }
+.session-tabs { display: flex; min-width: 0; min-height: 0; height: 100%; flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; background: var(--panel); scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.session-tabs:hover,.session-tabs:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }
+.session-tabs::-webkit-scrollbar { width: 0; height: 5px; }
+.session-tabs::-webkit-scrollbar-track { background: transparent; }
+.session-tabs::-webkit-scrollbar-thumb { border: 1px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }
+.session-tabs:hover::-webkit-scrollbar-thumb,.session-tabs:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
+.session-tabs:hover::-webkit-scrollbar-thumb:hover,.session-tabs:focus-within::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
+.session-tab { display: flex; box-sizing: border-box; height: 100%; min-height: 0; flex: 0 0 auto; align-items: center; max-width: 245px; border: 1px solid transparent; border-bottom-width: 2px; background: transparent; color: var(--muted); white-space: nowrap; cursor: grab; }
 .session-tab:hover { background: var(--hover); }
 .session-tab:active { cursor: grabbing; }
-.session-tab.active { border-bottom-color: var(--red); background: var(--surface); color: var(--text-strong); }
+.session-tab.active { border-color: var(--red); background: var(--amber-soft); color: var(--text-strong); }
 .session-tab.dragging { opacity: .48; }
 .session-tab.drag-over { box-shadow: inset 2px 0 0 var(--focus); }
 button { border: 0; background: transparent; color: inherit; }

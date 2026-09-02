@@ -15,6 +15,10 @@ const modelContextLimit = ref(12_000)
 const contextDetailsExpanded = ref(true)
 const compactError = ref('')
 const composerInput = ref<HTMLTextAreaElement | null>(null)
+// Keep the transcript container's semantic shape as <div class="messages">.
+const messagesElement = ref<HTMLElement | null>(null)
+const followMessages = ref(true)
+let suppressMessagesScroll = false
 const chatId = computed(() => props.chat?.id ?? '')
 const assertiveError = ref<{ id: number; content: string } | null>(null)
 const assistantResponse = ref<{ id: number; content: string } | null>(null)
@@ -37,7 +41,12 @@ const disposeAssistantAnnouncement = store.onAssistantAnnouncement(announcement 
 watch(() => props.chat, value => {
   if (value && !store.state.runs[value.id]) store.hydrate(value.id, value.messages, Boolean(props.readOnly))
 }, { immediate: true })
-watch(chatId, () => { assertiveError.value = null; assistantResponse.value = null })
+watch(chatId, () => {
+  assertiveError.value = null
+  assistantResponse.value = null
+  followMessages.value = true
+  scrollMessagesToBottom()
+}, { immediate: true })
 const messages = computed(() => chatId.value ? store.state.messages[chatId.value] ?? [] : [])
 const draft = computed(() => chatId.value ? store.draft(chatId.value) : '')
 const running = computed(() => chatId.value ? Boolean(store.state.runs[chatId.value]) : false)
@@ -62,7 +71,12 @@ function updateDraft(event: Event): void { if (chatId.value) store.setDraft(chat
 function send(): void {
   if (chatId.value && !compacting.value) {
     const content = store.composeUserContent(chatId.value)
-    if (content) void store.send(chatId.value, content)
+    if (content) {
+      // A new user message always starts a fresh view at the end of the transcript.
+      followMessages.value = true
+      void store.send(chatId.value, content)
+      scrollMessagesToBottom()
+    }
   }
 }
 function cancel(): void { if (chatId.value) void store.cancel(chatId.value).catch(() => undefined) }
@@ -82,6 +96,26 @@ function toggleContextDetails(): void { contextDetailsExpanded.value = !contextD
 function updateSshContextLines(event: Event): void {
   store.setSshContextLines(Number((event.target as HTMLInputElement).value))
 }
+function isMessagesAtBottom(element: HTMLElement, threshold = 24): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold
+}
+function scrollMessagesToBottom(): void {
+  void nextTick(() => {
+    const element = messagesElement.value
+    if (!element || !followMessages.value) return
+    suppressMessagesScroll = true
+    element.scrollTop = element.scrollHeight
+    suppressMessagesScroll = false
+  })
+}
+function onMessagesScroll(): void {
+  if (suppressMessagesScroll) return
+  const element = messagesElement.value
+  if (element) followMessages.value = isMessagesAtBottom(element)
+}
+watch(messages, () => {
+  if (followMessages.value) scrollMessagesToBottom()
+}, { deep: true, flush: 'post' })
 async function compactContext(): Promise<void> {
   if (!chatId.value || props.readOnly || compacting.value) return
   compactError.value = ''
@@ -166,6 +200,8 @@ async function executePlan(messageId: string): Promise<void> {
   try { await store.executePlan(actionChatId, messageId) } catch (error) { reportActionError(actionChatId, error, '计划执行失败') }
 }
 onMounted(() => {
+  followMessages.value = true
+  scrollMessagesToBottom()
   void window.terminalAgent.settings.getModel()
     .then(model => { if (model?.contextLimit) modelContextLimit.value = model.contextLimit })
     .catch(() => undefined)
@@ -194,7 +230,7 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
       </section>
     </header>
 
-    <div class="messages">
+    <div ref="messagesElement" class="messages" @scroll="onMessagesScroll">
       <article v-for="message in messages" :key="message.id" :class="['message', message.role, { audit: message.messageType === 'execution_audit' }]">
         <span class="message-avatar" aria-hidden="true"><UserRound v-if="message.role === 'user'" :size="14" /><Bot v-else :size="14" /></span>
         <div class="message-content">
@@ -239,14 +275,20 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 </template>
 
 <style scoped>
-.global-chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--panel); color: var(--text); }.global-chat-panel.context-details-expanded { grid-template-rows: minmax(210px, auto) minmax(0, 1fr) auto; }
-.ai-head { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; align-content: start; gap: 7px 9px; min-width: 0; min-height: 0; padding: 10px 11px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--surface); }
+.global-chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--panel); color: var(--text); }.global-chat-panel.context-details-expanded { grid-template-rows: minmax(130px, auto) minmax(0, 1fr) auto; }
+.ai-head { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; align-content: start; gap: 5px 8px; min-width: 0; min-height: 0; padding: 8px 10px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--surface); }
 .ai-avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 6px; background: var(--text-strong); color: var(--surface); font-size: 10px; font-weight: 800; }
 .ai-head-copy { min-width: 0; }.ai-head-copy h3 { margin: 0; overflow: hidden; color: var(--text-strong); font-size: 15px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }.ai-head-copy span { display: block; margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .collapse-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 10px; font-weight: 650; white-space: nowrap; }.collapse-button:hover { border-color: var(--focus); background: var(--hover); }
 .ai-safety-badge { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--accent); font-size: 10px; font-weight: 650; }
-.context-meter { grid-column: 1 / -1; min-width: 0; padding-top: 7px; border-top: 1px solid var(--line-soft); }.context-meter-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto 26px; align-items: center; gap: 6px; min-width: 0; }.context-meter-head strong { color: var(--text-strong); font-size: 10px; }.context-meter-summary { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }.context-meter-head b { color: var(--text-strong); font-size: 9px; }.context-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.context-toggle:hover { border-color: var(--focus); color: var(--text-strong); }.context-meter-details { min-width: 0; }.context-progress { height: 5px; margin-top: 6px; overflow: hidden; border-radius: 3px; background: var(--line); }.context-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }.context-meter-foot { margin-top: 6px; color: var(--muted); font-size: 8.5px; }.context-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 9px; }.context-settings .secondary-action { min-height: 27px; }.ssh-context-setting { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 9px; }.ssh-context-setting span { white-space: nowrap; }.ssh-context-setting input { width: 62px; height: 27px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 10px; font-variant-numeric: tabular-nums; }.ssh-context-setting input:focus { border-color: var(--focus); outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }.context-error { margin: 7px 0 0; color: var(--red); font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
-.messages { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 12px 12px 16px; scrollbar-gutter: stable; }
+.context-meter { grid-column: 1 / -1; min-width: 0; padding-top: 4px; border-top: 1px solid var(--line-soft); }.context-meter-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto 26px; align-items: center; gap: 6px; min-width: 0; }.context-meter-head strong { color: var(--text-strong); font-size: 10px; }.context-meter-summary { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }.context-meter-head b { color: var(--text-strong); font-size: 9px; }.context-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.context-toggle:hover { border-color: var(--focus); color: var(--text-strong); }.context-meter-details { min-width: 0; }.context-progress { height: 5px; margin-top: 4px; overflow: hidden; border-radius: 3px; background: var(--line); }.context-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }.context-meter-foot { margin-top: 4px; color: var(--muted); font-size: 8.5px; }.context-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }.context-settings .secondary-action { min-height: 27px; }.ssh-context-setting { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 9px; }.ssh-context-setting span { white-space: nowrap; }.ssh-context-setting input { width: 62px; height: 27px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 10px; font-variant-numeric: tabular-nums; }.ssh-context-setting input:focus { border-color: var(--focus); outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }.context-error { margin: 5px 0 0; color: var(--red); font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
+.messages { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 10px 12px 14px; scrollbar-gutter: stable; scrollbar-color: transparent transparent; scrollbar-width: thin; }
+.messages:hover,.messages:focus-within { scrollbar-color: var(--line) transparent; }
+.messages::-webkit-scrollbar { width: 7px; }
+.messages::-webkit-scrollbar-track { background: transparent; }
+.messages::-webkit-scrollbar-thumb { border-radius: 4px; background: transparent; }
+.messages:hover::-webkit-scrollbar-thumb,.messages:focus-within::-webkit-scrollbar-thumb { background: var(--line); }
+.messages::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 .visually-hidden-alert { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .progress-item { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 10px; }.message-progress { margin-top: 9px; }.progress-item svg { color: var(--accent); }.progress-dots { letter-spacing: 2px; color: var(--accent); }
 .message { display: grid; grid-template-columns: 29px minmax(0, 1fr); align-items: start; gap: 8px; min-width: 0; padding: 8px 0; }.message-avatar { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); }.message.assistant .message-avatar { border-color: var(--text-strong); background: var(--text-strong); color: var(--surface); }.message-content { position: relative; min-width: 0; max-width: 100%; padding: 10px 11px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow-wrap: anywhere; }.message.assistant .message-content::before { position: absolute; top: 10px; bottom: 10px; left: -1px; width: 2px; border-radius: 0 2px 2px 0; background: var(--accent); content: ""; }.message.user { grid-template-columns: minmax(0, 1fr) 29px; padding-left: 38px; }.message.user .message-avatar { grid-column: 2; grid-row: 1; background: var(--panel); color: var(--text-strong); }.message.user .message-content { grid-column: 1; grid-row: 1; background: var(--surface-soft); }.message-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }.message-meta strong { color: var(--text-strong); font-size: 10px; }.message.assistant .message-meta strong { color: var(--accent); }.message-meta span { margin-left: auto; }.message p { margin: 0; color: var(--text); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }.message.audit .message-content { border-color: var(--amber-line); background: var(--amber-soft); }.message.audit .message-avatar { color: var(--amber); }
