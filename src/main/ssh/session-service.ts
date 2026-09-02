@@ -80,7 +80,15 @@ type ActiveSession = {
   recentOutput: string
 }
 
-export const MAX_RECENT_SHELL_LINES = 200
+/** Default tail returned when callers do not request a specific line count. */
+export const DEFAULT_RECENT_SHELL_LINES = 200
+/**
+ * Upper bound for the in-memory terminal tail used by AI context requests.
+ * This is a resource-safety limit, not a user-facing line-count limit: a
+ * request may ask for any number of lines and receives as many as remain in
+ * this bounded tail.
+ */
+export const MAX_RECENT_SHELL_CHARS = 2_000_000
 
 export type TerminalWriteEvent = TerminalDataEvent
 
@@ -374,12 +382,15 @@ export class SessionService {
     return session.connection.fileTransfer.downloadFile(remotePath, localPath, onProgress)
   }
 
-  recentLines(sessionId: string, limit = MAX_RECENT_SHELL_LINES): string[] {
+  recentLines(sessionId: string, limit = DEFAULT_RECENT_SHELL_LINES): string[] {
     const output = this.sessions.get(sessionId)?.recentOutput
     if (output === undefined) return []
     const lines = output.split(/\r?\n|\r/)
     if (lines.at(-1) === '') lines.pop()
-    const boundedLimit = Math.max(0, Math.min(MAX_RECENT_SHELL_LINES, Math.floor(limit)))
+    // The AI workspace setting intentionally has no artificial upper bound.
+    // Keep the historical 200-line default for callers that omit `limit`, but
+    // honour any explicit non-negative integer requested by the renderer.
+    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : DEFAULT_RECENT_SHELL_LINES
     return boundedLimit === 0 ? [] : lines.slice(-boundedLimit)
   }
 
@@ -497,10 +508,13 @@ export class SessionService {
 }
 
 function appendRecentShellOutput(previous: string, data: string): string {
+  // Keep a finite character tail so a noisy/long-lived connection cannot grow
+  // the main-process heap without bound.  The limit is deliberately expressed
+  // in characters rather than logical lines: callers can request any line
+  // count, up to whatever complete output remains in this safety buffer.
   const combined = `${previous}${data}`
-  const lines = combined.split(/\r\n|\r|\n/)
-  const keepCount = MAX_RECENT_SHELL_LINES + (/(?:\r\n|\r|\n)$/.test(combined) ? 1 : 0)
-  return lines.length <= keepCount ? combined : lines.slice(-keepCount).join('\n')
+  if (combined.length <= MAX_RECENT_SHELL_CHARS) return combined
+  return combined.slice(-MAX_RECENT_SHELL_CHARS)
 }
 
 function safeConnectionIp(value: string | undefined): string | undefined {

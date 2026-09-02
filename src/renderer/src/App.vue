@@ -2,10 +2,29 @@
 import { ref } from 'vue'
 import WorkbenchView from './views/WorkbenchView.vue'
 import SettingsView from './views/SettingsView.vue'
+import SkillsView from './views/SkillsView.vue'
 const settingsOpen = ref(false)
+const skillsOpen = ref(false)
+
+function openSettings(): void {
+  skillsOpen.value = false
+  settingsOpen.value = true
+}
+
+function openSkills(): void {
+  settingsOpen.value = false
+  skillsOpen.value = true
+}
+
+function closeSettings(): void { settingsOpen.value = false }
+function closeSkills(): void { skillsOpen.value = false }
 </script>
 
-<template><SettingsView v-show="settingsOpen" @close="settingsOpen=false"/><WorkbenchView v-show="!settingsOpen" @show-settings="settingsOpen=true" /></template>
+<template>
+  <SettingsView v-show="settingsOpen" @close="closeSettings" />
+  <SkillsView v-show="skillsOpen" @close="closeSkills" />
+  <WorkbenchView v-show="!settingsOpen && !skillsOpen" @show-settings="openSettings" @show-skills="openSkills" />
+</template>
 
 <style>
 :root {

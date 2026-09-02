@@ -9,7 +9,8 @@ import {
   keyboardSidebarWidth,
 } from '../../stores/layout-preferences'
 
-defineProps<{ modalOpen?: boolean; currentChatTitle: string; currentChatShellCount: number; currentVersion?: string }>()
+const props = defineProps<{ modalOpen?: boolean; currentChatTitle: string; currentChatShellCount: number; currentVersion?: string; welcomeName?: string }>()
+const welcomeName = computed(() => props.welcomeName?.trim() || '朋友')
 const layout = getLayoutPreferencesStore()
 const shellStyle = computed(() => ({
   '--left-width': layout.state.leftCollapsed ? '44px' : `${layout.state.leftWidth}px`,
@@ -84,7 +85,7 @@ onBeforeUnmount(widthSaver.flush)
   <main class="workbench-shell" :class="`theme-${layout.state.theme}`" :style="shellStyle">
     <header class="app-header" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
       <div class="brand"><span class="brand-mark" aria-hidden="true">TA</span><strong>Terminal-Agent</strong><span class="app-version">v{{ currentVersion || '—' }}</span></div>
-      <div class="current-chat">当前任务&nbsp; / &nbsp;<b>{{ currentChatTitle }}</b><span>{{ currentChatShellCount }} 个 SSH</span></div>
+      <div class="current-chat"><span class="welcome-copy">欢迎回来，<b>{{ welcomeName }}</b></span><span class="welcome-divider" aria-hidden="true">·</span><span class="task-copy">当前任务&nbsp; / &nbsp;<b>{{ currentChatTitle }}</b><em>{{ currentChatShellCount }} 个 SSH</em></span></div>
       <div class="app-header-actions"><slot name="app-actions" /></div>
     </header>
     <section class="workspace" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
@@ -131,9 +132,15 @@ onBeforeUnmount(widthSaver.flush)
 }
 .app-header { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 calc(14px + var(--window-controls-inset)) 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); -webkit-app-region: drag; }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 176px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; font-weight: 700; }.app-version { align-self: flex-end; margin: 0 0 8px -4px; color: var(--faint); font-size: 9px; font-weight: 600; letter-spacing: .02em; }.brand-mark { display: grid; place-items: center; box-sizing: border-box; width: 28px; height: 28px; border: 1px solid #535e6a; border-radius: 0; background: #1d242c; color: #fff; font-size: 10px; font-weight: 800; }
-.current-chat { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.current-chat { display: flex; align-items: center; min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .current-chat b { color: var(--text-strong); font-size: 11px; font-weight: 680; }
-.current-chat span { margin-left: 9px; color: var(--faint); }
+.current-chat > span { margin-left: 9px; color: var(--faint); }
+.current-chat .welcome-copy { flex: 0 0 auto; margin-left: 0; color: var(--muted); }
+.current-chat .welcome-copy b { color: var(--accent); font-size: 10px; }
+.current-chat .welcome-divider { flex: 0 0 auto; color: var(--line); }
+.current-chat > .welcome-copy + .welcome-divider { margin-left: 8px; }
+.current-chat .task-copy { min-width: 0; overflow: hidden; margin-left: 0; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.current-chat .task-copy em { margin-left: 9px; color: var(--faint); font-style: normal; }
 .app-header-actions { display: flex; align-items: center; gap: 6px; min-width: 0; -webkit-app-region: no-drag; }
 .app-header-actions :deep(*) { -webkit-app-region: no-drag; }
 .workspace { display: grid; grid-template-columns: var(--left-width) 3px minmax(450px, 1fr) 3px var(--right-width); min-width: 0; min-height: 0; overflow: hidden; }
@@ -153,7 +160,9 @@ onBeforeUnmount(widthSaver.flush)
 @media (max-width: 1000px) {
   .workspace { grid-template-columns: min(var(--left-width), 170px) 3px minmax(320px, 1fr) 3px min(var(--right-width), 300px); }
   .brand { min-width: 150px; }
-  .current-chat span { display: none; }
+  /* Keep the new greeting visible in compact windows; only the verbose task
+     summary needs to yield space to the header action buttons. */
+  .current-chat .task-copy,.current-chat .welcome-divider { display: none; }
 }
 @media (max-width: 1080px) {
   .app-header-actions :deep(.header-button) { width: 30px; min-width: 30px; padding: 0; justify-content: center; }

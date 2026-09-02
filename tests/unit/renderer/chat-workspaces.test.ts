@@ -1209,16 +1209,18 @@ describe('durable chat workbench components', () => {
     ])
   })
 
-  it('gates every live session surface by current chat ownership', () => {
+  it('gates terminal surfaces by the live task while exposing selected-task sessions to AI context selection', () => {
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
 
     expect(view).toContain(':sessions="sessions"')
-    expect(view).toContain(':current-sessions="currentChatSessions"')
+    expect(view).toContain('const currentLiveSessions = computed(() => isLiveChat.value ? currentChatSessions.value : [])')
+    expect(view).toContain(':current-sessions="currentLiveSessions"')
+    expect(view).toContain(':context-sessions="currentChatSessions"')
     expect(view).toContain('workbenchSessionAttachmentTarget(chatStore.state.selectedId, chatStore.state.liveChatId)')
-    expect(view).toContain('if (!currentChatSessionIds.value.has(sessionId) || !store.byId(sessionId)) return')
-    expect(view).toContain('const availableSessionIds = sessions.value')
-    expect(view).toContain('normalizeSessionOrder(visibleSessionIds.value, availableSessionIds)')
+    expect(view).toContain('if (!currentChatSessionIds.value.has(sessionId) || !store.byId(sessionId)) return false')
+    expect(view).toContain('const availableIds = sessions.value')
+    expect(view).toContain('normalizeSessionOrder(sessionIds, availableIds)')
     expect(view).toContain('addSession(session, false)')
     expect(view).toContain('if (isCurrent() && store.byId(session.id)) select(session.id)')
     expect(canvas).toContain('const orderedCurrentSessions = computed(() =>')

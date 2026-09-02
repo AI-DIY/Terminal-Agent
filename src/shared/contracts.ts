@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { chatMessageContentSchema } from './chat-content'
 import { chatExecutionPlanSchema } from './chat-plan'
+import { BUILT_IN_SKILLS, type BuiltInSkillId } from './built-in-skills'
 import { containsSensitiveHostMemoryData, normalizeSafeHostMemoryConnectionIp, normalizeSafeHostMemoryConnectionLabel, normalizeSafeHostMemoryIdentity } from './host-memory-safety'
 import { modelEndpointSchema, modelProfileIdSchema } from './validation'
 
@@ -246,17 +247,39 @@ export const chatRunRequestSchema = z.object({
   runId: z.string().uuid(),
   content: chatMessageContentSchema.refine(content => typeof content !== 'string' || content.trim().length > 0, 'Text content cannot be blank'),
   retry: z.boolean().optional(),
-  sshContextLines: z.number().int().min(0).max(200).optional(),
+  // Keep this renderer-controlled setting an integer, but do not impose an
+  // arbitrary upper bound.  The user may need more than the historical 200
+  // line limit when diagnosing a long-running Shell.
+  sshContextLines: z.number().int().min(0).optional(),
+  /** Live SSH session ids whose recent output should be appended to context. */
+  sshContextSessionIds: z.array(chatIdentifierSchema).max(128).superRefine((ids, context) => {
+    if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'sshContextSessionIds must be unique' })
+  }).optional(),
+  skillIds: z.array(z.enum(BUILT_IN_SKILLS.map(skill => skill.id) as [BuiltInSkillId, ...BuiltInSkillId[]])).max(BUILT_IN_SKILLS.length).superRefine((ids, context) => {
+    if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'skillIds must be unique' })
+  }).optional(),
 }).strict()
 export type ChatRunRequest = z.infer<typeof chatRunRequestSchema>
 
 /** The renderer-controlled number of recent terminal lines included per unique host. */
-export const chatSshContextLinesSchema = z.number().int().min(0).max(200)
+export const chatSshContextLinesSchema = z.number().int().min(0)
+
+export const chatSshContextSessionIdsSchema = z.array(chatIdentifierSchema).max(128).superRefine((ids, context) => {
+  if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'sshContextSessionIds must be unique' })
+})
+
+export const chatSkillIdsSchema = z.array(z.enum(BUILT_IN_SKILLS.map(skill => skill.id) as [BuiltInSkillId, ...BuiltInSkillId[]])).max(BUILT_IN_SKILLS.length).superRefine((ids, context) => {
+  if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'skillIds must be unique' })
+})
 
 export const chatCompactRequestSchema = z.object({
   requestId: chatRequestIdSchema,
   chatId: chatIdentifierSchema,
   sshContextLines: chatSshContextLinesSchema.optional(),
+  /** Live SSH session ids whose recent output should be appended to context. */
+  sshContextSessionIds: chatSshContextSessionIdsSchema.optional(),
+  /** Product-owned skills whose instructions should guide this AI turn. */
+  skillIds: chatSkillIdsSchema.optional(),
 }).strict()
 export type ChatCompactRequest = z.infer<typeof chatCompactRequestSchema>
 

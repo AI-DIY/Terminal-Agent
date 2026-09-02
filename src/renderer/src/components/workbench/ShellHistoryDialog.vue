@@ -2,9 +2,14 @@
 import { computed, nextTick, ref, type ComponentPublicInstance, watch } from 'vue'
 import type { ShellFontSize, ShellHistoryDetail, ShellHistorySummary } from '../../../../shared/contracts'
 
+type DisplayHistoryRecord = ShellHistorySummary & {
+  /** Optional renderer-only duplicate-host label. */
+  displayLabel?: string
+}
+
 const props = withDefaults(defineProps<{
   open: boolean
-  records: ShellHistorySummary[]
+  records: DisplayHistoryRecord[]
   selectedId: string | null
   selected: ShellHistoryDetail | null
   loading: boolean
@@ -79,18 +84,18 @@ watch(() => props.records.map(record => record.id).join('\u0000'), () => { if (p
             :ref="index === 0 ? setFirstRecord : undefined"
             type="button"
             role="option"
-            :aria-label="`选择 Shell 历史 ${record.title}`"
+            :aria-label="`选择 Shell 历史 ${record.displayLabel ?? record.title}`"
             :aria-selected="record.id === selectedId"
             :class="{ selected: record.id === selectedId }"
             @click="emit('select', record.id)"
           >
-            <strong>{{ record.title }}</strong><span>{{ record.hostname }}</span><time>{{ record.endedAt }}</time>
+            <strong>{{ record.displayLabel ?? record.title }}</strong><span>{{ record.hostname }}</span><time>{{ record.endedAt }}</time>
           </button>
           <p v-if="!loading && !records.length">没有可用的 Shell 历史。</p>
         </nav>
         <section class="history-preview" aria-label="Shell 历史预览">
           <template v-if="selected">
-            <header><strong>{{ selected.title }}</strong><span>{{ selected.hostname }}</span></header>
+            <header><strong>{{ selectedRecord?.displayLabel ?? selected.title }}</strong><span>{{ selected.hostname }}</span></header>
             <pre :aria-label="`只读终端历史 ${selected.hostname}`" data-read-only="true" tabindex="0" :style="{ fontSize: `${fontSize}px` }">{{ selected.output }}</pre>
             <div class="preview-actions">
               <span v-if="selectedRecord?.reconnectable">可使用现有安全连接描述重新连接</span>

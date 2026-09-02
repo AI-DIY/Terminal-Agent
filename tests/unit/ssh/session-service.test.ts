@@ -466,6 +466,22 @@ describe('SessionService', () => {
     expect(recent.at(-1)).toBe(`line-204-${'x'.repeat(2_000)}`)
   })
 
+  it('honours an explicit context line count above the historical 200-line default', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+    const output = Array.from({ length: 260 }, (_, index) => `line-${index}\n`).join('')
+    shell.emitData(Buffer.from(output))
+
+    const recent = service.recentLines(session.id, 240)
+    expect(recent).toHaveLength(240)
+    expect(recent[0]).toBe('line-20')
+    expect(recent.at(-1)).toBe('line-259')
+  })
+
   it('closes the shell and connection once, then announces the closed session', async () => {
     const shell = createShell()
     const connection = { close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }

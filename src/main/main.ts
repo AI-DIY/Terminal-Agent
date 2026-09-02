@@ -66,9 +66,11 @@ import { UpdaterService } from './updater/updater-service'
 import { createElectronSessionUpdaterFetcher } from './updater/electron-session-fetcher'
 import { registerUpdaterHandlers } from './updater/register-updater-handlers'
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { buildStructuredShellContext, dedupeStructuredShellsForPrompt, StructuredChatAgent } from './chat/structured-chat-agent'
+import { buildStructuredShellContextEntries, StructuredChatAgent } from './chat/structured-chat-agent'
 import { ExecutionPlanService } from './chat/execution-plan-service'
 import { modelHostname, uniqueModelHostnames } from '../shared/model-context'
+import { normalizeChatContextSessionIds } from '../shared/chat-context-selection'
+import { normalizeBuiltInSkillIds } from '../shared/built-in-skills'
 
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
@@ -126,16 +128,34 @@ const chatRuntime = new ChatRuntime({
     const snapshot = await chats.get(chatId)
     const requestedSshContextLines = options.sshContextLines ?? 50
     const sshContextLines = Number.isFinite(requestedSshContextLines)
-      ? Math.max(0, Math.min(200, Math.floor(requestedSshContextLines)))
+      ? Math.max(0, Math.floor(requestedSshContextLines))
       : 50
     const onlineSessions = sessions.snapshot().map(session => ({ ...session, recentLines: sessions.recentLines(session.id, sshContextLines) }))
-    const availableShells = dedupeStructuredShellsForPrompt(buildStructuredShellContext(snapshot.chat.shells, onlineSessions))
-    const onlineShellIds = snapshot.chat.shells
-      .filter(shell => shell.status === 'open' && shell.sessionId && onlineSessions.some(session => session.id === shell.sessionId))
-      .map(shell => shell.sessionId!)
+    const contextEntries = buildStructuredShellContextEntries(snapshot.chat.shells, onlineSessions)
+    const selectedSessionIds = normalizeChatContextSessionIds(
+      contextEntries.map(entry => ({
+        id: entry.sessionId,
+        hostname: entry.shell.hostname,
+        ...(entry.shell.observedHostname ? { observedHostname: entry.shell.observedHostname } : {}),
+        title: entry.shell.title,
+        status: 'open' as const,
+      })),
+      options.sshContextSessionIds === undefined ? undefined : [...options.sshContextSessionIds],
+    )
+    const selectedSessionIdSet = new Set(selectedSessionIds)
+    // Keep all explicitly selected connections (including alternate #2/#3
+    // connections).  The structured agent's legacy dedupe remains available
+    // to direct callers that do not set preserveShellConnections.
+    const availableShells = contextEntries
+      .filter(entry => selectedSessionIdSet.has(entry.sessionId))
+      .map(entry => entry.shell)
+    const allOnlineShells = contextEntries.map(entry => entry.shell)
+    // Execution audit entries are connection-scoped too.  Do not leak audit
+    // output from a Shell the user explicitly excluded from this request.
+    const onlineShellIds = selectedSessionIds
     const facts = await Promise.all(snapshot.chat.shells.map(async shell => {
-      if (shell.status !== 'open') return null
-      const session = shell.sessionId ? onlineSessions.find(item => item.id === shell.sessionId) : undefined
+      if (shell.status !== 'open' || !shell.sessionId || !selectedSessionIdSet.has(shell.sessionId)) return null
+      const session = onlineSessions.find(item => item.id === shell.sessionId)
       const observedHostname = shell.sessionId ? sessions.observedHostname(shell.sessionId) : undefined
       // Host facts are keyed only by a validated real hostname. A stale
       // observation may contain the bastion address (or malformed text), so
@@ -168,8 +188,17 @@ const chatRuntime = new ChatRuntime({
       // Host identity is the canonical hostname. Connection titles and
       // per-Shell display labels are presentation metadata, not distinct
       // targets for the model.
-      availableHostnames: uniqueModelHostnames(availableShells.map(shell => shell.hostname)),
+      // Keep every online host in the execution allow-list even when the
+      // user chooses to append no Shell output.  Selection controls recent
+      // connection context; it must not make an otherwise online target look
+      // offline to the planner.
+      availableHostnames: uniqueModelHostnames(allOnlineShells.map(shell => shell.hostname)),
       availableShells,
+      // Selection is intentional, so alternate connections with the same
+      // hostname must remain available to the model instead of being
+      // collapsed back to the historical one-per-host projection.
+      preserveShellConnections: true,
+      skillIds: normalizeBuiltInSkillIds(options.skillIds),
     }
   },
   resolveModel: async ({ hasImages = false }: { hasImages?: boolean } = {}) => {
@@ -234,7 +263,7 @@ function readApplicationVersion(): string {
     if (typeof version === 'string' && version.trim()) return version
   } catch { /* Fall through to package/environment defaults. */ }
   const packageVersion = process.env.npm_package_version?.trim()
-  return packageVersion || '2.0.8'
+  return packageVersion || '2.0.9'
 }
 
 const accessClient = new AccessClientService(

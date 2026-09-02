@@ -7,10 +7,21 @@ import { chatContentText } from '../../../../shared/chat-content'
 import { estimateChatMessages } from '../../../../shared/chat-token-estimator'
 import { shouldInsertNewlineOnModifiedEnter, shouldSendOnPlainEnter } from './chat-composer-shortcuts'
 import { planTargetLabelForShells } from './plan-target-label'
+import { chatContextSessionsAreResolved, defaultChatContextSessionIds, normalizeChatContextSessionIds } from '../../../../shared/chat-context-selection'
+import { sshHostIdentity, sshHostnameDisplayLabels } from '../../../../shared/shell-display-label'
+import { getUserPreferencesStore } from '../../stores/user-preferences'
 
-const props = defineProps<{ chat: ChatWorkspace | null; readOnly?: boolean; shellCount?: number }>()
+type ContextSession = {
+  id: string
+  hostname: string
+  observedHostname?: string
+  title?: string
+}
+
+const props = defineProps<{ chat: ChatWorkspace | null; shellCount?: number; contextSessions?: ContextSession[] }>()
 const emit = defineEmits<{ collapse: [] }>()
 const store = createGlobalChatStore(window.terminalAgent.chat)
+const userPreferences = getUserPreferencesStore()
 const modelContextLimit = ref(12_000)
 const contextDetailsExpanded = ref(true)
 const compactError = ref('')
@@ -39,7 +50,7 @@ const disposeAssistantAnnouncement = store.onAssistantAnnouncement(announcement 
   announceAssistantResponse(assistantReply(announcement.content))
 })
 watch(() => props.chat, value => {
-  if (value && !store.state.runs[value.id]) store.hydrate(value.id, value.messages, Boolean(props.readOnly))
+  if (value && !store.state.runs[value.id]) store.hydrate(value.id, value.messages, false)
 }, { immediate: true })
 watch(chatId, () => {
   assertiveError.value = null
@@ -67,6 +78,157 @@ const contextUsed = computed(() => estimateChatMessages(messages.value))
 const contextPercent = computed(() => Math.min(100, Math.round((contextUsed.value / modelContextLimit.value) * 100)))
 const sshContextLines = computed(() => store.state.sshContextLines)
 const compacting = computed(() => chatId.value ? Boolean(store.state.compacting[chatId.value]) : false)
+type ContextSessionRow = ContextSession & { displayLabel: string; ordinal: number; identity: string }
+const associatedContextSessionIds = computed(() => new Set(
+  (props.chat?.shells ?? []).filter(shell => shell.status === 'open' && shell.sessionId).map(shell => shell.sessionId!),
+))
+const contextSessionRows = computed<ContextSessionRow[]>(() => {
+  // Session metadata can briefly arrive before chat association metadata is
+  // refreshed (or vice versa).  Merge association fields as a fallback so
+  // relay connections are grouped by the same observed host identity on both
+  // sides of the IPC boundary.
+  const associatedShells = new Map(
+    (props.chat?.shells ?? [])
+      .filter(shell => shell.status === 'open' && shell.sessionId)
+      .map(shell => [shell.sessionId!, shell]),
+  )
+  const sessions = (props.contextSessions ?? [])
+    .filter(session => associatedContextSessionIds.value.has(session.id))
+    .map(session => {
+      const shell = associatedShells.get(session.id)
+      if (!shell) return session
+      return {
+        ...session,
+        ...(session.observedHostname ? {} : shell.observedHostname ? { observedHostname: shell.observedHostname } : {}),
+        ...(session.title ? {} : shell.title ? { title: shell.title } : {}),
+      }
+    })
+  const labels = sshHostnameDisplayLabels(sessions.map(session => ({
+    hostname: session.hostname,
+    observedHostname: session.observedHostname,
+    displayName: session.title,
+    stableKey: session.id,
+  })))
+  return sessions.map((session, index) => ({
+    ...session,
+    displayLabel: labels[index]?.displayLabel ?? session.title ?? session.hostname,
+    ordinal: labels[index]?.ordinal ?? 1,
+    identity: sshHostIdentity({ hostname: session.hostname, observedHostname: session.observedHostname, displayName: session.title }),
+  }))
+})
+const persistedContextSelections = reactive<Record<string, string[]>>(loadContextSelections())
+const contextSelectionReady = computed(() => {
+  const id = chatId.value
+  if (!id || associatedContextSessionIds.value.size === 0) return true
+  // Do not send an explicit empty/partial list while the session snapshot is
+  // still arriving. The main process can then apply its safe #1-per-host
+  // default until the full renderer list is ready.
+  return chatContextSessionsAreResolved(
+    associatedContextSessionIds.value.size,
+    contextSessionRows.value.length,
+  )
+})
+const selectedContextSessionIds = computed<string[] | undefined>(() => {
+  const id = chatId.value
+  if (!id || !contextSelectionReady.value) return undefined
+  const requested = persistedContextSelections[id]
+  return normalizeChatContextSessionIds(contextSessionRows.value, requested)
+})
+const selectedContextCount = computed(() => selectedContextSessionIds.value?.length ?? 0)
+const enabledSkillIds = computed(() => userPreferences.enabledSkillIds())
+
+watch([chatId, associatedContextSessionIds, contextSessionRows], () => {
+  const id = chatId.value
+  if (!id) return
+  const current = persistedContextSelections[id]
+  // A task can hydrate before its live session snapshot does. Wait until every
+  // associated Shell has a row before normalizing or persisting anything: a
+  // partial snapshot would otherwise drop an existing selection or make a
+  // partial default look intentional.
+  if (!chatContextSessionsAreResolved(
+    associatedContextSessionIds.value.size,
+    contextSessionRows.value.length,
+  )) return
+  // Do not manufacture and persist [] for a new task with no SSH. When the
+  // first Shell is subsequently connected, it must receive the normal #1
+  // per-host default rather than being treated as an explicit opt-out.
+  if (current === undefined && associatedContextSessionIds.value.size === 0) return
+  // Session ids are process-scoped.  A task can therefore carry a non-empty
+  // selection from a previous application run while it temporarily has no
+  // live Shell rows.  Keep that stale selection in memory until the first
+  // replacement connection arrives; clearing it here would turn the next
+  // connection into an accidental explicit opt-out instead of restoring the
+  // normal #1 default below.
+  if (current && current.length > 0 && associatedContextSessionIds.value.size === 0 && contextSessionRows.value.length === 0) return
+  const next = normalizeChatContextSessionIds(contextSessionRows.value, current)
+  if (current === undefined) {
+    // First visit to a task: select one stable primary connection per host.
+    persistedContextSelections[id] = defaultChatContextSessionIds(contextSessionRows.value)
+    store.setSshContextSessionIds(id, persistedContextSelections[id])
+    saveContextSelections(persistedContextSelections)
+    return
+  }
+  // Session ids are process-scoped and can change when the app restores a
+  // connection after restart.  If a previously non-empty persisted selection
+  // no longer matches any live row, recover the safe per-host defaults rather
+  // than silently leaving every host unchecked.  An actually empty array is
+  // preserved as the user's intentional "no SSH context" choice.
+  if (current.length > 0 && next.length === 0 && contextSessionRows.value.length > 0) {
+    const defaults = defaultChatContextSessionIds(contextSessionRows.value)
+    persistedContextSelections[id] = defaults
+    store.setSshContextSessionIds(id, defaults)
+    saveContextSelections(persistedContextSelections)
+    return
+  }
+  if (!sameStringArray(current, next)) {
+    persistedContextSelections[id] = next
+    store.setSshContextSessionIds(id, next)
+    saveContextSelections(persistedContextSelections)
+  } else {
+    store.setSshContextSessionIds(id, next)
+  }
+}, { immediate: true, deep: true })
+
+function toggleContextSession(sessionId: string): void {
+  const id = chatId.value
+  if (!id) return
+  const selected = new Set(selectedContextSessionIds.value ?? [])
+  if (selected.has(sessionId)) selected.delete(sessionId)
+  else selected.add(sessionId)
+  persistedContextSelections[id] = normalizeChatContextSessionIds(contextSessionRows.value, [...selected])
+  store.setSshContextSessionIds(id, persistedContextSelections[id])
+  saveContextSelections(persistedContextSelections)
+}
+
+function contextSessionLabel(row: ContextSessionRow): string {
+  // A unique host and the primary duplicate intentionally have no ordinal
+  // badge.  Alternate connections retain #2/#3 so the user can distinguish
+  // them while choosing additional context.
+  return row.ordinal > 1 ? row.displayLabel : row.displayLabel.replace(/\s+#1$/, '')
+}
+
+function loadContextSelections(): Record<string, string[]> {
+  try {
+    const raw = globalThis.localStorage?.getItem('terminal-agent.ai-context-session-ids')
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(Object.entries(parsed as Record<string, unknown>).flatMap(([key, value]) => {
+      if (!Array.isArray(value) || !value.every(item => typeof item === 'string')) return []
+      return [[key, [...new Set(value)] as string[]]]
+    }))
+  } catch {
+    return {}
+  }
+}
+
+function saveContextSelections(value: Record<string, string[]>): void {
+  try { globalThis.localStorage?.setItem('terminal-agent.ai-context-session-ids', JSON.stringify(value)) } catch { /* optional storage */ }
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
 function updateDraft(event: Event): void { if (chatId.value) store.setDraft(chatId.value, (event.target as HTMLTextAreaElement).value) }
 function send(): void {
   if (chatId.value && !compacting.value) {
@@ -74,7 +236,7 @@ function send(): void {
     if (content) {
       // A new user message always starts a fresh view at the end of the transcript.
       followMessages.value = true
-      void store.send(chatId.value, content)
+      void store.send(chatId.value, content, selectedContextSessionIds.value, enabledSkillIds.value)
       scrollMessagesToBottom()
     }
   }
@@ -117,17 +279,17 @@ watch(messages, () => {
   if (followMessages.value) scrollMessagesToBottom()
 }, { deep: true, flush: 'post' })
 async function compactContext(): Promise<void> {
-  if (!chatId.value || props.readOnly || compacting.value) return
+  if (!chatId.value || compacting.value) return
   compactError.value = ''
   try {
-    await store.compact(chatId.value)
+    await store.compact(chatId.value, selectedContextSessionIds.value, enabledSkillIds.value)
   } catch (error) {
     compactError.value = error instanceof Error ? error.message : '上下文压缩失败，请稍后再试。'
   }
 }
 function insertNewline(): void {
   const input = composerInput.value
-  if (!input || props.readOnly || !chatId.value) return
+  if (!input || !chatId.value) return
   const start = input.selectionStart
   const end = input.selectionEnd
   const next = `${draft.value.slice(0, start)}\n${draft.value.slice(end)}`
@@ -177,25 +339,25 @@ async function saveStep(messageId: string, stepId: string, fallbackCommand: stri
 }
 async function editStep(messageId: string, stepId: string, command: string): Promise<void> {
   const actionChatId = chatId.value
-  if (!actionChatId || props.readOnly || !command.trim()) return
+  if (!actionChatId || !command.trim()) return
   actionErrors[actionChatId] = ''
   try { await store.editPlanStep(actionChatId, messageId, stepId, command.trim()) } catch (error) { reportActionError(actionChatId, error, '计划更新失败') }
 }
 async function removeStep(messageId: string, stepId: string): Promise<void> {
   const actionChatId = chatId.value
-  if (!actionChatId || props.readOnly) return
+  if (!actionChatId) return
   actionErrors[actionChatId] = ''
   try { await store.removePlanStep(actionChatId, messageId, stepId) } catch (error) { reportActionError(actionChatId, error, '计划更新失败') }
 }
 async function cancelPlan(messageId: string): Promise<void> {
   const actionChatId = chatId.value
-  if (!actionChatId || props.readOnly) return
+  if (!actionChatId) return
   actionErrors[actionChatId] = ''
   try { await store.cancelPlan(actionChatId, messageId) } catch (error) { reportActionError(actionChatId, error, '计划取消失败') }
 }
 async function executePlan(messageId: string): Promise<void> {
   const actionChatId = chatId.value
-  if (!actionChatId || props.readOnly) return
+  if (!actionChatId) return
   actionErrors[actionChatId] = ''
   try { await store.executePlan(actionChatId, messageId) } catch (error) { reportActionError(actionChatId, error, '计划执行失败') }
 }
@@ -213,7 +375,7 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
   <section class="global-chat-panel" :class="{ 'context-details-expanded': contextDetailsExpanded }" aria-label="AI工作区">
     <header class="ai-head">
       <span class="ai-avatar" aria-hidden="true">AI</span>
-      <div class="ai-head-copy"><h3>{{ readOnly ? 'AI工作区 · 历史' : 'AI工作区' }}</h3><span>{{ readOnly ? '只读聊天与执行记录' : '当前任务的全局协作助手' }}</span></div>
+      <div class="ai-head-copy"><h3>AI工作区</h3><span>当前任务的全局协作助手</span></div>
       <button type="button" class="collapse-button" aria-label="收起 AI工作区" title="收起 AI工作区" @click="emit('collapse')"><span>收起</span><PanelRightClose :size="14" aria-hidden="true" /></button>
       <div class="ai-safety-badge"><Check :size="12" aria-hidden="true" /><span>计划需手动确认</span></div>
       <section class="context-meter" aria-label="AI 上下文用量">
@@ -222,8 +384,18 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
           <div class="context-progress" role="progressbar" aria-label="上下文使用比例" :aria-valuenow="contextPercent" aria-valuemin="0" aria-valuemax="100"><span :style="{ width: `${contextPercent}%` }" /></div>
           <div class="context-meter-foot"><span>根据当前聊天文本和模型上限估算</span></div>
           <div class="context-settings">
-            <button type="button" class="secondary-action" :disabled="readOnly || compacting || !chatId" @click="compactContext">{{ compacting ? '正在压缩…' : '立即压缩' }}</button>
-            <label class="ssh-context-setting"><span>SSH 上下文追加行数</span><input type="number" min="0" max="200" step="1" :value="sshContextLines" :disabled="readOnly" aria-label="SSH 上下文追加的上下文行数" @change="updateSshContextLines"></label>
+            <button type="button" class="secondary-action" :disabled="compacting || !chatId" @click="compactContext">{{ compacting ? '正在压缩…' : '立即压缩' }}</button>
+            <label class="ssh-context-setting"><span>SSH 上下文追加行数</span><input type="number" min="0" step="1" :value="sshContextLines" aria-label="SSH 上下文追加的上下文行数" @change="updateSshContextLines"></label>
+            <section class="context-host-setting" aria-label="选择主机追加上下文">
+              <div class="context-host-setting-head"><span>选择主机追加上下文</span><b>{{ selectedContextCount }} / {{ contextSessionRows.length }}</b></div>
+              <div v-if="contextSessionRows.length" class="context-host-options">
+                <label v-for="row in contextSessionRows" :key="row.id" class="context-host-option">
+                  <input type="checkbox" :checked="selectedContextSessionIds?.includes(row.id) ?? false" :aria-label="`选择 ${contextSessionLabel(row)} 追加上下文`" @change="toggleContextSession(row.id)">
+                  <span>{{ contextSessionLabel(row) }}</span>
+                </label>
+              </div>
+              <span v-else class="context-host-empty">暂无在线 SSH 连接</span>
+            </section>
           </div>
           <p v-if="compactError" class="context-error">{{ compactError }}</p>
         </div>
@@ -245,20 +417,20 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
                <div v-if="step.fence" class="plan-risk"><CircleAlert :size="12" aria-hidden="true" /><span>安全围栏：{{ step.fence.ruleName }}（{{ step.fence.ruleId }}）</span></div>
                <label class="plan-command"><span>原始命令</span><code>{{ step.originalCommand }}</code></label>
                <label v-if="step.finalCommand" class="plan-command"><span>确认命令</span><code>{{ step.finalCommand }}</code></label>
-               <div v-if="message.executionPlan.status === 'pending_review' && !readOnly" class="plan-step-actions">
+                <div v-if="message.executionPlan.status === 'pending_review'" class="plan-step-actions">
                  <input class="plan-edit-input" :value="stepDraftValue(message.id, step.id, step)" :aria-label="`编辑 ${planTargetLabel(step.target)} 命令`" @input="setStepDraft(message.id, step.id, $event)">
                  <button type="button" class="icon-button" :aria-label="`保存 ${planTargetLabel(step.target)} 命令`" title="保存命令" @click="saveStep(message.id, step.id, stepCommand(step))"><Check :size="13" aria-hidden="true" /></button>
                 <button type="button" class="icon-button" :aria-label="`删除 ${planTargetLabel(step.target)} 步骤`" title="删除步骤" @click="removeStep(message.id, step.id)"><Trash2 :size="13" aria-hidden="true" /></button>
               </div>
             </div>
-            <footer v-if="message.executionPlan.status === 'pending_review' && !readOnly" class="plan-actions">
+            <footer v-if="message.executionPlan.status === 'pending_review'" class="plan-actions">
               <button type="button" class="secondary-action" @click="cancelPlan(message.id)"><X :size="13" aria-hidden="true" />取消计划</button>
               <button type="button" class="primary-action" @click="executePlan(message.id)"><Send :size="13" aria-hidden="true" />确认并执行 {{ message.executionPlan.steps.length }} 步</button>
             </footer>
           </section>
         </div>
       </article>
-      <section v-if="!messages.length" class="empty"><Bot :size="24" aria-hidden="true" /><strong>{{ readOnly ? '此任务没有 AI 记录' : '开始协作' }}</strong><span>{{ readOnly ? 'SSH 历史仍可在中间工作区查看' : '输入目标，AI 会结合当前任务中的 SSH 信息回答' }}</span></section>
+      <section v-if="!messages.length" class="empty"><Bot :size="24" aria-hidden="true" /><strong>开始协作</strong><span>输入目标，AI 会结合当前任务中的 SSH 信息回答</span></section>
       <p v-if="standaloneError" class="error">{{ standaloneError }}</p>
       <p v-if="actionError" class="error">{{ actionError }}</p>
     </div>
@@ -267,8 +439,8 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 
     <footer class="composer">
       <div class="composer-shell">
-        <textarea ref="composerInput" :value="draft" :disabled="readOnly || !chatId" aria-label="聊天输入" placeholder="告诉 AI 要完成什么；AI 会根据当前任务的 SSH 信息回答。" @input="updateDraft" @keydown="onKeydown" />
-        <div class="composer-foot"><span>{{ readOnly ? '历史聊天只读' : `${props.shellCount ?? chat?.shellCount ?? 0} 个在线 SSH` }}</span><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="line-break-button" :disabled="readOnly || !chatId" title="换行（Alt+Enter、Ctrl+Enter、Shift+Enter）" aria-label="插入换行（Alt+Enter、Ctrl+Enter、Shift+Enter）" @click="insertNewline">↵ 换行</button><button type="button" class="send-button" :disabled="readOnly || !chatId || compacting || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
+        <textarea ref="composerInput" :value="draft" :disabled="!chatId" aria-label="聊天输入" placeholder="告诉 AI 要完成什么；AI 会根据当前任务的 SSH 信息回答。" @input="updateDraft" @keydown="onKeydown" />
+        <div class="composer-foot"><span>{{ `${props.shellCount ?? chat?.shellCount ?? 0} 个在线 SSH` }}</span><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="line-break-button" :disabled="!chatId" title="换行（Alt+Enter、Ctrl+Enter、Shift+Enter）" aria-label="插入换行（Alt+Enter、Ctrl+Enter、Shift+Enter）" @click="insertNewline">↵ 换行</button><button type="button" class="send-button" :disabled="!chatId || compacting || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
       </div>
     </footer>
   </section>
@@ -282,6 +454,7 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 .collapse-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 10px; font-weight: 650; white-space: nowrap; }.collapse-button:hover { border-color: var(--focus); background: var(--hover); }
 .ai-safety-badge { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--accent); font-size: 10px; font-weight: 650; }
 .context-meter { grid-column: 1 / -1; min-width: 0; padding-top: 4px; border-top: 1px solid var(--line-soft); }.context-meter-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto 26px; align-items: center; gap: 6px; min-width: 0; }.context-meter-head strong { color: var(--text-strong); font-size: 10px; }.context-meter-summary { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }.context-meter-head b { color: var(--text-strong); font-size: 9px; }.context-toggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.context-toggle:hover { border-color: var(--focus); color: var(--text-strong); }.context-meter-details { min-width: 0; }.context-progress { height: 5px; margin-top: 4px; overflow: hidden; border-radius: 3px; background: var(--line); }.context-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }.context-meter-foot { margin-top: 4px; color: var(--muted); font-size: 8.5px; }.context-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }.context-settings .secondary-action { min-height: 27px; }.ssh-context-setting { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 9px; }.ssh-context-setting span { white-space: nowrap; }.ssh-context-setting input { width: 62px; height: 27px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 10px; font-variant-numeric: tabular-nums; }.ssh-context-setting input:focus { border-color: var(--focus); outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }.context-error { margin: 5px 0 0; color: var(--red); font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
+.context-host-setting { flex: 1 1 100%; min-width: 0; margin-top: 2px; padding-top: 6px; border-top: 1px solid var(--line-soft); }.context-host-setting-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 9px; }.context-host-setting-head b { color: var(--text-strong); font-size: 9px; font-variant-numeric: tabular-nums; }.context-host-options { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 5px; }.context-host-option { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 3px 5px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; cursor: pointer; }.context-host-option:hover { border-color: var(--focus); background: var(--hover); }.context-host-option input { margin: 0; accent-color: var(--accent); }.context-host-option span { min-width: 0; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.context-host-empty { display: block; margin-top: 5px; color: var(--faint); font-size: 9px; }
 .messages { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 10px 12px 14px; scrollbar-gutter: stable; scrollbar-color: transparent transparent; scrollbar-width: thin; }
 .messages:hover,.messages:focus-within { scrollbar-color: var(--line) transparent; }
 .messages::-webkit-scrollbar { width: 7px; }

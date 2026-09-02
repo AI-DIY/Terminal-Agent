@@ -177,31 +177,3 @@ export function latestHistoryByHost(records: readonly ShellHistorySummary[]): Sh
   }
   return [...newestByHost.values()]
 }
-
-export function toggleHistoryHostSelection(selected: readonly string[], hostname: string): string[] {
-  if (selected.includes(hostname)) {
-    return selected.length === 1 ? [...selected] : selected.filter(item => item !== hostname)
-  }
-  return [...selected, hostname]
-}
-
-export function reconcileHistoryHostSelection(
-  selected: readonly string[],
-  available: readonly string[],
-  previouslyAvailable: readonly string[],
-): string[] {
-  const retained = selected.filter(hostname => available.includes(hostname))
-  const previouslySelectedAll = previouslyAvailable.length === 0
-    ? selected.length === 0
-    : previouslyAvailable.every(hostname => selected.includes(hostname))
-  return previouslySelectedAll || retained.length === 0 ? [...available] : retained
-}
-
-export function filterHistoryByHosts(
-  records: readonly ShellHistorySummary[],
-  selectedHostnames: readonly string[],
-  visibleCount: number,
-): ShellHistorySummary[] {
-  const selected = new Set(selectedHostnames)
-  return records.filter(record => selected.has(record.hostname)).slice(0, Math.max(1, visibleCount))
-}

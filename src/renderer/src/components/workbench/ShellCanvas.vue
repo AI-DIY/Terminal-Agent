@@ -1,17 +1,23 @@
 <script setup lang="ts">
-import { Files, History, LayoutGrid, Plus, X } from '@lucide/vue'
+import { History, LayoutGrid, Plus, X } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import type { ShellHistorySummary } from '../../../../shared/contracts'
 import SessionTabs from '../SessionTabs.vue'
 import TerminalPane from '../TerminalPane.vue'
-import FileTransferPanel from './FileTransferPanel.vue'
 import { sessionDisplayLabel, sessionDisplayParts, sessionHasDuplicateHost, sessionLabel, type SessionView } from '../../stores/sessions'
+import { sshHostIdentity } from '../../../../shared/shell-display-label'
 import {
   getLayoutPreferencesStore,
   SHELL_FONT_SIZE_PRESETS,
   SHELL_ROW_HEIGHT_PRESETS,
   shellGridStyle,
 } from '../../stores/layout-preferences'
+
+type HistoryHost = ShellHistorySummary & {
+  /** Optional renderer-only label; the IPC summary remains unchanged. */
+  displayLabel?: string
+  ordinal?: number
+}
 
 const props = defineProps<{
   sessions: SessionView[]
@@ -21,27 +27,28 @@ const props = defineProps<{
   shellCount: number
   isLive: boolean
   liveChatAvailable: boolean
-  historyHosts: ShellHistorySummary[]
-  selectedHistoryHosts: string[]
+  historyHosts: HistoryHost[]
 }>()
 const emit = defineEmits<{
   select: [sessionId: string]
   close: [sessionId: string]
   connect: []
   restoreLive: []
-  history: [hostname: string]
+  history: [hostname: string, historyId?: string]
   historyMenu: [historyId: string]
   reconnect: [historyId: string]
-  toggleHistoryHost: [hostname: string]
   reorder: [sessionIds: string[]]
+  reorderHistory: [historyIds: string[]]
 }>()
 
 const layout = getLayoutPreferencesStore()
 const layoutMenuOpen = ref(false)
 const menuHistoryId = ref<string | null>(null)
-const fileTransferSessionIds = ref(new Set<string>())
 const draggingSessionId = ref<string | null>(null)
 const dragOverSessionId = ref<string | null>(null)
+const draggingHistoryId = ref<string | null>(null)
+const dragOverHistoryId = ref<string | null>(null)
+const activeHistoryId = ref<string | null>(null)
 const orderedCurrentSessions = computed(() => {
   const sessionsById = new Map(props.currentSessions.map(session => [session.id, session]))
   const ordered: SessionView[] = []
@@ -57,9 +64,11 @@ const orderedCurrentSessions = computed(() => {
 const displayedSessionIds = computed(() => orderedCurrentSessions.value.map(session => session.id))
 const gridColumns = computed(() => Math.max(1, Math.min(layout.state.columns, orderedCurrentSessions.value.length || 1)))
 const gridStyle = computed(() => shellGridStyle(gridColumns.value, layout.state.rowHeightPercent))
-const layoutItemCount = computed(() => props.isLive
+const hasOnlineSessions = computed(() => props.currentSessions.length > 0)
+const layoutItemCount = computed(() => hasOnlineSessions.value
   ? orderedCurrentSessions.value.length
   : props.historyHosts.length)
+const historyHostCount = computed(() => new Set(props.historyHosts.map(host => sshHostIdentity({ hostname: host.hostname, displayName: host.title }))).size)
 const layoutSummary = computed(() => {
   const count = layoutItemCount.value
   const columns = Math.max(1, Math.min(layout.state.columns, count || 1))
@@ -79,21 +88,6 @@ function updateLayout(field: 'columns' | 'rowHeightPercent' | 'fontSize', event:
 
 function closeSession(sessionId: string): void {
   emit('close', sessionId)
-}
-
-function openFileTransfer(session: SessionView): void {
-  layoutMenuOpen.value = false
-  menuHistoryId.value = null
-  const next = new Set(fileTransferSessionIds.value)
-  if (next.has(session.id)) next.delete(session.id)
-  else next.add(session.id)
-  fileTransferSessionIds.value = next
-}
-
-function closeFileTransfer(sessionId: string): void {
-  const next = new Set(fileTransferSessionIds.value)
-  next.delete(sessionId)
-  fileTransferSessionIds.value = next
 }
 
 function beginSessionDrag(sessionId: string, event: DragEvent): void {
@@ -162,9 +156,60 @@ function openSessionHistory(session: SessionView): void {
   emit('history', sessionLabel(session))
 }
 
-function openHistoricalSessionHistory(hostname: string): void {
+function openHistoricalSessionHistory(hostname: string, historyId?: string): void {
   menuHistoryId.value = null
-  emit('history', hostname)
+  if (!hasOnlineSessions.value && historyId) activeHistoryId.value = historyId
+  emit('history', hostname, historyId)
+}
+
+function beginHistoryDrag(historyId: string, event: DragEvent): void {
+  draggingHistoryId.value = historyId
+  dragOverHistoryId.value = historyId
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', historyId)
+  }
+}
+
+function trackHistoryDragOver(historyId: string, event: DragEvent): void {
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  dragOverHistoryId.value = historyId
+}
+
+function finishHistoryDrag(): void {
+  draggingHistoryId.value = null
+  dragOverHistoryId.value = null
+}
+
+function dropHistory(historyId: string, event: DragEvent): void {
+  event.preventDefault()
+  const sourceId = draggingHistoryId.value ?? event.dataTransfer?.getData('text/plain') ?? null
+  if (!sourceId || sourceId === historyId) {
+    finishHistoryDrag()
+    return
+  }
+  const ids = props.historyHosts.map(host => host.id)
+  const sourceIndex = ids.indexOf(sourceId)
+  const targetIndex = ids.indexOf(historyId)
+  if (sourceIndex < 0 || targetIndex < 0) {
+    finishHistoryDrag()
+    return
+  }
+  ids.splice(sourceIndex, 1)
+  const targetElement = event.currentTarget as HTMLElement
+  const bounds = targetElement.getBoundingClientRect()
+  const afterTarget = Number.isFinite(event.clientX)
+    && bounds.width > 0
+    && event.clientX > bounds.left + bounds.width / 2
+  const adjustedTargetIndex = ids.indexOf(historyId)
+  ids.splice(Math.max(0, adjustedTargetIndex + (afterTarget ? 1 : 0)), 0, sourceId)
+  emit('reorderHistory', ids)
+  finishHistoryDrag()
+}
+
+function historyTabActive(historyId: string): boolean {
+  return !hasOnlineSessions.value && activeHistoryId.value === historyId
 }
 
 function displayBaseLabel(session: SessionView): string {
@@ -178,46 +223,44 @@ function displayOrdinal(session: SessionView): number | null {
 }
 
 /**
- * A historical host is still a filter in the read-only task view.  When a
- * live task has terminals mounted, however, the historical row sits beside
- * the live canvas and must open the same Shell History dialog as the card
- * action; otherwise the click appears to do nothing because the playback
- * slot is intentionally not mounted in the live view.
+ * Historical tabs always open the shared read-only history dialog.  They are
+ * deliberately not multi-select filters: when an online Shell exists the
+ * tab has no active styling, and the playback canvas is mounted only after
+ * every online connection for the task has gone away.
  */
-function handleHistoryHostClick(hostname: string): void {
-  if (props.isLive && props.currentSessions.length > 0) {
-    openHistoricalSessionHistory(hostname)
-    return
-  }
-  emit('toggleHistoryHost', hostname)
+function handleHistoryHostClick(host: HistoryHost): void {
+  openHistoricalSessionHistory(host.hostname, host.id)
 }
 
-function historyHostActionLabel(hostname: string): string {
-  return props.isLive && props.currentSessions.length > 0
-    ? `打开 SSH 历史 ${hostname}`
-    : `筛选 SSH 历史 ${hostname}`
+function historyHostLabel(host: HistoryHost): string {
+  return host.displayLabel ?? host.title
+}
+
+function historyHostActionLabel(host: HistoryHost): string {
+  return `打开 SSH 历史 ${historyHostLabel(host)}`
 }
 
 watch(
   () => props.currentSessions.map(session => session.id),
   () => {
     layoutMenuOpen.value = false
-    const validIds = new Set(props.currentSessions.map(session => session.id))
-    fileTransferSessionIds.value = new Set([...fileTransferSessionIds.value].filter(sessionId => validIds.has(sessionId)))
   },
 )
 watch(
-  [() => props.isLive, () => props.currentSessions.length],
-  ([isLive, currentSessionCount]) => {
-    if (!isLive || currentSessionCount === 0) layoutMenuOpen.value = false
+  [() => props.isLive, () => props.currentSessions.length, () => props.historyHosts.map(host => host.id).join('\u0000')],
+  ([isLive, currentSessionCount, historyIds]) => {
+    if (!isLive && currentSessionCount === 0 && !historyIds) layoutMenuOpen.value = false
     if (isLive || currentSessionCount === 0) menuHistoryId.value = null
+    if (currentSessionCount > 0) activeHistoryId.value = null
+    if (currentSessionCount === 0 && !activeHistoryId.value) activeHistoryId.value = props.historyHosts[0]?.id ?? null
+    if (activeHistoryId.value && !props.historyHosts.some(host => host.id === activeHistoryId.value)) activeHistoryId.value = null
   },
 )
 </script>
 
 <template>
-  <section class="shell-canvas" :class="{ empty: isLive && currentSessions.length === 0 }">
-    <header v-show="currentSessions.length > 0 || !isLive" class="shell-toolbar-content">
+  <section class="shell-canvas" :class="{ empty: isLive && currentSessions.length === 0 && historyHosts.length === 0 }">
+    <header v-show="currentSessions.length > 0 || !isLive || historyHosts.length > 0" class="shell-toolbar-content">
       <SessionTabs
         v-if="isLive && currentSessions.length"
         :sessions="orderedCurrentSessions"
@@ -226,7 +269,7 @@ watch(
         @close="closeSession"
         @reorder="emit('reorder', $event)"
       />
-       <div v-else class="history-toolbar-title"><strong>SSH 历史回放</strong><span>{{ historyHosts.length }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
+       <div v-else class="history-toolbar-title"><strong>SSH 历史回放</strong><span>{{ historyHostCount }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
       <div class="hostbar-tools">
         <div v-if="isLive" class="shell-title">
           <strong>SSH</strong>
@@ -266,18 +309,28 @@ watch(
       <span>{{ layoutSummary }}</span>
     </section>
     <section v-if="historyHosts.length" class="history-shell-toolbar" aria-label="历史 SSH 连接">
-      <div class="history-shell-heading"><strong>历史 SSH 连接</strong><span>{{ selectedHistoryHosts.length }} / {{ historyHosts.length }} 台已选择</span></div>
-      <div class="history-shell-tabs">
-        <div v-for="host in historyHosts" :key="host.hostname" class="history-host-item">
+      <div class="history-shell-heading"><strong>历史 SSH 连接</strong><span>{{ historyHostCount }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
+      <nav class="history-session-tabs" aria-label="历史 SSH 会话">
+        <div
+          v-for="host in historyHosts"
+          :key="host.id"
+          class="history-session-tab"
+          :class="{ active: historyTabActive(host.id), dragging: host.id === draggingHistoryId, 'drag-over': host.id === dragOverHistoryId && host.id !== draggingHistoryId }"
+          draggable="true"
+            :title="`拖动排序：${historyHostLabel(host)}`"
+          @dragstart="beginHistoryDrag(host.id, $event)"
+          @dragover="trackHistoryDragOver(host.id, $event)"
+          @drop="dropHistory(host.id, $event)"
+          @dragend="finishHistoryDrag"
+        >
           <button
             type="button"
             class="history-shell-tab"
-            :class="{ selected: selectedHistoryHosts.includes(host.hostname) }"
-            :aria-label="historyHostActionLabel(host.hostname)"
-            :aria-pressed="selectedHistoryHosts.includes(host.hostname)"
-            @click="handleHistoryHostClick(host.hostname)"
+            :aria-label="historyHostActionLabel(host)"
+            :aria-current="historyTabActive(host.id) ? 'page' : undefined"
+            @click="handleHistoryHostClick(host)"
             @contextmenu.prevent="emit('historyMenu', host.id)"
-          ><span class="host-status" aria-hidden="true" />{{ host.title }}</button>
+          ><span class="host-status" aria-hidden="true" /><strong>{{ historyHostLabel(host) }}</strong><small>已关闭</small></button>
           <section v-if="menuHistoryId === host.id" class="history-context-menu" role="menu" :aria-label="`历史 SSH 操作 ${host.hostname}`">
             <button
               type="button"
@@ -286,15 +339,15 @@ watch(
               title="重新连接：仅仍保留安全连接描述的历史 SSH 可以重连"
               @click="reconnectHistory(host.id)"
             >重连</button>
-            <button type="button" role="menuitem" @click="openHistoricalSessionHistory(host.hostname)">查看 SSH 历史</button>
+            <button type="button" role="menuitem" @click="openHistoricalSessionHistory(host.hostname, host.id)">查看 SSH 历史</button>
           </section>
         </div>
-      </div>
+      </nav>
     </section>
 
     <div class="canvas-content">
       <section
-        v-show="isLive && currentSessions.length > 0"
+        v-show="currentSessions.length > 0"
         class="terminal-grid"
         aria-label="可见终端面板"
         :data-columns="gridColumns"
@@ -305,7 +358,7 @@ watch(
           v-for="session in orderedCurrentSessions"
           :key="session.id"
           class="terminal-frame"
-          :class="{ selected: session.id === activeSessionId, 'transfer-open': fileTransferSessionIds.has(session.id), dragging: session.id === draggingSessionId, 'drag-over': session.id === dragOverSessionId && session.id !== draggingSessionId }"
+          :class="{ selected: session.id === activeSessionId, dragging: session.id === draggingSessionId, 'drag-over': session.id === dragOverSessionId && session.id !== draggingSessionId }"
         >
           <header
             draggable="true"
@@ -319,23 +372,16 @@ watch(
             <span v-if="displayOrdinal(session) !== null" class="host-ordinal">#{{ displayOrdinal(session) }}</span>
             <span>已连接</span>
             <div class="terminal-actions">
-              <button type="button" :aria-label="`文件传输 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" :aria-expanded="fileTransferSessionIds.has(session.id)" title="文件传输" @click.stop="openFileTransfer(session)"><Files :size="14" aria-hidden="true" /></button>
               <button type="button" :aria-label="`查看 SSH 历史 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" title="历史会话" @click.stop="openSessionHistory(session)"><History :size="14" aria-hidden="true" /></button>
               <button type="button" :aria-label="`关闭画布终端会话 ${sessionDisplayLabel(session, orderedCurrentSessions)}`" title="关闭 SSH" class="close-terminal" @click.stop="closeSession(session.id)"><X :size="15" aria-hidden="true" /></button>
             </div>
           </header>
           <TerminalPane :session="session" :active="session.id === activeSessionId" :font-size="layout.state.fontSize" @activate="selectSession(session.id)" />
-          <FileTransferPanel
-            v-if="fileTransferSessionIds.has(session.id)"
-            :session-id="session.id"
-            :hostname="session.observedHostname || session.hostname"
-            @close="closeFileTransfer(session.id)"
-          />
         </article>
       </section>
 
-      <section v-if="!isLive" class="history-slot"><slot name="history" /></section>
-      <section v-else-if="currentSessions.length === 0" class="empty-slot"><slot name="empty" /></section>
+      <section v-if="currentSessions.length === 0 && (!isLive || historyHosts.length > 0)" class="history-slot"><slot name="history" /></section>
+      <section v-else-if="currentSessions.length === 0 && isLive" class="empty-slot"><slot name="empty" /></section>
     </div>
   </section>
 </template>
@@ -367,8 +413,7 @@ watch(
 .terminal-grid::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }
 .terminal-grid:hover::-webkit-scrollbar-thumb,.terminal-grid:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
 .terminal-grid:hover::-webkit-scrollbar-thumb:hover,.terminal-grid:focus-within::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
-.terminal-frame { position: relative; display: grid; grid-template-rows: 36px minmax(0, 1fr) auto; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--terminal); container-type: inline-size; }
-.terminal-frame.transfer-open { grid-template-rows: 36px minmax(120px, 1fr) auto; min-height: 458px; }
+.terminal-frame { position: relative; display: grid; grid-template-rows: 36px minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--terminal); container-type: inline-size; }
 .terminal-frame.dragging { opacity: .58; }
 .terminal-frame.drag-over { box-shadow: inset 0 0 0 2px var(--focus); }
 .terminal-frame.selected { border-color: var(--red); background: var(--amber-soft); box-shadow: inset 0 2px 0 var(--red); }
@@ -387,8 +432,14 @@ watch(
 .empty-slot,.history-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .history-shell-toolbar { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; min-height: 38px; padding: 4px 9px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 86%, var(--surface)); }
 .history-shell-heading { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }.history-shell-heading strong { color: var(--text-strong); font-size: 10px; }.history-shell-heading span { color: var(--muted); font-size: 9px; }
-.history-shell-tabs { display: flex; gap: 5px; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }.history-shell-tabs:hover,.history-shell-tabs:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }.history-shell-tabs::-webkit-scrollbar { width: 0; height: 5px; }.history-shell-tabs::-webkit-scrollbar-track { background: transparent; }.history-shell-tabs::-webkit-scrollbar-thumb { border: 1px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }.history-shell-tabs:hover::-webkit-scrollbar-thumb,.history-shell-tabs:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
-.history-host-item { position: relative; flex: 0 0 auto; }.history-shell-tab { display: flex; align-items: center; gap: 5px; min-height: 27px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 10px; white-space: nowrap; }.history-shell-tab:hover,.history-shell-tab:focus-visible { border-color: var(--accent); color: var(--text); outline: 0; }.history-shell-tab.selected { border-color: var(--red); background: var(--amber-soft); color: var(--text-strong); }.host-status { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }.history-shell-tab.selected .host-status { background: var(--accent); }
+.history-session-tabs { display: flex; min-width: 0; min-height: 0; height: 30px; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.history-session-tabs:hover,.history-session-tabs:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }
+.history-session-tabs::-webkit-scrollbar { width: 0; height: 5px; }.history-session-tabs::-webkit-scrollbar-track { background: transparent; }.history-session-tabs::-webkit-scrollbar-thumb { border: 1px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }.history-session-tabs:hover::-webkit-scrollbar-thumb,.history-session-tabs:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
+.history-session-tab { position: relative; display: flex; box-sizing: border-box; height: 100%; min-height: 0; flex: 0 0 auto; align-items: center; max-width: 245px; border: 1px solid transparent; border-bottom-width: 2px; background: transparent; color: var(--muted); white-space: nowrap; cursor: grab; }
+.history-session-tab:hover { background: var(--hover); }.history-session-tab:active { cursor: grabbing; }.history-session-tab.active { border-color: var(--red); background: var(--amber-soft); color: var(--text-strong); }.history-session-tab.dragging { opacity: .48; }.history-session-tab.drag-over { box-shadow: inset 2px 0 0 var(--focus); }
+.history-session-tab > .history-shell-tab { display: flex; min-width: 0; align-items: center; gap: 7px; height: 100%; padding: 0 8px 0 10px; border: 0; background: transparent; color: inherit; font-size: 10px; text-align: left; white-space: nowrap; }
+.history-session-tab > .history-shell-tab:hover,.history-session-tab > .history-shell-tab:focus-visible { outline: 0; }.history-session-tab > .history-shell-tab strong { max-width: 128px; overflow: hidden; color: var(--text-strong); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }.history-session-tab > .history-shell-tab small { color: var(--faint); font-size: 9px; }
+.host-status { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }.history-session-tab.active .host-status { background: var(--accent); }
 @media (max-width: 1180px) {
   .shell-title { display: none; }
   .history-shell-heading span { display: none; }

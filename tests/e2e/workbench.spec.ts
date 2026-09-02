@@ -382,7 +382,7 @@ test('restores a chat with only closed SSH sessions as history playback after re
   }
 })
 
-test('filters historical hosts as a multi-select workspace with shared layout and reconnect actions', async ({ launchApp }) => {
+test('opens historical SSH dialogs without multi-select and keeps shared layout/reconnect actions', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -396,26 +396,29 @@ test('filters historical hosts as a multi-select workspace with shared layout an
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.1', exact: true }).click()
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.2', exact: true }).click()
 
-    const firstHost = page.getByRole('button', { name: '筛选 SSH 历史 127.0.0.1', exact: true })
-    const secondHost = page.getByRole('button', { name: '筛选 SSH 历史 127.0.0.2', exact: true })
+    const firstHost = page.getByRole('button', { name: '打开 SSH 历史 127.0.0.1', exact: true })
+    const secondHost = page.getByRole('button', { name: '打开 SSH 历史 127.0.0.2', exact: true })
     const historicalCards = page.locator('.history-shell-card')
-    await expect(firstHost).toHaveAttribute('aria-pressed', 'true')
-    await expect(secondHost).toHaveAttribute('aria-pressed', 'true')
+    await expect(firstHost).not.toHaveAttribute('aria-pressed')
+    await expect(secondHost).not.toHaveAttribute('aria-pressed')
     await expect(historicalCards).toHaveCount(2)
     await expect(page.getByText('SSH 历史回放', { exact: true })).toBeVisible()
-    await expect(page.getByText('2 台主机 · 2 条记录', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('历史 SSH 连接').getByText('2 台主机 · 2 条记录', { exact: true })).toBeVisible()
     await expect(page.getByText('以下 SSH 已关闭，仅提供只读回放', { exact: true })).toBeVisible()
     await expect(page.locator('.shell-title')).toHaveCount(0)
 
     await firstHost.click()
-    await expect(firstHost).toHaveAttribute('aria-pressed', 'false')
-    await expect(historicalCards).toHaveCount(1)
-    await expect(page.getByLabel('只读终端历史 127.0.0.2', { exact: true })).toBeVisible()
+    const firstHistoryDialog = page.getByRole('dialog', { name: 'Shell 历史', exact: true })
+    await expect(firstHistoryDialog).toBeVisible()
+    await expect(firstHistoryDialog).toContainText('127.0.0.1')
+    await firstHistoryDialog.getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
+    await expect(historicalCards).toHaveCount(2)
 
     await secondHost.click()
-    await expect(secondHost).toHaveAttribute('aria-pressed', 'true')
-    await expect(historicalCards).toHaveCount(1)
-    await firstHost.click()
+    const secondHistoryDialog = page.getByRole('dialog', { name: 'Shell 历史', exact: true })
+    await expect(secondHistoryDialog).toBeVisible()
+    await expect(secondHistoryDialog).toContainText('127.0.0.2')
+    await secondHistoryDialog.getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
     await expect(historicalCards).toHaveCount(2)
 
     await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click()
@@ -426,6 +429,10 @@ test('filters historical hosts as a multi-select workspace with shared layout an
     await expect(grid).toHaveAttribute('data-columns', '1')
     await expect(grid).toHaveAttribute('data-row-height-percent', '48')
 
+    // Close the floating layout menu before opening the history item's
+    // context menu; otherwise the menu can cover the tab and intercept the
+    // pointer event in Chromium.
+    await page.getByRole('button', { name: 'SSH 窗口布局', exact: true }).click({ force: true })
     await firstHost.click({ button: 'right' })
     const menu = page.getByRole('menu', { name: '历史 SSH 操作 127.0.0.1', exact: true })
     await expect(menu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
@@ -435,7 +442,7 @@ test('filters historical hosts as a multi-select workspace with shared layout an
   }
 })
 
-test('opens file transfer without a per-terminal ellipsis menu, previews read-only history, and reconnects it into the selected history chat', async ({ launchApp }) => {
+test('removes the per-terminal file-transfer entry, previews read-only history, and reconnects it into the selected history chat', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -452,20 +459,8 @@ test('opens file transfer without a per-terminal ellipsis menu, previews read-on
     await expect(page.getByRole('button', { name: '终端操作 127.0.0.1', exact: true })).toHaveCount(0)
     await expect(page.getByRole('menu', { name: '终端操作 127.0.0.1', exact: true })).toHaveCount(0)
 
-    const transferButton = page.getByRole('button', { name: '文件传输 127.0.0.1', exact: true })
-    await expect(transferButton).toBeVisible()
-    await transferButton.click()
-    const transferPanel = page.getByLabel('文件传输', { exact: true })
-    await expect(transferPanel).toBeVisible()
-    await expect(transferPanel).toContainText('通过当前 SSH 的独立 SFTP 通道传输，不会中断终端。')
-    await expect(transferPanel.getByLabel('远程路径', { exact: true })).toBeVisible()
-    await expect(transferPanel.locator('.file-transfer-log')).toBeVisible()
-    const transferLogHeight = await transferPanel.locator('.file-transfer-log').evaluate(node => node.getBoundingClientRect().height)
-    expect(transferLogHeight).toBeGreaterThanOrEqual(45)
-    await expect(transferPanel.getByRole('button', { name: '上传文件', exact: true })).toBeEnabled()
-    await expect(transferPanel.getByRole('button', { name: '下载文件', exact: true })).toBeEnabled()
-    await transferPanel.getByRole('button', { name: '关闭文件传输', exact: true }).click()
-    await expect(transferPanel).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '文件传输 127.0.0.1', exact: true })).toHaveCount(0)
+    await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(0)
 
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.1', exact: true }).click()
     await expect(page.getByLabel('任务 SSH 历史回放')).toBeVisible()
@@ -1339,13 +1334,8 @@ test('renders two real SSH sessions in separate terminal panes with isolated out
     const panes = page.locator('[data-testid^="terminal-pane-"]')
     await expect(panes).toHaveCount(2)
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1' })).toHaveCount(2)
-
-    const transferButtons = page.getByRole('button', { name: '文件传输 127.0.0.1' })
-    await transferButtons.nth(0).click()
-    await transferButtons.nth(1).click()
-    await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(2)
-    await page.getByLabel('文件传输', { exact: true }).nth(0).getByRole('button', { name: '关闭文件传输', exact: true }).click()
-    await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(1)
+    await expect(page.getByRole('button', { name: '文件传输 127.0.0.1' })).toHaveCount(0)
+    await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(0)
 
     await sendCommand(panes.nth(0), page, 'alpha')
     await sendCommand(panes.nth(1), page, 'beta')

@@ -2,10 +2,11 @@ import { reactive } from 'vue'
 import type { ChatRuntimeEvent, ChatProgressStage, ChatWorkspaceSnapshot, ChatMessageType } from '../../../shared/contracts'
 import type { ChatMessageContent, ChatImageUrlPart } from '../../../shared/chat-content'
 import type { ChatExecutionPlan, ChatPlanEditStepRequest, ChatPlanRemoveStepRequest, ChatPlanCancelRequest, ChatPlanExecuteRequest } from '../../../shared/chat-plan'
+import type { BuiltInSkillId } from '../../../shared/built-in-skills'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 type Api = {
-  send(request: { chatId: string; runId: string; content: any; retry?: boolean; sshContextLines?: number }): Promise<void>
+  send(request: { chatId: string; runId: string; content: any; retry?: boolean; sshContextLines?: number; sshContextSessionIds?: string[]; skillIds?: BuiltInSkillId[] }): Promise<void>
   cancel(chatId: string): Promise<void>
   onEvent(listener: (event: ChatRuntimeEvent) => void): () => void
   // Compaction only needs the refreshed transcript. Keep this adapter's
@@ -14,7 +15,7 @@ type Api = {
   // preload implementation still validates and returns the full snapshot
   // defined by the shared IPC contract, which is structurally assignable to
   // this projection.
-  compact?(request: { requestId: string; chatId: string; sshContextLines?: number }): Promise<ChatCompactionSnapshot>
+  compact?(request: { requestId: string; chatId: string; sshContextLines?: number; sshContextSessionIds?: string[]; skillIds?: BuiltInSkillId[] }): Promise<ChatCompactionSnapshot>
   plans?: {
     editStep(request: ChatPlanEditStepRequest): Promise<ChatWorkspaceSnapshot>
     removeStep(request: ChatPlanRemoveStepRequest): Promise<ChatWorkspaceSnapshot>
@@ -38,11 +39,10 @@ const terminalCancellationContent = '已取消。'
 
 export const DEFAULT_SSH_CONTEXT_LINES = 50
 export const MIN_SSH_CONTEXT_LINES = 0
-export const MAX_SSH_CONTEXT_LINES = 200
 
 function clampSshContextLines(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_SSH_CONTEXT_LINES
-  return Math.max(MIN_SSH_CONTEXT_LINES, Math.min(MAX_SSH_CONTEXT_LINES, Math.round(value)))
+  return Math.max(MIN_SSH_CONTEXT_LINES, Math.round(value))
 }
 
 type ChatCompactionSnapshot = {
@@ -91,7 +91,6 @@ export function createGlobalChatStore(api: Api) {
     runs: {} as Record<string, string | null>,
     errors: {} as Record<string, string>,
     retryableErrors: {} as Record<string, boolean>,
-    readOnly: {} as Record<string, boolean>,
     /** Tasks whose transcript is currently being compacted. */
     compacting: {} as Record<string, boolean>,
     activeMessageIds: {} as Record<string, string | null>,
@@ -99,6 +98,7 @@ export function createGlobalChatStore(api: Api) {
     pendingImages: {} as Record<string, ChatImageUrlPart[]>,
     progress: {} as Record<string, ChatProgressStage | null>,
     sshContextLines: loadSshContextLines(),
+    sshContextSessionIds: {} as Record<string, string[]>,
   })
   const lastUserMessage = new Map<string, { id: string; content: string }>()
   const cancelledRuns = new Map<string, string>()
@@ -201,9 +201,14 @@ export function createGlobalChatStore(api: Api) {
     sshContextLines(): number {
       return state.sshContextLines
     },
-    async compact(chatId: string): Promise<ChatCompactionSnapshot> {
+    setSshContextSessionIds(chatId: string, sessionIds: readonly string[]): void {
+      state.sshContextSessionIds[chatId] = [...new Set(sessionIds)]
+    },
+    sshContextSessionIds(chatId: string): string[] {
+      return [...(state.sshContextSessionIds[chatId] ?? [])]
+    },
+    async compact(chatId: string, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[]): Promise<ChatCompactionSnapshot> {
       if (!api.compact) throw new Error('上下文压缩不可用')
-      if (state.readOnly[chatId]) throw new Error('历史任务不可压缩')
       const existing = compactOperations.get(chatId)
       if (existing) return existing
 
@@ -211,12 +216,15 @@ export function createGlobalChatStore(api: Api) {
       const operationRef: { current?: Promise<ChatCompactionSnapshot> } = {}
       const operation = (async (): Promise<ChatCompactionSnapshot> => {
         try {
+          const selectedSessionIds = sessionIds ?? state.sshContextSessionIds[chatId]
           const snapshot = await Promise.resolve().then(() => api.compact!({
             requestId: crypto.randomUUID(),
             chatId,
             sshContextLines: state.sshContextLines,
+            ...(selectedSessionIds === undefined ? {} : { sshContextSessionIds: [...new Set(selectedSessionIds)] }),
+            ...(skillIds === undefined ? {} : { skillIds: [...new Set(skillIds)] }),
           }))
-          this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+          this.hydrate(chatId, snapshot.chat.messages)
           return snapshot
         } finally {
           state.compacting[chatId] = false
@@ -241,7 +249,10 @@ export function createGlobalChatStore(api: Api) {
       retryable?: boolean
       messageType?: ChatMessageType
       executionPlan?: ChatExecutionPlan
-    }[], readOnly = false): void {
+    }[], _legacyReadOnly = false): void {
+      // Keep the old positional argument accepted by embedded callers; it no
+      // longer changes behavior because historical tasks are interactive.
+      void _legacyReadOnly
       cancelledRuns.delete(chatId)
       state.runs[chatId] = null
       const visible = messages.filter(message => message.role !== 'system').map(message => ({ ...message }))
@@ -268,9 +279,8 @@ export function createGlobalChatStore(api: Api) {
       }
       state.activeMessageIds[chatId] = null
       state.runUserMessageIds[chatId] = null
-      state.readOnly[chatId] = readOnly
     },
-    async send(chatId: string, content: any): Promise<void> {
+    async send(chatId: string, content: any, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[]): Promise<void> {
       // Keep the draft intact while compaction is in flight.  The runtime also
       // enforces this ordering for non-renderer callers, but guarding here
       // avoids showing a new optimistic user message that would immediately
@@ -278,7 +288,7 @@ export function createGlobalChatStore(api: Api) {
       if (state.compacting[chatId]) return
       if (typeof content !== 'string') return
       const value = content.trim()
-      if (!value || state.readOnly[chatId]) return
+      if (!value) return
       const runId = crypto.randomUUID()
       cancelledRuns.delete(chatId)
       state.drafts[chatId] = ''
@@ -290,10 +300,18 @@ export function createGlobalChatStore(api: Api) {
       ;(state.messages[chatId] ?? (state.messages[chatId] = [])).push({ id: userId, role: 'user', content: value, state: 'complete' })
       lastUserMessage.set(chatId, { id: userId, content: value })
       state.runUserMessageIds[chatId] = userId
-      await api.send({ chatId, runId, content: value, sshContextLines: state.sshContextLines })
+      const selectedSessionIds = sessionIds ?? state.sshContextSessionIds[chatId]
+      await api.send({
+        chatId,
+        runId,
+        content: value,
+        sshContextLines: state.sshContextLines,
+        ...(selectedSessionIds === undefined ? {} : { sshContextSessionIds: [...new Set(selectedSessionIds)] }),
+        ...(skillIds === undefined ? {} : { skillIds: [...new Set(skillIds)] }),
+      })
     },
-    async retry(chatId: string): Promise<void> {
-      if (state.readOnly[chatId] || state.compacting[chatId]) return
+    async retry(chatId: string, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[]): Promise<void> {
+      if (state.compacting[chatId]) return
       const previous = lastUserMessage.get(chatId)
       if (!previous || !previous.content || !state.errors[chatId] || !state.retryableErrors[chatId]) return
       const runId = crypto.randomUUID()
@@ -304,10 +322,19 @@ export function createGlobalChatStore(api: Api) {
       state.retryableErrors[chatId] = false
       state.activeMessageIds[chatId] = null
       state.runUserMessageIds[chatId] = previous.id
-      await api.send({ chatId, runId, content: previous.content, retry: true, sshContextLines: state.sshContextLines })
+      const selectedSessionIds = sessionIds ?? state.sshContextSessionIds[chatId]
+      await api.send({
+        chatId,
+        runId,
+        content: previous.content,
+        retry: true,
+        sshContextLines: state.sshContextLines,
+        ...(selectedSessionIds === undefined ? {} : { sshContextSessionIds: [...new Set(selectedSessionIds)] }),
+        ...(skillIds === undefined ? {} : { skillIds: [...new Set(skillIds)] }),
+      })
     },
     canRetry(chatId: string): boolean {
-      return !state.readOnly[chatId] && Boolean(state.errors[chatId]) && state.retryableErrors[chatId]
+      return Boolean(state.errors[chatId]) && state.retryableErrors[chatId]
     },
     onErrorAnnouncement(listener: (announcement: ErrorAnnouncement) => void): () => void {
       errorAnnouncementListeners.add(listener)
@@ -356,25 +383,25 @@ export function createGlobalChatStore(api: Api) {
     async editPlanStep(chatId: string, messageId: string, stepId: string, command: string): Promise<ChatWorkspaceSnapshot> {
       if (!api.plans) throw new Error('计划操作不可用')
       const snapshot = await api.plans.editStep({ requestId: crypto.randomUUID(), chatId, messageId, stepId, command })
-      this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+      this.hydrate(chatId, snapshot.chat.messages)
       return snapshot
     },
     async removePlanStep(chatId: string, messageId: string, stepId: string): Promise<ChatWorkspaceSnapshot> {
       if (!api.plans) throw new Error('计划操作不可用')
       const snapshot = await api.plans.removeStep({ requestId: crypto.randomUUID(), chatId, messageId, stepId })
-      this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+      this.hydrate(chatId, snapshot.chat.messages)
       return snapshot
     },
     async cancelPlan(chatId: string, messageId: string): Promise<ChatWorkspaceSnapshot> {
       if (!api.plans) throw new Error('计划操作不可用')
       const snapshot = await api.plans.cancel({ requestId: crypto.randomUUID(), chatId, messageId })
-      this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+      this.hydrate(chatId, snapshot.chat.messages)
       return snapshot
     },
     async executePlan(chatId: string, messageId: string): Promise<ChatWorkspaceSnapshot> {
       if (!api.plans) throw new Error('计划操作不可用')
       const snapshot = await api.plans.execute({ requestId: crypto.randomUUID(), chatId, messageId })
-      this.hydrate(chatId, snapshot.chat.messages, Boolean(state.readOnly[chatId]))
+      this.hydrate(chatId, snapshot.chat.messages)
       return snapshot
     },
     dispose(): void {

@@ -148,6 +148,24 @@ describe('StructuredChatAgent', () => {
     expect(complete).toHaveBeenCalledTimes(1)
   })
 
+  it('adds only enabled product-owned skill instructions to the system prompt', async () => {
+    let system = ''
+    const complete = vi.fn(async messages => {
+      system = String(messages[0]?.content ?? '')
+      return '{"version":1,"reply":"已准备。","plan":null}'
+    })
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      skillIds: ['security-review'],
+    })).resolves.toMatchObject({ reply: '已准备。' })
+
+    expect(system).toContain('当前启用的产品技能工作方法')
+    expect(system).toContain('影响范围')
+    expect(system).toContain('不能绕过任何安全围栏')
+    expect(system).not.toContain('多主机巡检')
+  })
+
   it('repairs invalid JSON twice at most and fails after the third model call', async () => {
     const complete = vi.fn().mockResolvedValueOnce('{not json').mockResolvedValueOnce('{still invalid').mockResolvedValueOnce('{also invalid')
     await expect(new StructuredChatAgent({ complete }).run(request)).rejects.toThrow('AI 未能生成可执行计划，请重试。')

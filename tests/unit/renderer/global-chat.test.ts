@@ -280,18 +280,22 @@ describe('global chat store', () => {
     expect(transport.send).toHaveBeenCalledWith(expect.objectContaining({ content: 'persisted request', retry: true }))
   })
 
-  it('does not retry terminal cancellation or read-only history', async () => {
+  it('does not retry terminal cancellation while keeping historical tasks interactive', async () => {
     const transport = api()
     const store = createGlobalChatStore(transport)
     store.hydrate('cancelled', [
       { id: 'user', role: 'user', content: 'cancelled question', state: 'complete' },
       { id: 'assistant', role: 'assistant', content: '已取消。', state: 'error', retryable: false },
     ])
-    store.hydrate('history', [{ id: 'saved', role: 'user', content: 'read only', state: 'complete' }], true)
+    // The third argument is retained only for compatibility with older
+    // renderer callers; historical tasks now use the same interactive chat
+    // surface as the live task.
+    store.hydrate('history', [{ id: 'saved', role: 'user', content: 'history request', state: 'complete' }], true)
 
     await store.retry('cancelled')
     await store.send('history', 'new request')
-    expect(transport.send).not.toHaveBeenCalled()
+    expect(transport.send).toHaveBeenCalledTimes(1)
+    expect(transport.send).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'history', content: 'new request' }))
     expect(store.canRetry('cancelled')).toBe(false)
   })
 
@@ -406,6 +410,31 @@ describe('global chat store', () => {
     expect(panel).toContain("import { planTargetLabelForShells } from './plan-target-label'")
     expect(panel).toContain('return planTargetLabelForShells(target, shells)')
     expect(panel).toContain('个在线 SSH')
+  })
+
+  it('passes selected SSH connections and enabled skills with sends and compaction', async () => {
+    const transport = { ...api(), compact: vi.fn(async () => ({
+      revision: 1,
+      chat: { id: 'c1', messages: [] },
+      liveChatId: 'c1',
+    })) }
+    const store = createGlobalChatStore(transport)
+    store.setSshContextSessionIds('c1', ['primary', 'alternate'])
+    await store.send('c1', 'check', undefined, ['security-review'])
+    expect(transport.send).toHaveBeenCalledWith(expect.objectContaining({ sshContextSessionIds: ['primary', 'alternate'], skillIds: ['security-review'] }))
+    store.hydrate('c1', [{ id: 'u', role: 'user', content: 'check', state: 'complete' }])
+    await store.compact('c1', undefined, ['security-review'])
+    expect(transport.compact).toHaveBeenCalledWith(expect.objectContaining({ sshContextSessionIds: ['primary', 'alternate'], skillIds: ['security-review'] }))
+  })
+
+  it('defers an automatic SSH-context default until live session metadata is complete', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+
+    expect(panel).toContain("import { chatContextSessionsAreResolved, defaultChatContextSessionIds, normalizeChatContextSessionIds } from '../../../../shared/chat-context-selection'")
+    expect(panel).toContain('watch([chatId, associatedContextSessionIds, contextSessionRows], () => {')
+    expect(panel).toContain('if (!chatContextSessionsAreResolved(')
+    expect(panel).toContain('if (current === undefined && associatedContextSessionIds.value.size === 0) return')
+    expect(panel).toContain('persistedContextSelections[id] = defaultChatContextSessionIds(contextSessionRows.value)')
   })
 
   it('composes text-only content while retaining old image records for hydration', () => {

@@ -522,6 +522,59 @@ describe('chat runtime', () => {
     expect(runStructured).toHaveBeenCalledTimes(1)
   })
 
+  it('forwards the selected SSH connection ids to context construction', async () => {
+    const getContext = vi.fn(async () => ({
+      messages: [{ role: 'user' as const, content: 'check' }],
+      hasImages: false,
+      availableHostnames: [],
+    }))
+    const runtime = new ChatRuntime({
+      appendMessage: vi.fn(async (input: { requestId: string }) => ({ messageId: input.requestId })),
+      getContext,
+      resolveModel: vi.fn(async () => ({ endpoint: 'http://model', model: 'm', contextLimit: 100, apiKey: null })),
+      stream: vi.fn(async () => undefined),
+    })
+
+    await runtime.send({
+      chatId: 'c1',
+      runId: '79797979-7979-4797-8797-797979797979',
+      content: 'check',
+      sshContextLines: 240,
+      sshContextSessionIds: ['alternate'],
+    }, () => undefined)
+
+    expect(getContext).toHaveBeenCalledWith('c1', { sshContextLines: 240, sshContextSessionIds: ['alternate'] })
+  })
+
+  it('forwards enabled product skills to structured generation', async () => {
+    const getContext = vi.fn(async () => ({
+      messages: [{ role: 'user' as const, content: 'check' }],
+      hasImages: false,
+      availableHostnames: [],
+    }))
+    const runStructured = vi.fn(async (_settings: unknown, input: { skillIds?: string[] }) => {
+      expect(input.skillIds).toEqual(['security-review'])
+      return { version: 1 as const, reply: 'done', plan: null }
+    })
+    const runtime = new ChatRuntime({
+      appendMessage: vi.fn(async (input: { requestId: string }) => ({ messageId: input.requestId })),
+      getContext,
+      resolveModel: vi.fn(async () => ({ endpoint: 'http://model', model: 'm', contextLimit: 100, apiKey: null })),
+      runStructured,
+      stream: vi.fn(async () => undefined),
+    })
+
+    await runtime.send({
+      chatId: 'c1',
+      runId: '89898989-8989-4898-8898-898989898989',
+      content: 'check',
+      skillIds: ['security-review'],
+    }, () => undefined)
+
+    expect(getContext).toHaveBeenCalledWith('c1', { sshContextLines: undefined, skillIds: ['security-review'] })
+    expect(runStructured).toHaveBeenCalledOnce()
+  })
+
   it('uses structured generation for Ollama instead of exposing raw stream deltas', async () => {
     const events: ChatRuntimeEvent[] = []
     const runStructured = vi.fn(async () => ({ version: 1 as const, reply: 'Ollama 完成', plan: null }))

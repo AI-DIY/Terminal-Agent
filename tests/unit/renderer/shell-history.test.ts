@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createShellHistoryStore,
-  filterHistoryByHosts,
   latestHistoryByHost,
   readOnlyHistoryTerminal,
-  reconcileHistoryHostSelection,
-  toggleHistoryHostSelection,
 } from '../../../src/renderer/src/stores/shell-history'
 
 describe('renderer Shell history', () => {
@@ -16,6 +13,10 @@ describe('renderer Shell history', () => {
     await store.open({ chatId: 'chat-history' })
 
     expect(store.state.selectedId).toBe('history-newest')
+    // Every record remains available to the workbench; only the initial
+    // selection is the newest entry.  Duplicate connections must not be
+    // collapsed by the renderer.
+    expect(store.state.records.map(record => record.id)).toEqual(['history-newest', 'history-old'])
     expect(api.get).toHaveBeenCalledWith('history-newest')
     expect(readOnlyHistoryTerminal(store.state.selected)).toEqual({ readOnly: true, output: 'latest safe output' })
   })
@@ -103,26 +104,6 @@ describe('renderer Shell history', () => {
     ])
 
     expect(history.map(record => record.id)).toEqual(['history-db', 'history-web-new'])
-  })
-
-  it('supports multi-select host filtering without allowing an empty historical canvas', () => {
-    const history = latestHistoryByHost([
-      summary({ id: 'history-web', hostname: 'web-01', endedAt: '2026-08-16T08:01:00.000Z' }),
-      summary({ id: 'history-db', hostname: 'db-01', endedAt: '2026-08-16T08:03:00.000Z' }),
-      summary({ id: 'history-cache', hostname: 'cache-01', endedAt: '2026-08-16T08:02:00.000Z' }),
-    ])
-
-    const withoutDatabase = toggleHistoryHostSelection(['db-01', 'cache-01'], 'db-01')
-    expect(withoutDatabase).toEqual(['cache-01'])
-    expect(toggleHistoryHostSelection(withoutDatabase, 'cache-01')).toEqual(['cache-01'])
-    expect(toggleHistoryHostSelection(withoutDatabase, 'web-01')).toEqual(['cache-01', 'web-01'])
-    expect(filterHistoryByHosts(history, ['cache-01', 'web-01'], 1).map(record => record.hostname)).toEqual(['cache-01'])
-  })
-
-  it('selects newly discovered hosts while preserving an intentional custom filter', () => {
-    expect(reconcileHistoryHostSelection(['web-01'], ['db-01', 'web-01'], ['web-01'])).toEqual(['db-01', 'web-01'])
-    expect(reconcileHistoryHostSelection(['web-01'], ['db-01', 'web-01', 'cache-01'], ['db-01', 'web-01'])).toEqual(['web-01'])
-    expect(reconcileHistoryHostSelection([], ['new-host'], ['old-host'])).toEqual(['new-host'])
   })
 
   it('refreshes cached reconnect availability from the current history request', async () => {

@@ -351,6 +351,18 @@ describe('chat contracts', () => {
     expect(() => chatRunRequestSchema.parse({ ...request, content: '   ' })).toThrow()
   })
 
+  it('accepts only distinct known built-in skills on AI requests', () => {
+    const request = {
+      chatId: 'chat-1',
+      runId: '550e8400-e29b-41d4-a716-446655440000',
+      content: '检查',
+      skillIds: ['teleagent-operations', 'security-review'],
+    }
+    expect(chatRunRequestSchema.parse(request)).toMatchObject({ skillIds: ['teleagent-operations', 'security-review'] })
+    expect(() => chatRunRequestSchema.parse({ ...request, skillIds: ['unknown'] })).toThrow()
+    expect(() => chatRunRequestSchema.parse({ ...request, skillIds: ['security-review', 'security-review'] })).toThrow()
+  })
+
   it('allows multimodal content only for user messages', () => {
     const base = { id: 'message-1', chatId: 'chat-1', createdAt: '2026-08-16T08:00:00.000Z', state: 'complete' as const }
     expect(chatMessageRecordSchema.parse({ ...base, role: 'user', content: imageContent })).toMatchObject({ role: 'user' })

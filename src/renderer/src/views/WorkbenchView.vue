@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Bug, Code2, Settings } from '@lucide/vue'
+import { Sparkles } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { BastionCatalogSnapshot, BastionHostSummary, BastionLaunchRequest, ChatWorkspace, SavedDirectSessionInput, TerminalDataEvent } from '../../../shared/contracts'
+import type { BastionCatalogSnapshot, BastionHostSummary, BastionLaunchRequest, ChatWorkspace, SavedDirectSessionInput, ShellHistorySummary, TerminalDataEvent } from '../../../shared/contracts'
 import type { ConnectionDialogRequest } from '../components/ConnectionDialog.vue'
 import SavedSessionsDialog from '../components/SavedSessionsDialog.vue'
 import type { DirectSessionSummary } from '../../../main/ssh/direct-session-repository'
@@ -19,11 +20,13 @@ import { closeSession } from '../stores/close-session'
 import { createFrameBatcher } from '../stores/data-batcher'
 import { createSessionsStore, uniqueSessionHostCount, type SessionView } from '../stores/sessions'
 import { getLayoutPreferencesStore, shellGridStyle } from '../stores/layout-preferences'
-import { createShellHistoryStore, filterHistoryByHosts, latestHistoryByHost, readOnlyHistoryTerminal, reconcileHistoryHostSelection, toggleHistoryHostSelection } from '../stores/shell-history'
+import { createShellHistoryStore, readOnlyHistoryTerminal } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
 import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
+import { getUserPreferencesStore } from '../stores/user-preferences'
+import { sshHostnameDisplayLabels } from '../../../shared/shell-display-label'
 
-const emit = defineEmits<{ showSettings: [] }>()
+const emit = defineEmits<{ showSettings: []; showSkills: [] }>()
 const store = createSessionsStore()
 const sessions = ref<SessionView[]>([])
 const activeSessionId = ref<string | null>(null)
@@ -46,6 +49,7 @@ const savedProfiles = ref<Awaited<ReturnType<typeof window.terminalAgent.session
 const chatStore = createChatWorkspacesStore(window.terminalAgent.chats)
 const shellHistory = createShellHistoryStore(window.terminalAgent.shellHistory)
 const layoutPreferences = getLayoutPreferencesStore()
+const userPreferences = getUserPreferencesStore()
 const workbenchReady = ref(false)
 type ShellViewSnapshot = { visibleSessionIds: string[]; activeSessionId: string | null }
 const shellViews = new Map<string, ShellViewSnapshot>()
@@ -57,28 +61,81 @@ const isLiveChat = computed(() => isInteractiveWorkbenchWorkspace(
 const activeWorkbenchChatId = computed(() => (
   workbenchSessionAttachmentTarget(chatStore.state.selectedId, chatStore.state.liveChatId)
 ))
+// Keep the selected task's live associations available to the AI context
+// picker even when the task itself is historical.  The shell canvas still
+// uses `currentLiveSessions` below, so a historical task never accidentally
+// mounts a terminal pane that is not part of the live workspace.
 const currentChatSessionIds = computed(() => new Set(
-  isLiveChat.value
-    ? (chatStore.state.selected?.shells ?? []).filter(shell => shell.status === 'open' && shell.sessionId).map(shell => shell.sessionId!)
-    : [],
+  (chatStore.state.selected?.shells ?? [])
+    .filter(shell => shell.status === 'open' && shell.sessionId)
+    .map(shell => shell.sessionId!),
 ))
 const currentChatSessions = computed(() => orderSessions(
   sessions.value.filter(session => currentChatSessionIds.value.has(session.id)),
   visibleSessionIds.value,
 ))
-const currentChatUniqueHostCount = computed(() => uniqueSessionHostCount(currentChatSessions.value))
+const currentLiveSessions = computed(() => isLiveChat.value ? currentChatSessions.value : [])
+const currentChatUniqueHostCount = computed(() => uniqueSessionHostCount(currentLiveSessions.value))
 const onlineChatIds = computed(() => new Set(
   chatStore.state.chats
     .filter(chat => chatStore.hasOnlineShells(chat.id))
     .map(chat => chat.id),
 ))
-const historyHosts = computed(() => latestHistoryByHost(shellHistory.state.records))
-const selectedHistoryHosts = ref<string[]>([])
-const historyPlaybackRecords = computed(() => filterHistoryByHosts(historyHosts.value, selectedHistoryHosts.value, Math.max(1, historyHosts.value.length)))
+const HISTORY_ORDER_STORAGE_KEY = 'terminal-agent.history-shell-order'
+
+type HistoryDisplayRecord = ShellHistorySummary & {
+  /** User-facing label with a stable #1/#2 ordinal for duplicate hosts. */
+  displayLabel: string
+  ordinal: number
+}
+
+function decorateHistoryRecords(records: readonly ShellHistorySummary[]): HistoryDisplayRecord[] {
+  const labels = sshHostnameDisplayLabels(records.map(record => ({
+    hostname: record.hostname,
+    displayName: record.title,
+    // History ids are durable and do not change when the user drags tabs.
+    stableKey: record.id,
+  })))
+  return records.map((record, index) => ({
+    ...record,
+    displayLabel: labels[index]?.displayLabel ?? record.title,
+    ordinal: labels[index]?.ordinal ?? 1,
+  }))
+}
+
+function orderHistoryRecords(records: readonly ShellHistorySummary[], chatId: string | null): HistoryDisplayRecord[] {
+  const decorated = decorateHistoryRecords(records)
+  if (!chatId) return decorated
+  const preferred = historyOrderByChat.value[chatId] ?? []
+  if (!preferred.length) return decorated
+  const byId = new Map(decorated.map(record => [record.id, record]))
+  const ordered = preferred.flatMap(id => {
+    const record = byId.get(id)
+    return record ? [record] : []
+  })
+  const seen = new Set(ordered.map(record => record.id))
+  return [...ordered, ...decorated.filter(record => !seen.has(record.id))]
+}
+
+// Historical connections use the same horizontal order as their read-only
+// playback cards.  Keep the order per task in renderer state; history records
+// themselves are immutable audit data and therefore do not need a persistence
+// write just to support a presentation-only drag gesture.
+const historyOrderByChat = ref<Record<string, string[]>>(loadHistoryOrder())
+const historyHosts = computed(() => {
+  // Keep every summary returned for this task.  The old one-record-per-host
+  // projection made a second closed connection disappear from both the tabs
+  // and the read-only playback canvas.
+  return orderHistoryRecords(shellHistory.state.records, chatStore.state.selectedId)
+})
+const historyDialogRecords = computed(() => orderHistoryRecords(shellHistory.state.records, chatStore.state.selectedId))
+const historyPlaybackRecords = computed(() => historyHosts.value)
 const historyPlayback = computed(() => historyPlaybackRecords.value.map(record => ({
   record,
   terminal: readOnlyHistoryTerminal(shellHistory.state.details[record.id] ?? null),
 })))
+const draggingHistoryCardId = ref<string | null>(null)
+const dragOverHistoryCardId = ref<string | null>(null)
 const historyGridColumns = computed(() => Math.max(1, Math.min(layoutPreferences.state.columns, historyPlayback.value.length || 1)))
 const historyGridStyle = computed(() => shellGridStyle(historyGridColumns.value, layoutPreferences.state.rowHeightPercent))
 const showHistoryDialog = ref(false)
@@ -105,18 +162,86 @@ let handleOpenedSession: (session: { id: string; chatId?: string }) => Promise<b
 const connectionModal = ref<HTMLElement | null>(null)
 const shellCanvas = ref<{ openHistoryMenu(historyId: string): void } | null>(null)
 
-watch(() => chatStore.state.selectedId, () => { selectedHistoryHosts.value = [] })
-watch(historyHosts, (records, previousRecords) => {
-  const available = records.map(record => record.hostname)
-  selectedHistoryHosts.value = reconcileHistoryHostSelection(
-    selectedHistoryHosts.value,
-    available,
-    (previousRecords ?? []).map(record => record.hostname),
-  )
-})
+function reorderHistory(historyIds: string[]): void {
+  const chatId = chatStore.state.selectedId
+  if (!chatId) return
+  const available = new Set(historyHosts.value.map(record => record.id))
+  const normalized = [...new Set(historyIds)].filter(id => available.has(id))
+  for (const id of available) if (!normalized.includes(id)) normalized.push(id)
+  historyOrderByChat.value = { ...historyOrderByChat.value, [chatId]: normalized }
+  saveHistoryOrder(historyOrderByChat.value)
+}
 
-function toggleHistoricalHost(hostname: string): void {
-  selectedHistoryHosts.value = toggleHistoryHostSelection(selectedHistoryHosts.value, hostname)
+function beginHistoryCardDrag(historyId: string, event: DragEvent): void {
+  draggingHistoryCardId.value = historyId
+  dragOverHistoryCardId.value = historyId
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', historyId)
+  }
+}
+
+function trackHistoryCardDragOver(historyId: string, event: DragEvent): void {
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  dragOverHistoryCardId.value = historyId
+}
+
+function finishHistoryCardDrag(): void {
+  draggingHistoryCardId.value = null
+  dragOverHistoryCardId.value = null
+}
+
+function dropHistoryCard(historyId: string, event: DragEvent): void {
+  event.preventDefault()
+  const sourceId = draggingHistoryCardId.value ?? event.dataTransfer?.getData('text/plain') ?? null
+  if (!sourceId || sourceId === historyId) {
+    finishHistoryCardDrag()
+    return
+  }
+  const ids = historyPlayback.value.map(item => item.record.id)
+  const sourceIndex = ids.indexOf(sourceId)
+  const targetIndex = ids.indexOf(historyId)
+  if (sourceIndex < 0 || targetIndex < 0) {
+    finishHistoryCardDrag()
+    return
+  }
+  ids.splice(sourceIndex, 1)
+  const target = event.currentTarget as HTMLElement
+  const bounds = target.getBoundingClientRect()
+  const afterTarget = Number.isFinite(event.clientX)
+    && bounds.width > 0
+    && event.clientX > bounds.left + bounds.width / 2
+  const adjustedTargetIndex = ids.indexOf(historyId)
+  ids.splice(Math.max(0, adjustedTargetIndex + (afterTarget ? 1 : 0)), 0, sourceId)
+  reorderHistory(ids)
+  finishHistoryCardDrag()
+}
+
+function loadHistoryOrder(): Record<string, string[]> {
+  try {
+    const raw = globalThis.localStorage?.getItem(HISTORY_ORDER_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const result: Record<string, string[]> = {}
+    for (const [chatId, value] of Object.entries(parsed)) {
+      if (!Array.isArray(value)) continue
+      const ids = value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).slice(0, 128)
+      if (ids.length > 0) result[chatId] = [...new Set(ids)]
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+function saveHistoryOrder(value: Record<string, string[]>): void {
+  try {
+    globalThis.localStorage?.setItem(HISTORY_ORDER_STORAGE_KEY, JSON.stringify(value))
+  } catch {
+    // Local storage is optional in a restricted/private renderer.
+  }
 }
 
 async function acknowledgeHostMemory(): Promise<void> {
@@ -353,12 +478,19 @@ async function attachSession(
   }
 }
 
-async function openShellHistory(hostname?: string): Promise<void> {
+async function openShellHistory(hostname?: string, historyId?: string): Promise<void> {
   const chatId = chatStore.state.selectedId
   if (!chatId) return
   const focusOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null
   await shellHistory.open({ chatId, ...(hostname ? { hostname } : {}) })
   if (chatStore.state.selectedId !== chatId) return
+  // A history tab/card identifies a concrete closed connection.  The list
+  // request may contain several records for the same hostname, so explicitly
+  // select the originating id instead of relying on the newest first entry.
+  if (historyId && shellHistory.state.records.some(record => record.id === historyId)) {
+    await shellHistory.select(historyId)
+    if (chatStore.state.selectedId !== chatId) return
+  }
   historyDialogFocusOrigin = focusOrigin
   historyDialogHost.value = hostname ?? null
   showHistoryDialog.value = true
@@ -801,10 +933,12 @@ onBeforeUnmount(() => {
     :current-version="appVersion"
     :current-chat-title="chatStore.state.selected?.title ?? '未选择任务'"
     :current-chat-shell-count="isLiveChat ? currentChatUniqueHostCount : 0"
+    :welcome-name="userPreferences.state.displayName"
   >
     <template #app-actions>
       <p v-if="connectionError" class="connection-error" role="alert">{{ connectionError }}</p>
       <p v-if="diagnosticError" class="diagnostic-error" role="alert">{{ diagnosticError }}</p>
+      <button type="button" class="header-button" aria-label="技能" title="技能" @click="emit('showSkills')"><Sparkles :size="14" aria-hidden="true" /><span>技能</span></button>
       <button type="button" class="header-button" aria-label="设置" title="设置" @click="emit('showSettings')"><Settings :size="14" aria-hidden="true" /><span>设置</span></button>
       <button type="button" class="header-button" aria-label="DevTools" title="DevTools" @click="openRendererDevTools"><Code2 :size="14" aria-hidden="true" /><span>DevTools</span></button>
       <button type="button" class="header-button" aria-label="Node Inspector" title="Node Inspector" @click="openNodeInspector"><Bug :size="14" aria-hidden="true" /><span>Node Inspector</span></button>
@@ -832,14 +966,13 @@ onBeforeUnmount(() => {
       <ShellCanvas
         ref="shellCanvas"
         :sessions="sessions"
-        :current-sessions="currentChatSessions"
+        :current-sessions="currentLiveSessions"
         :visible-session-ids="visibleSessionIds"
         :active-session-id="activeSessionId"
         :shell-count="isLiveChat ? currentChatUniqueHostCount : 0"
         :is-live="isLiveChat"
         :live-chat-available="Boolean(chatStore.state.liveChatId)"
         :history-hosts="historyHosts"
-        :selected-history-hosts="selectedHistoryHosts"
         @select="select"
         @close="close"
         @connect="createConnection"
@@ -847,8 +980,8 @@ onBeforeUnmount(() => {
         @history="openShellHistory"
         @history-menu="openHistoricalShellMenu"
         @reconnect="reconnectShell"
-        @toggle-history-host="toggleHistoricalHost"
         @reorder="reorderSessions"
+        @reorder-history="reorderHistory"
       >
         <template #history>
           <section class="history-playback" aria-label="任务 SSH 历史回放">
@@ -859,8 +992,20 @@ onBeforeUnmount(() => {
               :data-row-height-percent="layoutPreferences.state.rowHeightPercent"
               :style="historyGridStyle"
             >
-              <article v-for="playback in historyPlayback" :key="playback.record.id" class="history-shell-card">
-                <header><strong>{{ playback.record.title }}</strong><button type="button" :aria-label="`查看 SSH 历史 ${playback.record.hostname}`" @click="openShellHistory(playback.record.hostname)">历史</button></header>
+              <article
+                v-for="playback in historyPlayback"
+                :key="playback.record.id"
+                class="history-shell-card"
+                :class="{ dragging: playback.record.id === draggingHistoryCardId, 'drag-over': playback.record.id === dragOverHistoryCardId && playback.record.id !== draggingHistoryCardId }"
+              >
+                <header
+                  draggable="true"
+                  :title="`拖动排序：${playback.record.displayLabel}`"
+                  @dragstart="beginHistoryCardDrag(playback.record.id, $event)"
+                  @dragover="trackHistoryCardDragOver(playback.record.id, $event)"
+                  @drop="dropHistoryCard(playback.record.id, $event)"
+                  @dragend="finishHistoryCardDrag"
+                ><strong>{{ playback.record.displayLabel }}</strong><button type="button" :aria-label="`查看 SSH 历史 ${playback.record.displayLabel}`" @click.stop="openShellHistory(playback.record.hostname, playback.record.id)">历史</button></header>
                 <span>{{ playback.record.hostname }}</span><b>已关闭 · 只读历史 SSH</b>
                 <pre :aria-label="`只读终端历史 ${playback.record.hostname}`" data-read-only="true" :style="{ fontSize: `${layoutPreferences.state.fontSize}px` }">{{ playback.terminal.output || playback.record.preview }}</pre>
               </article>
@@ -892,8 +1037,8 @@ onBeforeUnmount(() => {
     <template #agent="{ collapse }">
       <GlobalChatPanel
         :chat="chatStore.state.selected"
-        :read-only="!isLiveChat"
-        :shell-count="isLiveChat ? currentChatUniqueHostCount : 0"
+        :shell-count="currentChatUniqueHostCount"
+        :context-sessions="currentChatSessions"
         @collapse="collapse"
       />
     </template>
@@ -928,7 +1073,7 @@ onBeforeUnmount(() => {
       </div>
       <ShellHistoryDialog
         :open="showHistoryDialog"
-        :records="shellHistory.state.records"
+        :records="historyDialogRecords"
         :selected-id="shellHistory.state.selectedId"
         :selected="shellHistory.state.selected"
         :loading="shellHistory.state.loading"
@@ -957,7 +1102,10 @@ onBeforeUnmount(() => {
 .history-shell-grid:hover::-webkit-scrollbar-thumb,.history-shell-grid:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
 .history-shell-grid:hover::-webkit-scrollbar-thumb:hover,.history-shell-grid:focus-within::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .history-shell-card { display: grid; grid-template-rows: 30px auto auto minmax(0, 1fr); gap: 5px; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); background: var(--terminal); }
-.history-shell-card > header { padding: 0 5px 0 9px; border-bottom: 1px solid #343a42; background: #20262d; color: #d8dade; }
+.history-shell-card.dragging { opacity: .58; }
+.history-shell-card.drag-over { box-shadow: inset 0 0 0 2px var(--focus); }
+.history-shell-card > header { padding: 0 5px 0 9px; border-bottom: 1px solid #343a42; background: #20262d; color: #d8dade; cursor: grab; }
+.history-shell-card > header:active { cursor: grabbing; }
 .history-shell-card > span,.history-shell-card > b { padding: 0 9px; }
 .history-shell-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }.history-shell-card header button { min-height: 24px; padding: 0 8px; border: 1px solid #4b535d; border-radius: 4px; background: #2b323a; color: #d8dade; font-size: 10px; }
 .history-shell-card strong,.history-shell-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

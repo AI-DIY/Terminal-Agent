@@ -5,10 +5,19 @@ import type { ChatMessageContent } from '../../shared/chat-content'
 import type { AssistantPlanOutput } from '../../shared/chat-plan'
 import type { StructuredChatRequest, StructuredChatShell } from './structured-chat-agent'
 import type { ChatCompactRequest, ChatProgressStage } from '../../shared/contracts'
+import type { BuiltInSkillId } from '../../shared/built-in-skills'
 import { estimateChatMessages } from './token-estimator'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export type ChatRuntimeRequest = { chatId: string; runId: string; content: ChatMessageContent; retry?: boolean; sshContextLines?: number }
+export type ChatRuntimeRequest = {
+  chatId: string
+  runId: string
+  content: ChatMessageContent
+  retry?: boolean
+  sshContextLines?: number
+  sshContextSessionIds?: string[]
+  skillIds?: BuiltInSkillId[]
+}
 export type ChatRuntimeEvent =
   | { kind: 'chat:progress'; chatId: string; runId: string; stage: ChatProgressStage }
   | { kind: 'chat:delta'; chatId: string; runId: string; messageId: string; content: string }
@@ -19,7 +28,19 @@ type RuntimeDeps = {
   appendMessage(request: any): Promise<{ messageId?: string } | unknown>
   updateMessage?(request: any): Promise<unknown>
   getRetryMessageId?(chatId: string, content: any): Promise<string | undefined>
-  getContext(chatId: string, options?: { sshContextLines?: number; maxMessages?: number }): Promise<ChatMessage[] | { messages: ChatMessage[]; hasImages: boolean; availableHostnames: string[]; availableShells?: StructuredChatShell[] }>
+  getContext(chatId: string, options?: {
+    sshContextLines?: number
+    sshContextSessionIds?: readonly string[]
+    skillIds?: readonly BuiltInSkillId[]
+    maxMessages?: number
+  }): Promise<ChatMessage[] | {
+    messages: ChatMessage[]
+    hasImages: boolean
+    availableHostnames: string[]
+    availableShells?: StructuredChatShell[]
+    preserveShellConnections?: boolean
+    skillIds?: BuiltInSkillId[]
+  }>
   resolveModel(input?: { hasImages: boolean }): Promise<ProviderModelSettings>
   runStructured?(settings: ProviderModelSettings, input: StructuredChatRequest, signal: AbortSignal, onStage?: (stage: ChatProgressStage) => void): Promise<AssistantPlanOutput>
   materializePlan?(plan: NonNullable<AssistantPlanOutput['plan']>): import('../../shared/chat-plan').ChatExecutionPlan
@@ -101,9 +122,15 @@ export class ChatRuntime {
         await finalizeCancellationIfNeeded()
         return
       }
-      const contextResult = await this.deps.getContext(request.chatId, { sshContextLines: request.sshContextLines })
+      const contextResult = await this.deps.getContext(request.chatId, {
+        sshContextLines: request.sshContextLines,
+        ...(request.sshContextSessionIds === undefined ? {} : { sshContextSessionIds: request.sshContextSessionIds }),
+        ...(request.skillIds === undefined ? {} : { skillIds: request.skillIds }),
+      })
       const structuredContext = Array.isArray(contextResult) ? null : contextResult
       const context = Array.isArray(contextResult) ? contextResult : contextResult.messages
+      const effectiveSkillIds = structuredContext?.skillIds ?? request.skillIds
+      const preserveShellConnections = structuredContext?.preserveShellConnections ?? request.sshContextSessionIds !== undefined
       const settings = await this.deps.resolveModel({ hasImages: structuredContext?.hasImages ?? false })
       if (!isLiveOwner()) {
         await finalizeCancellationIfNeeded()
@@ -137,6 +164,8 @@ export class ChatRuntime {
             messages: context,
             availableHostnames: structuredContext?.availableHostnames ?? [],
             ...(structuredContext?.availableShells ? { availableShells: structuredContext.availableShells } : {}),
+            ...(preserveShellConnections ? { preserveShellConnections: true } : {}),
+            ...(effectiveSkillIds?.length ? { skillIds: effectiveSkillIds } : {}),
           }, controller.signal, publishProgress)).then(result => { publishProgress('observing'); materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) })
           : Promise.resolve().then(() => this.deps.stream(settings, context, delta => {
           if (!isLiveOwner()) return
@@ -247,10 +276,17 @@ export class ChatRuntime {
       // the latest summary boundary when one already exists.
       const contextResult = await this.deps.getContext(request.chatId, {
         sshContextLines: request.sshContextLines,
+        ...(request.sshContextSessionIds === undefined ? {} : { sshContextSessionIds: request.sshContextSessionIds }),
+        ...(request.skillIds === undefined ? {} : { skillIds: request.skillIds }),
         maxMessages: 100,
       })
       const structuredContext = Array.isArray(contextResult) ? null : contextResult
       const context = Array.isArray(contextResult) ? contextResult : contextResult.messages
+      // Older context adapters may not echo request-scoped skills or the
+      // explicit connection-selection mode. Preserve those choices when the
+      // structured context projection is otherwise valid but incomplete.
+      const effectiveSkillIds = structuredContext?.skillIds ?? request.skillIds
+      const preserveShellConnections = structuredContext?.preserveShellConnections ?? request.sshContextSessionIds !== undefined
       const settings = await this.deps.resolveModel({ hasImages: structuredContext?.hasImages ?? false })
       if (estimateChatMessages(context) > settings.contextLimit) {
         throw new Error('聊天上下文超出当前模型限制，无法生成摘要。请先减少 SSH 上下文追加行数后重试。')
@@ -264,6 +300,8 @@ export class ChatRuntime {
           messages: [...context, summaryPrompt],
           availableHostnames: structuredContext?.availableHostnames ?? [],
           ...(structuredContext?.availableShells ? { availableShells: structuredContext.availableShells } : {}),
+          ...(preserveShellConnections ? { preserveShellConnections: true } : {}),
+          ...(effectiveSkillIds?.length ? { skillIds: effectiveSkillIds } : {}),
         }, controller.signal)
         const summary = result.reply.trim()
         if (summary) return summary
