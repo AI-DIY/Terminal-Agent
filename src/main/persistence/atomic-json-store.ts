@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { link, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { TextDecoder } from 'node:util'
@@ -15,6 +15,8 @@ export type AtomicJsonStoreFileSystem = {
   readFile(path: string): Promise<Buffer>
   /** Returns a handle that exclusively owns a newly created path or rejects with EEXIST. */
   openExclusive(path: string): Promise<AtomicJsonStoreFileHandle>
+  /** Atomically creates destination as a hard link; rejects with EEXIST if it exists. */
+  link?(source: string, destination: string): Promise<void>
   rename(source: string, destination: string): Promise<void>
   rm(path: string, options: { force: true }): Promise<void>
 }
@@ -45,6 +47,7 @@ const defaultFileSystem: AtomicJsonStoreFileSystem = {
       close: () => handle.close(),
     }
   },
+  link: (source, destination) => link(source, destination),
   rename: (source, destination) => rename(source, destination),
   rm: (path, options) => rm(path, options),
 }
@@ -114,11 +117,16 @@ export class AtomicJsonStore<T> {
     const operation = this.queue.then(async () => {
       const empty = this.schema.parse(this.empty())
       await this.fileSystem.mkdir(dirname(this.path), { recursive: true })
+      const temporaryPath = `${this.path}.init-${this.createSafeId()}`
       try {
-        await this.writeExclusively(this.path, JSON.stringify(empty))
+        await this.writeExclusively(temporaryPath, JSON.stringify(empty))
+        if (!this.fileSystem.link) throw new Error('AtomicJsonStore file system does not support exclusive publish')
+        await this.fileSystem.link(temporaryPath, this.path)
+        await this.fileSystem.rm(temporaryPath, { force: true })
         this.corruptBackup = undefined
         return structuredClone(empty)
       } catch (error) {
+        await this.fileSystem.rm(temporaryPath, { force: true }).catch(() => undefined)
         if (!isNodeError(error) || error.code !== 'EEXIST') throw error
         const current = await this.readCurrent()
         return structuredClone(current.value)

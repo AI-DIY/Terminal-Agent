@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { link, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -58,18 +58,21 @@ describe('SsoConfigService', () => {
       mkdir,
       readFile,
       async openExclusive(file) {
-        if (file === path && !raced) {
+        const handle = await open(file, 'wx')
+        return { writeFile: (data, options) => handle.writeFile(data, options), close: () => handle.close() }
+      },
+      rename,
+      rm,
+      link: async (source, destination) => {
+        if (destination === path && !raced) {
           raced = true
           await mkdir(dirname(path), { recursive: true })
           await writeFile(path, JSON.stringify(competing), 'utf8')
           const error = Object.assign(new Error('exists'), { code: 'EEXIST' })
           throw error
         }
-        const handle = await open(file, 'wx')
-        return { writeFile: (data, options) => handle.writeFile(data, options), close: () => handle.close() }
+        await link(source, destination)
       },
-      rename,
-      rm,
     }
     const service = new SsoConfigService(path, { fileSystem })
 
@@ -89,5 +92,45 @@ describe('SsoConfigService', () => {
     await expect(readFile(path, 'utf8')).resolves.toBe(corrupt)
     const files = await readdir(dirname(path))
     expect(files.filter(file => file.endsWith('.corrupt'))).toHaveLength(1)
+  })
+
+  it('does not expose a partial default while another initializer is publishing', async () => {
+    const root = await createRoot()
+    const path = join(root, '.ta', 'user-config')
+    let firstLinkStarted!: () => void
+    const firstLink = new Promise<void>(resolve => { firstLinkStarted = resolve })
+    let releaseFirstLink!: () => void
+    const firstLinkRelease = new Promise<void>(resolve => { releaseFirstLink = resolve })
+    let linkCalls = 0
+    const realFs: AtomicJsonStoreFileSystem = {
+      mkdir,
+      readFile,
+      openExclusive: async file => {
+        const handle = await open(file, 'wx')
+        return { writeFile: (data, options) => handle.writeFile(data, options), close: () => handle.close() }
+      },
+      rename,
+      rm,
+      link: async (source, destination) => {
+        linkCalls += 1
+        if (linkCalls === 1) {
+          firstLinkStarted()
+          await firstLinkRelease
+        }
+        await import('node:fs/promises').then(fs => fs.link(source, destination))
+      },
+    }
+    const first = new SsoConfigService(path, { fileSystem: realFs }).ensureInitialized()
+    await firstLink
+    const second = new SsoConfigService(path, { fileSystem: realFs }).ensureInitialized()
+    const secondResult = await second
+    releaseFirstLink()
+    const firstResult = await first
+
+    expect(firstResult).toEqual(createDefaultSsoConfiguration())
+    expect(secondResult).toEqual(createDefaultSsoConfiguration())
+    expect(linkCalls).toBe(2)
+    expect((await readdir(dirname(path))).filter(file => file.endsWith('.corrupt'))).toHaveLength(0)
+    await expect(readFile(path, 'utf8')).resolves.toContain('"version":1')
   })
 })
