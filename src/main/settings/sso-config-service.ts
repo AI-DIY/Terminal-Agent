@@ -20,7 +20,7 @@ export function getSsoConfigPath(homeDirectory: string): string {
 export class SsoConfigService {
   private readonly store: AtomicJsonStore<SsoDocument>
 
-  constructor(private readonly path: string, options: Pick<AtomicJsonStoreOptions, 'fileSystem'> = {}) {
+  constructor(private readonly path: string, options: Pick<AtomicJsonStoreOptions, 'fileSystem' | 'createId'> = {}) {
     this.store = new AtomicJsonStore(path, ssoDocumentSchema, () => ({
       version: 1,
       sso: createDefaultSsoConfiguration(),

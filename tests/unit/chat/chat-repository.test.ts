@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { link, mkdir, mkdtemp, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -1050,6 +1050,7 @@ describe('ChatRepository', () => {
           close: () => handle.close(),
         }
       },
+      link: (source, destination) => link(source, destination),
       rename,
       rm: (file, options) => rm(file, options),
     }

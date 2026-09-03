@@ -133,4 +133,48 @@ describe('SsoConfigService', () => {
     expect((await readdir(dirname(path))).filter(file => file.endsWith('.corrupt'))).toHaveLength(0)
     await expect(readFile(path, 'utf8')).resolves.toContain('"version":1')
   })
+
+  it('retries a colliding init temp name without deleting another writer temp', async () => {
+    const root = await createRoot()
+    const path = join(root, '.ta', 'user-config')
+    const firstId = '11111111-1111-4111-8111-111111111111'
+    const secondId = '22222222-2222-4222-8222-222222222222'
+    const collidingPath = `${path}.init-${firstId}`
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(collidingPath, 'another writer temp', 'utf8')
+    const ids = [firstId, secondId]
+    const service = new SsoConfigService(path, { createId: () => ids.shift() ?? secondId })
+
+    await expect(service.ensureInitialized()).resolves.toEqual(createDefaultSsoConfiguration())
+    await expect(readFile(collidingPath, 'utf8')).resolves.toBe('another writer temp')
+    await expect(readFile(path, 'utf8')).resolves.toContain('"version":1')
+  })
+
+  it('does not fail after publication when init temp cleanup fails', async () => {
+    const root = await createRoot()
+    const path = join(root, '.ta', 'user-config')
+    let published = false
+    const service = new SsoConfigService(path, {
+      fileSystem: {
+        mkdir,
+        readFile,
+        openExclusive: async file => {
+          const handle = await open(file, 'wx')
+          return { writeFile: (data, options) => handle.writeFile(data, options), close: () => handle.close() }
+        },
+        link: async (source, destination) => {
+          await link(source, destination)
+          published = true
+        },
+        rename,
+        rm: async (file, options) => {
+          if (published && file.includes('.init-')) throw new Error('injected cleanup failure')
+          await rm(file, options)
+        },
+      },
+    })
+
+    await expect(service.ensureInitialized()).resolves.toEqual(createDefaultSsoConfiguration())
+    await expect(readFile(path, 'utf8')).resolves.toContain('"version":1')
+  })
 })

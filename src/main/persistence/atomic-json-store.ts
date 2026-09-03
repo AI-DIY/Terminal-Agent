@@ -16,7 +16,7 @@ export type AtomicJsonStoreFileSystem = {
   /** Returns a handle that exclusively owns a newly created path or rejects with EEXIST. */
   openExclusive(path: string): Promise<AtomicJsonStoreFileHandle>
   /** Atomically creates destination as a hard link; rejects with EEXIST if it exists. */
-  link?(source: string, destination: string): Promise<void>
+  link(source: string, destination: string): Promise<void>
   rename(source: string, destination: string): Promise<void>
   rm(path: string, options: { force: true }): Promise<void>
 }
@@ -117,19 +117,39 @@ export class AtomicJsonStore<T> {
     const operation = this.queue.then(async () => {
       const empty = this.schema.parse(this.empty())
       await this.fileSystem.mkdir(dirname(this.path), { recursive: true })
-      const temporaryPath = `${this.path}.init-${this.createSafeId()}`
-      try {
-        await this.writeExclusively(temporaryPath, JSON.stringify(empty))
-        if (!this.fileSystem.link) throw new Error('AtomicJsonStore file system does not support exclusive publish')
-        await this.fileSystem.link(temporaryPath, this.path)
-        await this.fileSystem.rm(temporaryPath, { force: true })
+      const serialized = JSON.stringify(empty)
+      const attemptedPaths = new Set<string>()
+
+      while (true) {
+        const temporaryPath = `${this.path}.init-${this.createSafeId()}`
+        if (attemptedPaths.has(temporaryPath)) throw new Error(nonUniqueIdMessage)
+        attemptedPaths.add(temporaryPath)
+
+        try {
+          await this.writeExclusively(temporaryPath, serialized)
+        } catch (error) {
+          if (isNodeError(error) && error.code === 'EEXIST') continue
+          throw error
+        }
+
+        try {
+          await this.fileSystem.link(temporaryPath, this.path)
+        } catch (error) {
+          await this.fileSystem.rm(temporaryPath, { force: true }).catch(() => undefined)
+          if (!isNodeError(error) || error.code !== 'EEXIST') throw error
+
+          try {
+            const current = await this.readCurrent()
+            return structuredClone(current.value)
+          } catch (readError) {
+            if (isNodeError(readError) && readError.code === 'ENOENT') continue
+            throw readError
+          }
+        }
+
+        await this.fileSystem.rm(temporaryPath, { force: true }).catch(() => undefined)
         this.corruptBackup = undefined
         return structuredClone(empty)
-      } catch (error) {
-        await this.fileSystem.rm(temporaryPath, { force: true }).catch(() => undefined)
-        if (!isNodeError(error) || error.code !== 'EEXIST') throw error
-        const current = await this.readCurrent()
-        return structuredClone(current.value)
       }
     })
 

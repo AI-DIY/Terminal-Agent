@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, open, readFile, rename, rm } from 'node:fs/promises'
+import { link, mkdir, mkdtemp, open, readFile, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ChatRepository } from '../../../src/main/chat/chat-repository'
@@ -428,6 +428,7 @@ describe('ChatService', () => {
         mkdir,
         readFile: filePath => readFile(filePath),
         openExclusive,
+        link: (source, destination) => link(source, destination),
         rename: renameFile,
         rm: (filePath, options) => rm(filePath, options),
       }

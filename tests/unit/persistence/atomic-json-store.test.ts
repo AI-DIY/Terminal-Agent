@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { link, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -89,6 +89,7 @@ function createInstrumentedFileSystem(failure?: InjectedFailure) {
 
       await rename(source, destination)
     },
+    link: (source, destination) => link(source, destination),
     async rm(path, options) {
       events.push(`rm:${path}`)
       await rm(path, options)
@@ -104,6 +105,7 @@ function interceptExclusiveWrites(
 ): AtomicJsonStoreFileSystem {
   return {
     ...fileSystem,
+    link: (source, destination) => fileSystem.link(source, destination),
     async openExclusive(path) {
       const handle = await fileSystem.openExclusive(path)
       return {
@@ -198,6 +200,7 @@ describe('AtomicJsonStore', () => {
     let readCount = 0
     const fileSystem: AtomicJsonStoreFileSystem = {
       ...realFileSystem,
+      link: (source, destination) => link(source, destination),
       async readFile(file) {
         readCount += 1
         if (readCount === 2) secondReadStarted.resolve()
@@ -507,6 +510,7 @@ describe('AtomicJsonStore', () => {
     const { fileSystem: realFileSystem } = createInstrumentedFileSystem()
     const fileSystem: AtomicJsonStoreFileSystem = {
       ...realFileSystem,
+      link: (source, destination) => link(source, destination),
       readFile: async () => adapterBuffer,
     }
     const rejectingSchema = stateSchema.superRefine((_value, context) => {
