@@ -77,6 +77,23 @@ describe('renderer SSO store', () => {
     expect(store.skillsAvailable.value).toBe(false)
   })
 
+  it('does not let a slower configuration hydration overwrite a successful save', async () => {
+    const pendingConfiguration = deferred<SsoConfiguration>()
+    const savedConfiguration = { ...configuration, loginPageUrl: 'https://saved-login.example.test' }
+    const api = createApi({
+      getConfig: vi.fn().mockReturnValue(pendingConfiguration.promise),
+      saveConfig: vi.fn().mockResolvedValue(savedConfiguration),
+    })
+    const store = createSsoStore(api)
+
+    const initialize = store.initialize()
+    await store.saveConfig(savedConfiguration)
+    pendingConfiguration.resolve(configuration)
+    await initialize
+
+    expect(store.config).toEqual(savedConfiguration)
+  })
+
   it('clears stale identity for disabled/config-required snapshots and after a successful config save', async () => {
     const savedConfiguration = { ...configuration, loginPageUrl: 'https://new-login.example.test' }
     const api = createApi({ saveConfig: vi.fn().mockResolvedValue(savedConfiguration) })

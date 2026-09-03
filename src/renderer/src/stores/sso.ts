@@ -23,6 +23,7 @@ export function createSsoStore(api: SsoApi) {
   let initializeOperation: Promise<void> | undefined
   let lifecycleRevision = 0
   let snapshotRevision = 0
+  let configurationRevision = 0
 
   function applyConfiguration(input: SsoConfiguration): void {
     Object.assign(config, ssoConfigurationSchema.parse(input))
@@ -53,10 +54,11 @@ export function createSsoStore(api: SsoApi) {
     subscribe()
     const activeLifecycle = lifecycleRevision
     const hydrationSnapshotRevision = snapshotRevision
+    const hydrationConfigurationRevision = configurationRevision
     initializeOperation = Promise.all([api.getConfig(), api.getState()])
       .then(([nextConfig, nextState]) => {
         if (activeLifecycle !== lifecycleRevision) return
-        applyConfiguration(nextConfig)
+        if (hydrationConfigurationRevision === configurationRevision) applyConfiguration(nextConfig)
         if (hydrationSnapshotRevision === snapshotRevision) applyState(nextState)
       })
       .catch(error => {
@@ -68,6 +70,7 @@ export function createSsoStore(api: SsoApi) {
 
   async function saveConfig(input: SsoConfiguration): Promise<SsoConfiguration> {
     const saved = await api.saveConfig(ssoConfigurationSchema.parse(input))
+    configurationRevision += 1
     applyConfiguration(saved)
     clearIdentity()
     return ssoConfigurationSchema.parse(saved)
