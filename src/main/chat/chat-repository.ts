@@ -127,7 +127,12 @@ export class ChatRepository {
     const parsed = chatIdentifierSchema.parse(chatId)
     const document = await this.store.load()
     const chat = requireChat(document, parsed)
+    const activeSessionId = activeConversationSessionId(chat)
     const sessions: ChatConversationSessionSummary[] = conversationSessionsForChat(document, chat.id)
+      // A restored conversation keeps its durable archive entry so future
+      // switches can preserve its original label.  Do not offer that entry
+      // as a target while it is the conversation already on screen.
+      .filter(session => session.id !== activeSessionId)
       .map(session => ({
         id: session.id,
         label: session.label,
@@ -138,7 +143,7 @@ export class ChatRepository {
       .sort((left, right) => conversationSessionOrdinal(left.label) - conversationSessionOrdinal(right.label)
         || left.archivedAt.localeCompare(right.archivedAt)
         || left.id.localeCompare(right.id))
-    return { chatId: chat.id, activeSessionId: activeConversationSessionId(chat), sessions }
+    return { chatId: chat.id, activeSessionId, sessions }
   }
 
   async findRetryMessage(chatId: string, content?: ChatMessageContent): Promise<string | undefined> {
@@ -322,9 +327,10 @@ export class ChatRepository {
   }
 
   /**
-   * Restores one archived AI conversation into the existing task.  If the
-   * visible conversation has content it becomes the next numbered archive;
-   * empty workspaces are intentionally not saved as phantom sessions.
+   * Restores one archived AI conversation into the existing task.  When the
+   * visible conversation was archived before, its original durable session
+   * record is refreshed in place rather than receiving a new numbered label.
+   * Empty workspaces are intentionally not saved as phantom sessions.
    */
   async switchConversationSession(request: ChatSwitchConversationSessionRequest): Promise<ChatMutation<ChatWorkspace>> {
     const parsed = chatSwitchConversationSessionRequestSchema.parse(request)
@@ -340,7 +346,7 @@ export class ChatRepository {
         archiveActiveConversation(document, chat, timestamp)
       }
 
-      const [target] = sessions.splice(targetIndex, 1)
+      const target = sessions[targetIndex]
       if (!target) throw new Error('Unknown archived conversation session')
       chat.activeConversationSessionId = target.id
       chat.activeConversationSessionCreatedAt = target.createdAt
@@ -955,13 +961,22 @@ function archiveActiveConversation(document: ChatDocument, chat: PersistedChat, 
   const id = activeConversationSessionId(chat)
   const messages = conversationMessages(document, chat.id, id)
   if (messages.length === 0) throw new Error('Cannot archive an empty conversation')
-  assertNoArchivedConversationSessionId(document, id)
+  const updatedAt = conversationUpdatedAt(document, chat, id)
+  const sessions = document.conversationSessions ??= []
+  const existing = sessions.find(session => session.id === id)
+  if (existing) {
+    if (existing.chatId !== chat.id) throw new Error('Conversation session id belongs to another task')
+    // Re-archiving a restored conversation updates its timestamps only.  Its
+    // label and identifier are its user-visible identity and must not drift
+    // to the next numbered session every time it is switched away from.
+    existing.updatedAt = updatedAt
+    existing.archivedAt = archivedAt
+    return
+  }
 
   const ordinal = nextConversationSessionOrdinal(document, chat)
   if (ordinal >= Number.MAX_SAFE_INTEGER) throw new Error('Conversation session numbering exhausted')
   const createdAt = activeConversationSessionCreatedAt(chat)
-  const updatedAt = conversationUpdatedAt(document, chat, id)
-  const sessions = document.conversationSessions ??= []
   sessions.push({
     id,
     chatId: chat.id,

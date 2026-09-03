@@ -91,9 +91,17 @@ const onlineChatIds = computed(() => new Set(
 const HISTORY_ORDER_STORAGE_KEY = 'terminal-agent.history-shell-order'
 
 type HistoryDisplayRecord = ShellHistorySummary & {
-  /** History keeps the hostname stable; connection time disambiguates duplicates. */
-  displayLabel: string
+  /** Connection time remains available inside the detailed history dialog. */
   connectionTimeLabel: string
+}
+
+/** One compact history-strip entry per hostname.  Individual connections stay in the dialog. */
+type HistoryHost = {
+  id: string
+  hostname: string
+  recordCount: number
+  representativeHistoryId: string
+  reconnectable: boolean
 }
 
 function formatHistoryConnectionTime(startedAt: string): string {
@@ -113,7 +121,6 @@ function formatHistoryConnectionTime(startedAt: string): string {
 function decorateHistoryRecords(records: readonly ShellHistorySummary[]): HistoryDisplayRecord[] {
   return records.map(record => ({
     ...record,
-    displayLabel: record.hostname,
     connectionTimeLabel: formatHistoryConnectionTime(record.startedAt),
   }))
 }
@@ -132,14 +139,64 @@ function orderHistoryRecords(records: readonly ShellHistorySummary[], chatId: st
   return [...ordered, ...decorated.filter(record => !seen.has(record.id))]
 }
 
-// Keep historical connection tab order per task in renderer state.  The audit
+function historyHostId(hostname: string): string {
+  return `host:${hostname}`
+}
+
+function groupHistoryRecords(records: readonly ShellHistorySummary[]): HistoryHost[] {
+  const hosts = new Map<string, HistoryHost>()
+  for (const record of records) {
+    const existing = hosts.get(record.hostname)
+    if (existing) {
+      existing.recordCount += 1
+      continue
+    }
+    // Keep one representative record for the existing reconnect action.  The
+    // complete per-connection list, including timestamps, remains available
+    // after opening this hostname in the existing history dialog.
+    hosts.set(record.hostname, {
+      id: historyHostId(record.hostname),
+      hostname: record.hostname,
+      recordCount: 1,
+      representativeHistoryId: record.id,
+      reconnectable: record.reconnectable,
+    })
+  }
+  return [...hosts.values()]
+}
+
+function orderHistoryHosts(
+  hosts: readonly HistoryHost[],
+  records: readonly ShellHistorySummary[],
+  chatId: string | null,
+): HistoryHost[] {
+  if (!chatId) return [...hosts]
+  const preferred = historyOrderByChat.value[chatId] ?? []
+  if (!preferred.length) return [...hosts]
+  const byId = new Map(hosts.map(host => [host.id, host]))
+  // Earlier versions stored individual history-record ids.  Translate them
+  // to their hostname group on read so a release upgrade does not discard a
+  // user's manually arranged history strip.
+  const hostIdByLegacyRecordId = new Map(records.map(record => [record.id, historyHostId(record.hostname)]))
+  const ordered: HistoryHost[] = []
+  const seen = new Set<string>()
+  for (const preferredId of preferred) {
+    const hostId = byId.has(preferredId) ? preferredId : hostIdByLegacyRecordId.get(preferredId)
+    const host = hostId ? byId.get(hostId) : undefined
+    if (host && !seen.has(host.id)) {
+      ordered.push(host)
+      seen.add(host.id)
+    }
+  }
+  return [...ordered, ...hosts.filter(host => !seen.has(host.id))]
+}
+
+// Keep historical host-tab order per task in renderer state.  The audit
 // records stay immutable, so a presentation-only drag does not require a
 // persistence write.
 const historyOrderByChat = ref<Record<string, string[]>>(loadHistoryOrder())
 const historyHosts = computed(() => {
-  // Keep every summary returned for this task.  Same-host connections remain
-  // distinguishable through their connection time rather than a # ordinal.
-  return orderHistoryRecords(shellHistory.state.records, chatStore.state.selectedId)
+  return orderHistoryHosts(groupHistoryRecords(shellHistory.state.records), shellHistory.state.records, chatStore.state.selectedId)
 })
 const historyDialogRecords = computed(() => orderHistoryRecords(shellHistory.state.records, chatStore.state.selectedId))
 const showHistoryDialog = ref(false)
@@ -172,11 +229,11 @@ let handleOpenedSession: (session: { id: string; chatId?: string }) => Promise<b
 const connectionModal = ref<HTMLElement | null>(null)
 const shellCanvas = ref<{ openHistoryMenu(historyId: string): void } | null>(null)
 
-function reorderHistory(historyIds: string[]): void {
+function reorderHistory(historyHostIds: string[]): void {
   const chatId = chatStore.state.selectedId
   if (!chatId) return
   const available = new Set(historyHosts.value.map(record => record.id))
-  const normalized = [...new Set(historyIds)].filter(id => available.has(id))
+  const normalized = [...new Set(historyHostIds)].filter(id => available.has(id))
   for (const id of available) if (!normalized.includes(id)) normalized.push(id)
   historyOrderByChat.value = { ...historyOrderByChat.value, [chatId]: normalized }
   saveHistoryOrder(historyOrderByChat.value)
@@ -534,9 +591,9 @@ async function openShellHistory(hostname?: string, historyId?: string): Promise<
     || !showHistoryDialog.value
     || chatStore.state.selectedId !== chatId
   ) return
-  // A history tab identifies a concrete closed connection.  The list
-  // request may contain several records for the same hostname, so explicitly
-  // select the originating id instead of relying on the newest first entry.
+  // A grouped history tab supplies one concrete representative connection.
+  // The list may contain several records for the same hostname, so explicitly
+  // select that record instead of relying on the newest-first default.
   if (historyId && shellHistory.state.records.some(record => record.id === historyId)) {
     void shellHistory.select(historyId)
   }
@@ -547,6 +604,7 @@ function closeShellHistory(): void {
   const chatId = chatStore.state.selectedId
   const hadHostFilter = historyDialogHost.value !== null
   const historyId = historyDialogHistoryId.value ?? shellHistory.state.selectedId
+  const historyHostIdForFocus = historyDialogHost.value ? historyHostId(historyDialogHost.value) : historyId
   showHistoryDialog.value = false
   historyDialogHost.value = null
   historyDialogHistoryId.value = null
@@ -564,11 +622,11 @@ function closeShellHistory(): void {
         return
       }
       // Closing a hostname-filtered dialog refreshes the history strip.  That
-      // replaces the opening button, so locate its new equivalent by durable
-      // history id instead of leaving keyboard focus on the document body.
-      if (!historyId) return
+      // replaces the opening button, so locate its durable host entry instead
+      // of leaving keyboard focus on the document body.
+      if (!historyHostIdForFocus) return
       const replacement = [...document.querySelectorAll<HTMLButtonElement>('.history-shell-tab')]
-        .find(button => button.dataset.historyId === historyId)
+        .find(button => button.dataset.historyId === historyHostIdForFocus)
       replacement?.focus()
     })
   }
@@ -605,12 +663,12 @@ async function refreshHistoryPlayback(): Promise<void> {
   await shellHistory.open({ chatId })
 }
 
-async function openHistoricalShellMenu(historyId: string): Promise<void> {
+async function openHistoricalShellMenu(historyHostId: string): Promise<void> {
   const chatId = chatStore.state.selectedId
   if (!chatId) return
   await shellHistory.open({ chatId })
   if (chatStore.state.selectedId !== chatId) return
-  shellCanvas.value?.openHistoryMenu(historyId)
+  shellCanvas.value?.openHistoryMenu(historyHostId)
 }
 
 async function close(sessionId: string): Promise<void> {
@@ -1078,7 +1136,6 @@ onBeforeUnmount(() => {
       <GlobalChatPanel
         ref="globalChatPanel"
         :chat="chatStore.state.selected"
-        :shell-count="currentChatUniqueHostCount"
         :context-sessions="currentChatSessions"
         :conversation-sessions="conversationSessions"
         :session-busy="conversationSessionBusy"

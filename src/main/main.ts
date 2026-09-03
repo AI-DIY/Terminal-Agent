@@ -263,7 +263,7 @@ function readApplicationVersion(): string {
     if (typeof version === 'string' && version.trim()) return version
   } catch { /* Fall through to package/environment defaults. */ }
   const packageVersion = process.env.npm_package_version?.trim()
-  return packageVersion || '2.1.0'
+  return packageVersion || '2.1.1'
 }
 
 const accessClient = new AccessClientService(

@@ -245,7 +245,7 @@ describe('chatDocumentSchema semantic invariants', () => {
     expect(chatDocumentSchema.parse(validDocument())).toEqual(validDocument())
   })
 
-  it('validates archived task-internal conversations without requiring a version bump for legacy documents', () => {
+  it('validates saved task-internal conversations without requiring a version bump for legacy documents', () => {
     const document = validDocument()
     document.messages[0].conversationSessionId = 'conversation-archive-1'
     document.chats[0].activeConversationSessionId = 'conversation-active-1'
@@ -258,9 +258,22 @@ describe('chatDocumentSchema semantic invariants', () => {
 
     expect(chatDocumentSchema.parse(document)).toEqual(document)
 
-    const collidingActive = structuredClone(document)
-    collidingActive.chats[0].activeConversationSessionId = 'conversation-archive-1'
-    expect(chatDocumentSchema.safeParse(collidingActive).success).toBe(false)
+    const restoredActive = structuredClone(document)
+    restoredActive.chats[0].activeConversationSessionId = 'conversation-archive-1'
+    restoredActive.chats[0].activeConversationSessionCreatedAt = createdAt
+    expect(chatDocumentSchema.parse(restoredActive)).toEqual(restoredActive)
+
+    const foreignStoredActive = structuredClone(restoredActive)
+    foreignStoredActive.conversationSessions![0]!.chatId = 'foreign-chat'
+    const foreignStoredResult = chatDocumentSchema.safeParse(foreignStoredActive)
+    expect(foreignStoredResult.success).toBe(false)
+    if (foreignStoredResult.success) throw new Error('Expected a foreign stored conversation to be rejected')
+    expect(foreignStoredResult.error.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: ['chats', 0, 'activeConversationSessionId'],
+        message: 'active conversation session must belong to its chat',
+      }),
+    ]))
 
     const staleOrdinal = structuredClone(document)
     staleOrdinal.chats[0].nextConversationSessionOrdinal = 1

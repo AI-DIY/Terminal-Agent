@@ -108,7 +108,7 @@ describe('ChatRepository', () => {
     await expect(repository.listConversationSessions(chat.id)).resolves.toMatchObject({ sessions: [] })
   })
 
-  it('switches task-internal conversations atomically and keeps backup numbering continuous after reactivation', async () => {
+  it('switches task-internal conversations atomically while preserving restored session labels', async () => {
     const repository = await createRepository()
     const chat = (await repository.create({ requestId: 'create-switch-conversation-task' })).value
     await repository.associateShell({
@@ -141,8 +141,8 @@ describe('ChatRepository', () => {
     expect(fresh.value.messages).toEqual([])
     await expect(repository.listConversationSessions(chat.id)).resolves.toMatchObject({
       sessions: [
+        expect.objectContaining({ id: chat.id, label: '会话1' }),
         expect.objectContaining({ label: '会话2' }),
-        expect.objectContaining({ label: '会话3' }),
       ],
     })
   })

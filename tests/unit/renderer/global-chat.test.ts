@@ -409,7 +409,7 @@ describe('global chat store', () => {
     expect(panel).toContain('{{ planTargetLabel(step.target) }}')
     expect(panel).toContain("import { planTargetLabelForShells } from './plan-target-label'")
     expect(panel).toContain('return planTargetLabelForShells(target, shells)')
-    expect(panel).toContain('个在线 SSH')
+    expect(panel).not.toContain('个在线 SSH')
   })
 
   it('passes selected SSH connections and enabled skills with sends and compaction', async () => {

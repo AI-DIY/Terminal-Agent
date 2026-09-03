@@ -1,3 +1,26 @@
+# Terminal-Agent v2.1.1
+
+Release date: 2026-09-03
+
+## AI 工作区微调
+
+- 切换已保存会话时保留原始会话 ID 与“会话 N”名称；再次离开该会话只会更新同一条已保存记录，不再生成递增名称的副本。
+- 移除 AI 输入区底部的在线 SSH 数量提示，保留 SSH 上下文选择、连接和 AI 协作能力。
+
+## SSH 历史微调
+
+- 历史 SSH 条目按主机名合并为单一入口，历史标题不再显示连接时间。
+- 点击主机入口继续使用原有的 Shell 历史弹窗，查看该主机每次连接的时间、终端快照与重连操作。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-2.1.1.exe`
+- `putty.exe`
+- `quick-install.cmd`
+- `quick-start.pdf`
+
+---
+
 # Terminal-Agent v2.1.0
 
 Release date: 2026-09-03

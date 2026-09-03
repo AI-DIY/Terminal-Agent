@@ -2,13 +2,14 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('ShellCanvas Task 7 reconnect actions', () => {
-  it('exposes reconnectable historical tabs through the same ID-only context menu', () => {
+  it('exposes reconnectable grouped history tabs through the same context menu', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
 
     expect(canvas).toContain('historyHosts')
     expect(canvas).toContain("@contextmenu.prevent=\"emit('historyMenu', host.id)\"")
     expect(canvas).toContain('host.reconnectable')
+    expect(canvas).toContain('host.representativeHistoryId')
     expect(canvas).toContain('重新连接')
     expect(view).toContain(':history-hosts="historyHosts"')
     expect(view).toContain('@reconnect="reconnectShell"')
@@ -20,18 +21,18 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     const openHistory = view.slice(view.indexOf('async function openShellHistory'), view.indexOf('function closeShellHistory'))
 
     expect(view).toContain('const historyHosts = computed(() => {')
-    expect(view).toContain('function orderHistoryRecords(records: readonly ShellHistorySummary[], chatId: string | null)')
-    expect(view).toContain('return orderHistoryRecords(shellHistory.state.records, chatStore.state.selectedId)')
-    expect(view).not.toContain('latestHistoryByHost(shellHistory.state.records)')
+    expect(view).toContain('function groupHistoryRecords(records: readonly ShellHistorySummary[]): HistoryHost[]')
+    expect(view).toContain('function orderHistoryHosts(')
+    expect(view).toContain('return orderHistoryHosts(groupHistoryRecords(shellHistory.state.records), shellHistory.state.records, chatStore.state.selectedId)')
     expect(view).toContain('historyOrderByChat')
     expect(canvas).toContain('v-if="historyHosts.length"')
     expect(canvas).not.toContain('v-if="!isLive && historyHosts.length"')
-    expect(canvas).toContain("historyMenu: [historyId: string]")
+    expect(canvas).toContain("historyMenu: [historyHostId: string]")
     expect(canvas).toContain('defineExpose({ openHistoryMenu })')
     expect(view).toContain('ref="shellCanvas"')
     expect(view).toContain('@history-menu="openHistoricalShellMenu"')
-    expect(view).toContain('async function openHistoricalShellMenu(historyId: string): Promise<void>')
-    expect(view).toContain('shellCanvas.value?.openHistoryMenu(historyId)')
+    expect(view).toContain('async function openHistoricalShellMenu(historyHostId: string): Promise<void>')
+    expect(view).toContain('shellCanvas.value?.openHistoryMenu(historyHostId)')
     expect(openHistory.indexOf('showHistoryDialog.value = true')).toBeLessThan(openHistory.indexOf('await shellHistory.open({ chatId'))
     expect(openHistory.indexOf('await shellHistory.open({ chatId')).toBeLessThan(openHistory.indexOf('void shellHistory.select(historyId)'))
     expect(openHistory).toContain('historyDialogRequestGeneration')
@@ -53,7 +54,7 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(canvas).not.toContain('aria-pressed')
     expect(canvas).toContain('SSH 窗口布局')
     expect(canvas.match(/class="layout-menu"/g)?.length).toBe(1)
-    expect(view).toContain('function reorderHistory(historyIds: string[]): void')
+    expect(view).toContain('function reorderHistory(historyHostIds: string[]): void')
     expect(view).toContain('@reorder-history="reorderHistory"')
     expect(view).not.toContain('historyPlaybackRecords')
     expect(view).not.toContain('history-shell-card')
@@ -76,7 +77,7 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(canvas).toContain('function historyTabActive(historyId: string): boolean')
     expect(canvas).toContain('return !hasOnlineSessions.value && activeHistoryId.value === historyId')
     expect(canvas).toContain("emit('history', hostname, historyId)")
-    expect(canvas).toContain('openHistoricalSessionHistory(host.hostname, host.id)')
+    expect(canvas).toContain('openHistoricalSessionHistory(host.hostname, host.representativeHistoryId, host.id)')
     expect(view).toContain('async function openShellHistory(hostname?: string, historyId?: string): Promise<void>')
     expect(view).toContain('void shellHistory.select(historyId)')
     expect(view).toContain(':records="historyDialogRecords"')
@@ -91,22 +92,24 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(dialog).toContain('historyConnectionTimeLabel(record)')
   })
 
-  it('uses the hostname as a history title, uses connection start time to distinguish records, and compacts the strip', () => {
+  it('groups history-strip entries by hostname and keeps connection times inside the dialog', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
     const dialog = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellHistoryDialog.vue', import.meta.url), 'utf8')
 
-    expect(view).toContain('displayLabel: record.hostname')
+    expect(view).toContain('function groupHistoryRecords(records: readonly ShellHistorySummary[]): HistoryHost[]')
+    expect(view).toContain('recordCount: 1')
+    expect(view).toContain('representativeHistoryId: record.id')
     expect(view).toContain('connectionTimeLabel: formatHistoryConnectionTime(record.startedAt)')
-    expect(view).not.toContain('sshHostnameDisplayLabels')
     expect(canvas).toContain('return host.hostname')
-    expect(canvas).toContain('historyConnectionTimeLabel(host)')
+    expect(canvas).toContain('recordCount')
+    expect(canvas).toContain('representativeHistoryId')
+    expect(canvas).not.toContain('historyConnectionTimeLabel(host)')
+    expect(canvas).not.toContain('<small>已关闭')
     expect(dialog).toContain('record.startedAt')
-    expect(dialog).not.toContain('record.displayLabel ?? record.title')
     expect(canvas).toContain('min-height: 32px')
     expect(canvas).toContain('height: 25px')
     expect(canvas).toContain('font-size: 10px')
-    expect(canvas).toContain('font-size: 8px')
   })
 
   it('vertically centers the closed-Shell history title and summary in their toolbar', () => {

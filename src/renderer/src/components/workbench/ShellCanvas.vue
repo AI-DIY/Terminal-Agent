@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { History, LayoutGrid, Plus, X } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
-import type { ShellHistorySummary } from '../../../../shared/contracts'
 import SessionTabs from '../SessionTabs.vue'
 import TerminalPane from '../TerminalPane.vue'
 import { sessionDisplayLabel, sessionDisplayParts, sessionHasDuplicateHost, sessionLabel, type SessionView } from '../../stores/sessions'
@@ -12,10 +11,13 @@ import {
   shellGridStyle,
 } from '../../stores/layout-preferences'
 
-type HistoryHost = ShellHistorySummary & {
-  /** Renderer-only hostname and a connection-start time for disambiguation. */
-  displayLabel?: string
-  connectionTimeLabel?: string
+type HistoryHost = {
+  /** Stable renderer id for one hostname in the compact history strip. */
+  id: string
+  hostname: string
+  recordCount: number
+  representativeHistoryId: string
+  reconnectable: boolean
 }
 
 const props = defineProps<{
@@ -34,7 +36,7 @@ const emit = defineEmits<{
   connect: []
   restoreLive: []
   history: [hostname: string, historyId?: string]
-  historyMenu: [historyId: string]
+  historyMenu: [historyHostId: string]
   reconnect: [historyId: string]
   reorder: [sessionIds: string[]]
   reorderHistory: [historyIds: string[]]
@@ -67,7 +69,8 @@ const hasOnlineSessions = computed(() => props.currentSessions.length > 0)
 const layoutItemCount = computed(() => hasOnlineSessions.value
   ? orderedCurrentSessions.value.length
   : props.historyHosts.length)
-const historyHostCount = computed(() => new Set(props.historyHosts.map(host => host.hostname)).size)
+const historyHostCount = computed(() => props.historyHosts.length)
+const historyRecordCount = computed(() => props.historyHosts.reduce((count, host) => count + host.recordCount, 0))
 const layoutSummary = computed(() => {
   const count = layoutItemCount.value
   const columns = Math.max(1, Math.min(layout.state.columns, count || 1))
@@ -155,9 +158,9 @@ function openSessionHistory(session: SessionView): void {
   emit('history', sessionLabel(session))
 }
 
-function openHistoricalSessionHistory(hostname: string, historyId?: string): void {
+function openHistoricalSessionHistory(hostname: string, historyId?: string, historyHostId = historyId): void {
   menuHistoryId.value = null
-  if (!hasOnlineSessions.value && historyId) activeHistoryId.value = historyId
+  if (!hasOnlineSessions.value && historyHostId) activeHistoryId.value = historyHostId
   emit('history', hostname, historyId)
 }
 
@@ -223,19 +226,15 @@ function displayOrdinal(session: SessionView): number | null {
 
 /** Historical tabs always open the shared read-only history dialog. */
 function handleHistoryHostClick(host: HistoryHost): void {
-  openHistoricalSessionHistory(host.hostname, host.id)
+  openHistoricalSessionHistory(host.hostname, host.representativeHistoryId, host.id)
 }
 
 function historyHostLabel(host: HistoryHost): string {
   return host.hostname
 }
 
-function historyConnectionTimeLabel(host: HistoryHost): string {
-  return host.connectionTimeLabel ?? `连接于 ${host.startedAt}`
-}
-
 function historyHostActionLabel(host: HistoryHost): string {
-  return `打开 SSH 历史 ${historyHostLabel(host)}，${historyConnectionTimeLabel(host)}`
+  return `打开 SSH 历史 ${historyHostLabel(host)}`
 }
 
 watch(
@@ -266,7 +265,7 @@ watch(
         @close="closeSession"
         @reorder="emit('reorder', $event)"
       />
-       <div v-else class="history-toolbar-title"><strong>SSH 历史连接</strong><span>{{ historyHostCount }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
+       <div v-else class="history-toolbar-title"><strong>SSH 历史连接</strong><span>{{ historyHostCount }} 台主机 · {{ historyRecordCount }} 条记录</span></div>
       <div class="hostbar-tools">
         <div v-if="isLive" class="shell-title">
           <strong>SSH</strong>
@@ -306,7 +305,7 @@ watch(
       <span>{{ layoutSummary }}</span>
     </section>
     <section v-if="historyHosts.length" class="history-shell-toolbar" aria-label="历史 SSH 连接">
-      <div class="history-shell-heading"><strong>历史 SSH 连接</strong><span>{{ historyHostCount }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
+      <div class="history-shell-heading"><strong>历史 SSH 连接</strong><span>{{ historyHostCount }} 台主机 · {{ historyRecordCount }} 条记录</span></div>
       <nav class="history-session-tabs" aria-label="历史 SSH 会话">
         <div
           v-for="host in historyHosts"
@@ -314,7 +313,7 @@ watch(
           class="history-session-tab"
           :class="{ active: historyTabActive(host.id), dragging: host.id === draggingHistoryId, 'drag-over': host.id === dragOverHistoryId && host.id !== draggingHistoryId }"
           draggable="true"
-            :title="`拖动排序：${historyHostLabel(host)} · ${historyConnectionTimeLabel(host)}`"
+            :title="`拖动排序：${historyHostLabel(host)}`"
           @dragstart="beginHistoryDrag(host.id, $event)"
           @dragover="trackHistoryDragOver(host.id, $event)"
           @drop="dropHistory(host.id, $event)"
@@ -328,16 +327,16 @@ watch(
             :aria-current="historyTabActive(host.id) ? 'page' : undefined"
             @click="handleHistoryHostClick(host)"
             @contextmenu.prevent="emit('historyMenu', host.id)"
-          ><span class="host-status" aria-hidden="true" /><strong>{{ historyHostLabel(host) }}</strong><small>已关闭 · {{ historyConnectionTimeLabel(host) }}</small></button>
-          <section v-if="menuHistoryId === host.id" class="history-context-menu" role="menu" :aria-label="`历史 SSH 操作 ${historyHostLabel(host)}，${historyConnectionTimeLabel(host)}`">
+          ><span class="host-status" aria-hidden="true" /><strong>{{ historyHostLabel(host) }}</strong></button>
+          <section v-if="menuHistoryId === host.id" class="history-context-menu" role="menu" :aria-label="`历史 SSH 操作 ${historyHostLabel(host)}`">
             <button
               type="button"
               role="menuitem"
               :disabled="!host.reconnectable"
               title="重新连接：仅仍保留安全连接描述的历史 SSH 可以重连"
-              @click="reconnectHistory(host.id)"
+              @click="reconnectHistory(host.representativeHistoryId)"
             >重连</button>
-            <button type="button" role="menuitem" @click="openHistoricalSessionHistory(host.hostname, host.id)">查看 SSH 历史</button>
+            <button type="button" role="menuitem" @click="openHistoricalSessionHistory(host.hostname, host.representativeHistoryId, host.id)">查看 SSH 历史</button>
           </section>
         </div>
       </nav>
@@ -435,7 +434,7 @@ watch(
 .history-session-tab { position: relative; display: flex; box-sizing: border-box; height: 100%; min-height: 0; flex: 0 0 auto; align-items: center; max-width: 228px; border: 1px solid transparent; border-bottom-width: 2px; background: transparent; color: var(--muted); white-space: nowrap; cursor: grab; }
 .history-session-tab:hover { background: var(--hover); }.history-session-tab:active { cursor: grabbing; }.history-session-tab.active { border-color: var(--red); background: var(--amber-soft); color: var(--text-strong); }.history-session-tab.dragging { opacity: .48; }.history-session-tab.drag-over { box-shadow: inset 2px 0 0 var(--focus); }
 .history-session-tab > .history-shell-tab { display: flex; min-width: 0; align-items: center; gap: 5px; height: 100%; padding: 0 6px 0 8px; border: 0; background: transparent; color: inherit; font-size: 9px; text-align: left; white-space: nowrap; }
-.history-session-tab > .history-shell-tab:hover,.history-session-tab > .history-shell-tab:focus-visible { outline: 0; }.history-session-tab > .history-shell-tab strong { max-width: 112px; overflow: hidden; color: var(--text-strong); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }.history-session-tab > .history-shell-tab small { color: var(--faint); font-size: 8px; }
+.history-session-tab > .history-shell-tab:hover,.history-session-tab > .history-shell-tab:focus-visible { outline: 0; }.history-session-tab > .history-shell-tab strong { max-width: 112px; overflow: hidden; color: var(--text-strong); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .host-status { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }.history-session-tab.active .host-status { background: var(--accent); }
 @media (max-width: 1180px) {
   .shell-title { display: none; }

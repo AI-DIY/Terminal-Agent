@@ -396,15 +396,17 @@ test('opens historical SSH dialogs without multi-select while closed SSH uses th
     await connect(page, sshServer.port, '127.0.0.2')
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.1', exact: true }).click()
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.2', exact: true }).click()
+    await connect(page, sshServer.port, '127.0.0.1')
+    await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.1', exact: true }).click()
 
-    const firstHost = page.getByRole('button', { name: /^打开 SSH 历史 127\.0\.0\.1，连接于 / })
-    const secondHost = page.getByRole('button', { name: /^打开 SSH 历史 127\.0\.0\.2，连接于 / })
+    const firstHost = page.getByRole('button', { name: /^打开 SSH 历史 127\.0\.0\.1$/ })
+    const secondHost = page.getByRole('button', { name: /^打开 SSH 历史 127\.0\.0\.2$/ })
     const historicalCards = page.locator('.history-shell-card')
     await expect(firstHost).not.toHaveAttribute('aria-pressed')
     await expect(secondHost).not.toHaveAttribute('aria-pressed')
     await expect(historicalCards).toHaveCount(0)
     await expect(page.getByText('SSH 历史连接', { exact: true })).toBeVisible()
-    await expect(page.getByLabel('历史 SSH 连接').getByText('2 台主机 · 2 条记录', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('历史 SSH 连接').getByText('2 台主机 · 3 条记录', { exact: true })).toBeVisible()
     await expect(page.getByText('当前任务没有在线 SSH', { exact: true })).toBeVisible()
     await expect(page.locator('.shell-title')).toHaveCount(0)
     await expect(page.locator('.empty-state')).toBeVisible()
@@ -413,6 +415,7 @@ test('opens historical SSH dialogs without multi-select while closed SSH uses th
     const firstHistoryDialog = page.getByRole('dialog', { name: 'Shell 历史', exact: true })
     await expect(firstHistoryDialog).toBeVisible()
     await expect(firstHistoryDialog).toContainText('127.0.0.1')
+    await expect(firstHistoryDialog.getByRole('option')).toHaveCount(2)
     await firstHistoryDialog.getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
     await expect(historicalCards).toHaveCount(0)
 
@@ -424,7 +427,7 @@ test('opens historical SSH dialogs without multi-select while closed SSH uses th
     await expect(historicalCards).toHaveCount(0)
 
     await firstHost.click({ button: 'right' })
-    const menu = page.getByRole('menu', { name: /^历史 SSH 操作 127\.0\.0\.1，连接于 / })
+    const menu = page.getByRole('menu', { name: /^历史 SSH 操作 127\.0\.0\.1$/ })
     await expect(menu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
   } finally {
     await app?.close()
@@ -466,13 +469,13 @@ test('removes the per-terminal file-transfer entry, previews read-only history, 
     await initialDialog.getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
 
     await historyTab.click({ button: 'right' })
-    const historyMenu = page.getByRole('menu', { name: /^历史 SSH 操作 127\.0\.0\.1，连接于 / })
+    const historyMenu = page.getByRole('menu', { name: /^历史 SSH 操作 127\.0\.0\.1$/ })
     await expect(historyMenu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
     await historyMenu.getByRole('menuitem', { name: '查看 SSH 历史', exact: true }).click()
     await expect(page.getByRole('dialog', { name: 'Shell 历史', exact: true })).toBeVisible()
     await page.getByRole('dialog', { name: 'Shell 历史', exact: true }).getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
 
-    const historyButton = page.getByRole('button', { name: /^打开 SSH 历史 127\.0\.0\.1，连接于 / })
+    const historyButton = page.getByRole('button', { name: /^打开 SSH 历史 127\.0\.0\.1$/ })
     await historyButton.click()
     const dialog = page.getByRole('dialog', { name: 'Shell 历史', exact: true })
     const firstHistoryRecord = dialog.getByRole('option', { name: /选择 Shell 历史 127\.0\.0\.1/ }).first()
@@ -496,7 +499,7 @@ test('removes the per-terminal file-transfer entry, previews read-only history, 
     const retainedHistoryTab = page.locator('.history-shell-tab').first()
     await expect(retainedHistoryTab).toBeVisible()
     await retainedHistoryTab.click({ button: 'right' })
-    const hybridHistoryMenu = page.getByRole('menu', { name: /^历史 SSH 操作 127\.0\.0\.1，连接于 / })
+    const hybridHistoryMenu = page.getByRole('menu', { name: /^历史 SSH 操作 127\.0\.0\.1$/ })
     await expect(hybridHistoryMenu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
     await hybridHistoryMenu.getByRole('menuitem', { name: '查看 SSH 历史', exact: true }).click()
     await expect(page.getByRole('dialog', { name: 'Shell 历史', exact: true })).toBeVisible()
@@ -1404,6 +1407,7 @@ test('renders a structured Ollama reply and restores it after reload', async ({ 
 
     const aiWorkspace = page.getByRole('region', { name: 'AI工作区', exact: true })
     await expect(aiWorkspace).toBeVisible()
+    await expect(aiWorkspace).not.toContainText(/\d+ 个在线 SSH/)
     const input = aiWorkspace.getByLabel('聊天输入')
     await expect(input).toBeEnabled()
     await input.fill('第一条消息')
@@ -1503,6 +1507,17 @@ test('archives and restores AI conversations inside one SSH task without moving 
         shells: snapshot.chat.shells.map(shell => ({ id: shell.id, chatId: shell.chatId, sessionId: shell.sessionId, status: shell.status })),
       }
     }, chatId)).toEqual(ownershipBefore)
+
+    // Switching back to an already archived session reuses its original
+    // durable label instead of creating a newly numbered copy.
+    await switchSession.selectOption({ label: '会话2' })
+    await expect(workspace.locator('.message.user')).toContainText('会话二的已保存内容')
+    await expect(workspace.locator('.message.user')).not.toContainText('会话一的已保存内容')
+    await expect.poll(async () => page.evaluate(async id => {
+      const sessions = await window.terminalAgent.chats.listConversationSessions(id)
+      return sessions.sessions.map(session => session.label)
+    }, chatId)).toEqual(['会话1'])
+    await expect(switchSession).toContainText('会话1')
   } finally {
     await app?.close()
     await closeHttpServer(fakeModel.server)
