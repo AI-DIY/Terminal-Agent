@@ -40,7 +40,7 @@ class FakeWindow extends EventEmitter {
 
 class FakeCapture {
   readonly start = vi.fn(() => this.result)
-  readonly ready = vi.fn(async () => undefined)
+  readonly ready = vi.fn<() => Promise<void>>(async () => undefined)
   readonly dispose = vi.fn<() => Promise<void>>(async () => undefined)
   readonly notifyNavigation = vi.fn((url: string) => {
     if (url === 'https://platform.example/home') this.platformObserved = true
@@ -107,8 +107,8 @@ describe('SsoAuthenticationService', () => {
     const { service, capture, window } = createService()
     await service.initialize()
     await service.retry()
-    const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate-in-page')?.[1] as ((event: unknown, url: string) => void)
-    navigation({}, 'https://platform.example/home')
+    const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate-in-page')?.[1] as ((event: unknown, url: string, isMainFrame: boolean) => void)
+    navigation({}, 'https://platform.example/home', true)
     expect(service.getState()).toEqual({ state: 'authenticating' })
     capture.resolveResponse({ name: '李四', employeeId: 'E-2' })
     await vi.waitFor(() => expect(service.getState()).toEqual({ state: 'authenticated', identity: { name: '李四', employeeId: 'E-2' } }))
@@ -137,15 +137,20 @@ describe('SsoAuthenticationService', () => {
     await vi.waitFor(() => expect(service.getState()).toEqual({ state: 'authenticated', identity: { name: '直接捕获', employeeId: 'E-DIRECT' } }))
   })
 
-  it('forwards modern main-frame navigation detail objects to the capture', async () => {
+  it('forwards only real positional main-frame navigation events to the capture', async () => {
     const { service, capture, window } = createService()
     await service.initialize()
     await service.retry()
-    const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'will-navigate')?.[1] as ((event: unknown, details: unknown) => void)
-    navigation({}, { url: 'https://platform.example/home', isMainFrame: true })
+    const inPage = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate-in-page')?.[1] as (event: unknown, url: string, isMainFrame: boolean) => void
+    inPage({}, 'https://platform.example/home', false)
+    expect(capture.notifyNavigation).not.toHaveBeenCalled()
+    inPage({}, 'https://platform.example/home', true)
     expect(capture.notifyNavigation).toHaveBeenCalledWith('https://platform.example/home')
-    navigation({}, { url: 'https://platform.example/home', isMainFrame: false })
-    expect(capture.notifyNavigation).toHaveBeenCalledOnce()
+
+    const frame = window.webContents.on.mock.calls.find(([event]) => event === 'did-frame-navigate')?.[1] as (event: unknown, url: string, status: number, statusText: string, isMainFrame: boolean) => void
+    frame({}, 'https://platform.example/home', 200, 'OK', false)
+    frame({}, 'https://platform.example/home', 200, 'OK', true)
+    expect(capture.notifyNavigation).toHaveBeenCalledTimes(2)
   })
 
   it('loads the login page only after capture startup and readiness', async () => {
@@ -172,6 +177,60 @@ describe('SsoAuthenticationService', () => {
     expect(configPort.save).toHaveBeenCalledOnce()
   })
 
+  it('serializes retry behind a deferred configuration save so an old-config session cannot authenticate', async () => {
+    const firstWindow = new FakeWindow()
+    const secondWindow = new FakeWindow()
+    const firstCapture = new FakeCapture()
+    const secondCapture = new FakeCapture()
+    let releaseSave!: (configuration: SsoConfiguration) => void
+    const saveDeferred = new Promise<SsoConfiguration>(resolve => { releaseSave = resolve })
+    const configPort = {
+      get: vi.fn(async () => config),
+      save: vi.fn(() => saveDeferred),
+      isComplete: vi.fn((value?: SsoConfiguration) => Boolean(value?.loginPageUrl)),
+    }
+    const windows = [firstWindow, secondWindow]
+    const captures = [firstCapture, secondCapture]
+    const createWindow = vi.fn(() => windows.shift()!)
+    const service = new SsoAuthenticationService(configPort, {
+      createWindow,
+      createCapture: vi.fn(() => captures.shift()!),
+    })
+
+    await service.initialize()
+    await service.retry()
+    const saving = service.saveConfiguration({ ...config, enabled: false })
+    await vi.waitFor(() => expect(configPort.save).toHaveBeenCalledOnce())
+    const retrying = service.retry()
+    await Promise.resolve()
+    expect(createWindow).toHaveBeenCalledOnce()
+    expect(service.getState().state).toBe('authenticating')
+    releaseSave({ ...config, enabled: false })
+    await Promise.all([saving, retrying])
+
+    secondCapture.resolveResponse({ name: '旧配置身份', employeeId: 'OLD-CONFIG' })
+    secondCapture.notifyNavigation('https://platform.example/home')
+    await Promise.resolve()
+    expect(service.getState()).toEqual({ state: 'login-disabled' })
+  })
+
+  it('starts save cancellation while retry is still awaiting capture readiness', async () => {
+    const { service, capture } = createService()
+    let releaseReadiness!: () => void
+    const readiness = new Promise<void>(resolve => { releaseReadiness = resolve })
+    capture.ready.mockImplementation(() => readiness)
+    await service.initialize()
+    const retrying = service.retry()
+    await vi.waitFor(() => expect(capture.start).toHaveBeenCalledOnce())
+    const saving = service.saveConfiguration({ ...config, enabled: false })
+    await Promise.resolve()
+    const cancellationCallsBeforeReadiness = capture.dispose.mock.calls.length
+    releaseReadiness()
+    await Promise.all([retrying, saving])
+    expect(cancellationCallsBeforeReadiness).toBe(1)
+    expect(service.getState()).toEqual({ state: 'login-disabled' })
+  })
+
   it('maps capture failures to a safe error snapshot and disposes idempotently', async () => {
     const { service, capture } = createService()
     await service.initialize()
@@ -183,6 +242,24 @@ describe('SsoAuthenticationService', () => {
     await service.dispose()
     await service.dispose()
     expect(capture.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('turns an over-limit captured identity into a safe error and cleans up the auth session', async () => {
+    const { service, capture, window } = createService()
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.once('unhandledRejection', onUnhandled)
+    await service.initialize()
+    await service.retry()
+    const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate')?.[1] as ((event: unknown, url: string) => void)
+    navigation({}, 'https://platform.example/home')
+    capture.resolveResponse({ name: 'N'.repeat(513), employeeId: 'E-OVERLIMIT' })
+    await vi.waitFor(() => expect(service.getState()).toEqual({ state: 'error', errorMessage: 'Unable to complete SSO sign-in' }))
+    await Promise.resolve()
+    process.removeListener('unhandledRejection', onUnhandled)
+    expect(unhandled).toEqual([])
+    expect(capture.dispose).toHaveBeenCalledOnce()
+    expect(window.close).toHaveBeenCalledOnce()
   })
 
   it('does not clear a renderer attached while asynchronous session cleanup finishes', async () => {

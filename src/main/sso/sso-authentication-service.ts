@@ -3,6 +3,7 @@ import { BrowserWindow, type WebContents } from 'electron'
 import {
   ssoAuthSnapshotSchema,
   ssoConfigurationSchema,
+  ssoIdentitySchema,
   type SsoAuthSnapshot,
   type SsoConfiguration,
   type SsoIdentity,
@@ -62,6 +63,7 @@ export class SsoAuthenticationService {
   private removeNavigationListeners: (() => void) | undefined
   private generation = 0
   private disposed = false
+  private lifecycleTail: Promise<void> = Promise.resolve()
   private readonly listeners = new Set<(snapshot: SsoAuthSnapshot) => void>()
   private readonly createWindow: () => AuthenticationWindow
   private readonly createCapture: (window: AuthenticationWindow, configuration: SsoConfiguration) => AuthenticationCapture
@@ -71,12 +73,14 @@ export class SsoAuthenticationService {
     this.createCapture = options.createCapture ?? ((window, configuration) => new SsoResponseCapture(window, configuration))
   }
 
-  async initialize(): Promise<SsoAuthSnapshot> {
-    const configuration = await this.configService.get()
-    this.configuration = configuration
+  initialize(): Promise<SsoAuthSnapshot> {
     this.disposed = false
-    await this.cancelCurrentSession()
-    return this.applyConfigurationState(configuration)
+    return this.enqueueLifecycle(async () => {
+      const configuration = await this.configService.get()
+      this.configuration = configuration
+      await this.cancelCurrentSession()
+      return this.applyConfigurationState(configuration)
+    })
   }
 
   attachRenderer(sender: WebContents): void {
@@ -88,17 +92,27 @@ export class SsoAuthenticationService {
     return cloneSnapshot(this.snapshot)
   }
 
-  async saveConfiguration(input: SsoConfiguration): Promise<SsoAuthSnapshot> {
+  saveConfiguration(input: SsoConfiguration): Promise<SsoAuthSnapshot> {
     const configuration = ssoConfigurationSchema.parse(input)
     this.disposed = false
-    await this.cancelCurrentSession()
-    const saved = await this.configService.save(configuration)
-    this.configuration = saved
-    return this.applyConfigurationState(saved)
+    // Reserve the next generation immediately, before persistence or queued
+    // cleanup can yield, so the old capture can no longer publish identity.
+    this.generation++
+    const cancellation = this.cancelCurrentSession()
+    return this.enqueueLifecycle(async () => {
+      await cancellation
+      const saved = await this.configService.save(configuration)
+      this.configuration = saved
+      return this.applyConfigurationState(saved)
+    })
   }
 
-  async retry(): Promise<void> {
-    if (this.disposed) this.disposed = false
+  retry(): Promise<void> {
+    this.disposed = false
+    return this.enqueueLifecycle(() => this.retryExclusive())
+  }
+
+  private async retryExclusive(): Promise<void> {
     const configuration = this.configuration ?? await this.configService.get()
     this.configuration = configuration
     if (!this.configService.isComplete(configuration)) {
@@ -119,34 +133,51 @@ export class SsoAuthenticationService {
     this.authWindow = window
     this.capture = capture
 
-    const notifyNavigation = (_event: unknown, navigation: unknown): void => {
+    const notifyNavigation = (url: unknown): void => {
       if (generation !== this.generation) return
-      const url = navigationUrl(navigation)
-      if (!url) return
+      if (typeof url !== 'string') return
       capture.notifyNavigation(url)
     }
-    window.webContents.on('did-navigate', notifyNavigation)
-    window.webContents.on('did-navigate-in-page', notifyNavigation)
-    window.webContents.on('will-navigate', notifyNavigation)
-    window.webContents.on('did-frame-navigate', notifyNavigation)
+    const onDidNavigate = (_event: unknown, url: unknown): void => { notifyNavigation(url) }
+    const onDidNavigateInPage = (_event: unknown, url: unknown, isMainFrame: unknown): void => {
+      if (isMainFrame === true) notifyNavigation(url)
+    }
+    const onWillNavigate = (details: unknown, legacyUrl: unknown, _isInPlace: unknown, legacyIsMainFrame: unknown): void => {
+      const current = navigationDetails(details)
+      if (current) {
+        if (current.isMainFrame) notifyNavigation(current.url)
+        return
+      }
+      if (legacyIsMainFrame === true) notifyNavigation(legacyUrl)
+    }
+    const onDidFrameNavigate = (_event: unknown, url: unknown, _status: unknown, _statusText: unknown, isMainFrame: unknown): void => {
+      if (isMainFrame === true) notifyNavigation(url)
+    }
+    window.webContents.on('did-navigate', onDidNavigate)
+    window.webContents.on('did-navigate-in-page', onDidNavigateInPage)
+    window.webContents.on('will-navigate', onWillNavigate)
+    window.webContents.on('did-frame-navigate', onDidFrameNavigate)
     const onClosed = (): void => {
       if (generation !== this.generation || this.capture !== capture) return
       void this.failSession(generation, 'SSO sign-in window closed')
     }
     window.on('closed', onClosed)
     this.removeNavigationListeners = () => {
-      window.webContents.removeListener?.('did-navigate', notifyNavigation)
-      window.webContents.removeListener?.('did-navigate-in-page', notifyNavigation)
-      window.webContents.removeListener?.('will-navigate', notifyNavigation)
-      window.webContents.removeListener?.('did-frame-navigate', notifyNavigation)
+      window.webContents.removeListener?.('did-navigate', onDidNavigate)
+      window.webContents.removeListener?.('did-navigate-in-page', onDidNavigateInPage)
+      window.webContents.removeListener?.('will-navigate', onWillNavigate)
+      window.webContents.removeListener?.('did-frame-navigate', onDidFrameNavigate)
       window.removeListener('closed', onClosed)
     }
 
     const identityPromise = capture.start()
-    void identityPromise.then(
-      identity => { void this.completeSession(generation, identity) },
-      error => { void this.failSession(generation, safeCaptureError(error)) },
-    )
+    void identityPromise
+      .then(
+        identity => this.completeSession(generation, identity),
+        error => this.failSession(generation, safeCaptureError(error)),
+      )
+      .catch(() => this.failSession(generation, 'Unable to complete SSO sign-in'))
+      .catch(() => undefined)
 
     try {
       await capture.ready()
@@ -162,8 +193,8 @@ export class SsoAuthenticationService {
     return () => { this.listeners.delete(listener) }
   }
 
-  async dispose(): Promise<void> {
-    if (this.disposed) return
+  dispose(): Promise<void> {
+    if (this.disposed) return this.lifecycleTail
     this.disposed = true
     this.generation++
     this.renderer = undefined
@@ -171,7 +202,8 @@ export class SsoAuthenticationService {
     if (this.snapshot.state === 'authenticating') {
       this.snapshot = configurationSnapshot(this.configService, this.configuration)
     }
-    await this.cancelCurrentSession()
+    const cancellation = this.cancelCurrentSession()
+    return this.enqueueLifecycle(() => cancellation)
   }
 
   private applyConfigurationState(configuration: SsoConfiguration): SsoAuthSnapshot {
@@ -195,7 +227,12 @@ export class SsoAuthenticationService {
 
   private async completeSession(generation: number, identity: SsoIdentity): Promise<void> {
     if (generation !== this.generation || !this.capture) return
-    this.setSnapshot({ state: 'authenticated', identity })
+    const parsed = ssoIdentitySchema.safeParse(identity)
+    if (!parsed.success) {
+      await this.failSession(generation, 'Unable to complete SSO sign-in')
+      return
+    }
+    this.setSnapshot({ state: 'authenticated', identity: parsed.data })
     await this.finishSession(generation)
   }
 
@@ -228,6 +265,12 @@ export class SsoAuthenticationService {
     this.removeNavigationListeners = undefined
     await capture?.dispose().catch(() => undefined)
     closeWindow(window)
+  }
+
+  private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.lifecycleTail.then(operation, operation)
+    this.lifecycleTail = result.then(() => undefined, () => undefined)
+    return result
   }
 }
 
@@ -274,10 +317,9 @@ function configurationSnapshot(configService: Pick<ConfigPort, 'isComplete'>, co
   return { state: configuration.enabled ? 'login-required' : 'login-disabled' }
 }
 
-function navigationUrl(navigation: unknown): string | undefined {
-  if (typeof navigation === 'string') return navigation
-  if (!navigation || typeof navigation !== 'object') return undefined
-  const details = navigation as { url?: unknown; isMainFrame?: unknown }
-  if (details.isMainFrame === false) return undefined
-  return typeof details.url === 'string' ? details.url : undefined
+function navigationDetails(value: unknown): { url: string; isMainFrame: boolean } | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const details = value as { url?: unknown; isMainFrame?: unknown }
+  if (typeof details.url !== 'string' || typeof details.isMainFrame !== 'boolean') return undefined
+  return { url: details.url, isMainFrame: details.isMainFrame }
 }
