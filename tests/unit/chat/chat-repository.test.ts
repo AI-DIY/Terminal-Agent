@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chatDocumentSchema, type ChatDocument } from '../../../src/main/chat/chat-contracts'
 import { ChatRepository, nextLogicalTimestamp, summarizeChats } from '../../../src/main/chat/chat-repository'
+import { chatWorkspaceSchema } from '../../../src/shared/contracts'
 import type { AtomicJsonStoreFileSystem } from '../../../src/main/persistence/atomic-json-store'
 
 const dirs: string[] = []
@@ -44,6 +45,180 @@ describe('ChatRepository', () => {
       { type: 'text', text: '看图' },
       { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
     ])
+  })
+
+  it('archives a non-empty task conversation without changing its SSH ownership or live task', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-conversation-task' })).value
+    await repository.associateShell({
+      requestId: 'associate-conversation-shell', chatId: chat.id, sessionId: 'terminal-1',
+      historyId: 'history-1', hostname: 'host-1', title: 'host-1',
+    })
+    await repository.appendMessage({
+      requestId: 'append-conversation-history', chatId: chat.id, role: 'user', state: 'complete', content: '保留这一段对话',
+    })
+    const before = chatDocumentSchema.parse(JSON.parse(await readFile(repository.path, 'utf8')))
+
+    const created = await repository.createConversationSession({
+      requestId: 'create-conversation-1', chatId: chat.id,
+    })
+
+    expect(created).toMatchObject({
+      changed: true,
+      liveChatId: chat.id,
+      value: { id: chat.id, messages: [] },
+    })
+    // Persisted inner-session bookkeeping is deliberately not part of the
+    // renderer's strict ChatWorkspace contract.
+    expect(chatWorkspaceSchema.parse(created.value)).toEqual(created.value)
+    expect(created.value).not.toHaveProperty('activeConversationSessionId')
+    expect(created.value).not.toHaveProperty('activeConversationSessionCreatedAt')
+    expect(created.value).not.toHaveProperty('nextConversationSessionOrdinal')
+    expect(created.value.shells).toEqual([
+      expect.objectContaining({
+        id: before.associations[0]?.id, chatId: chat.id, sessionId: 'terminal-1',
+        historyId: 'history-1', hostname: 'host-1', title: 'host-1', status: 'open',
+      }),
+    ])
+    await expect(repository.listConversationSessions(chat.id)).resolves.toMatchObject({
+      chatId: chat.id,
+      activeSessionId: expect.any(String),
+      sessions: [{ id: chat.id, label: '会话1' }],
+    })
+
+    const after = chatDocumentSchema.parse(JSON.parse(await readFile(repository.path, 'utf8')))
+    expect(after.liveChatId).toBe(before.liveChatId)
+    expect(after.associations).toEqual(before.associations)
+    expect(after.chats).toHaveLength(1)
+    expect(after.conversationSessions).toEqual([
+      expect.objectContaining({ id: chat.id, chatId: chat.id, label: '会话1' }),
+    ])
+  })
+
+  it('does not create an archive or mutate a task when its active conversation is empty', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-empty-conversation-task' })).value
+    const before = await readFile(repository.path)
+
+    await expect(repository.createConversationSession({
+      requestId: 'create-empty-conversation', chatId: chat.id,
+    })).rejects.toThrow('Cannot create a conversation session from an empty conversation')
+
+    expect(await readFile(repository.path)).toEqual(before)
+    await expect(repository.listConversationSessions(chat.id)).resolves.toMatchObject({ sessions: [] })
+  })
+
+  it('switches task-internal conversations atomically and keeps backup numbering continuous after reactivation', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-switch-conversation-task' })).value
+    await repository.associateShell({
+      requestId: 'associate-switch-conversation-shell', chatId: chat.id, sessionId: 'terminal-switch-1',
+      historyId: 'history-switch-1', hostname: 'host-switch-1', title: 'host-switch-1',
+    })
+    const shellsBeforeSwitch = (await repository.get(chat.id)).shells
+    await repository.appendMessage({
+      requestId: 'append-original-conversation', chatId: chat.id, role: 'user', state: 'complete', content: '原始会话',
+    })
+    await repository.createConversationSession({ requestId: 'create-switch-conversation-1', chatId: chat.id })
+    await repository.appendMessage({
+      requestId: 'append-new-conversation', chatId: chat.id, role: 'user', state: 'complete', content: '新会话',
+    })
+
+    const restored = await repository.switchConversationSession({
+      requestId: 'switch-to-original-conversation', chatId: chat.id, targetSessionId: chat.id,
+    })
+    expect(restored.value.messages.map(message => message.content)).toEqual(['原始会话'])
+    expect(restored.value.shells).toEqual(shellsBeforeSwitch)
+    expect(restored.liveChatId).toBe(chat.id)
+    await expect(repository.listConversationSessions(chat.id)).resolves.toMatchObject({
+      activeSessionId: chat.id,
+      sessions: [expect.objectContaining({ label: '会话2' })],
+    })
+
+    const fresh = await repository.createConversationSession({
+      requestId: 'create-switch-conversation-2', chatId: chat.id,
+    })
+    expect(fresh.value.messages).toEqual([])
+    await expect(repository.listConversationSessions(chat.id)).resolves.toMatchObject({
+      sessions: [
+        expect.objectContaining({ label: '会话2' }),
+        expect.objectContaining({ label: '会话3' }),
+      ],
+    })
+  })
+
+  it('does not save an empty active conversation while switching to an archived conversation', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-empty-switch-task' })).value
+    await repository.appendMessage({
+      requestId: 'append-empty-switch-source', chatId: chat.id, role: 'user', state: 'complete', content: '可恢复会话',
+    })
+    await repository.createConversationSession({ requestId: 'create-empty-switch-archive', chatId: chat.id })
+
+    const switched = await repository.switchConversationSession({
+      requestId: 'switch-empty-to-archive', chatId: chat.id, targetSessionId: chat.id,
+    })
+
+    expect(switched.value.messages.map(message => message.content)).toEqual(['可恢复会话'])
+    await expect(repository.listConversationSessions(chat.id)).resolves.toMatchObject({
+      activeSessionId: chat.id,
+      sessions: [],
+    })
+  })
+
+  it('persists archived task conversations across restart and makes a create request idempotent', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-restart-conversation-task' })).value
+    await repository.appendMessage({
+      requestId: 'append-restart-conversation', chatId: chat.id, role: 'user', state: 'complete', content: '重启后仍可恢复',
+    })
+    const request = { requestId: 'create-restart-conversation', chatId: chat.id }
+    const first = await repository.createConversationSession(request)
+    const persistedAfterFirst = await readFile(repository.path)
+    const replayed = await repository.createConversationSession(request)
+
+    expect(first.changed).toBe(true)
+    expect(replayed).toMatchObject({ changed: false, value: { id: chat.id, messages: [] } })
+    expect(await readFile(repository.path)).toEqual(persistedAfterFirst)
+
+    const restarted = new ChatRepository(repository.path, { now: () => new Date('2026-08-16T08:00:00.000Z') })
+    await expect(restarted.get(chat.id)).resolves.toMatchObject({ id: chat.id, messages: [] })
+    await expect(restarted.listConversationSessions(chat.id)).resolves.toMatchObject({
+      activeSessionId: expect.any(String),
+      sessions: [{ id: chat.id, label: '会话1' }],
+    })
+    const restored = await restarted.switchConversationSession({
+      requestId: 'restore-after-restart', chatId: chat.id, targetSessionId: chat.id,
+    })
+    expect(restored.value.messages.map(message => message.content)).toEqual(['重启后仍可恢复'])
+  })
+
+  it('reads legacy version-two messages as the initial conversation before it archives them', async () => {
+    const repository = await createRepository()
+    const chat = (await repository.create({ requestId: 'create-legacy-conversation-task' })).value
+    await repository.appendMessage({
+      requestId: 'append-legacy-conversation', chatId: chat.id, role: 'user', state: 'complete', content: '旧版记录',
+    })
+    const legacy = JSON.parse(await readFile(repository.path, 'utf8')) as {
+      conversationSessions?: unknown
+      chats: Array<{ activeConversationSessionId?: unknown; activeConversationSessionCreatedAt?: unknown; nextConversationSessionOrdinal?: unknown }>
+      messages: Array<{ conversationSessionId?: unknown }>
+    }
+    delete legacy.conversationSessions
+    delete legacy.chats[0].activeConversationSessionId
+    delete legacy.chats[0].activeConversationSessionCreatedAt
+    delete legacy.chats[0].nextConversationSessionOrdinal
+    delete legacy.messages[0].conversationSessionId
+    await writeFile(repository.path, JSON.stringify(legacy), 'utf8')
+
+    const restarted = new ChatRepository(repository.path, { now: () => new Date('2026-08-16T08:00:00.000Z') })
+    await expect(restarted.get(chat.id)).resolves.toMatchObject({
+      messages: [expect.objectContaining({ content: '旧版记录' })],
+    })
+    await restarted.createConversationSession({ requestId: 'archive-legacy-conversation', chatId: chat.id })
+    await expect(restarted.listConversationSessions(chat.id)).resolves.toMatchObject({
+      sessions: [{ id: chat.id, label: '会话1' }],
+    })
   })
 
   it('persists execution plans and audits while excluding audits from retry source', async () => {

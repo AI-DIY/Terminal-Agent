@@ -176,11 +176,68 @@ export const chatListSnapshotSchema = z.object({
 }).strict()
 export type ChatListSnapshot = z.infer<typeof chatListSnapshotSchema>
 
+/**
+ * A durable, task-internal AI conversation that is available to restore.
+ * Only archived conversations are exposed by the picker API; the active
+ * conversation is represented separately by the list response's
+ * `activeSessionId`.
+ */
+export const chatConversationSessionSummarySchema = z.object({
+  id: chatIdentifierSchema,
+  label: z.string().trim().min(1).max(255),
+  createdAt: chatTimestampSchema,
+  updatedAt: chatTimestampSchema,
+  archivedAt: chatTimestampSchema,
+}).strict().superRefine((session, context) => {
+  if (Date.parse(session.updatedAt) < Date.parse(session.createdAt)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['updatedAt'], message: 'Conversation session updatedAt precedes createdAt' })
+  }
+  if (Date.parse(session.archivedAt) < Date.parse(session.updatedAt)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['archivedAt'], message: 'Conversation session archivedAt precedes updatedAt' })
+  }
+})
+export type ChatConversationSessionSummary = z.infer<typeof chatConversationSessionSummarySchema>
+
+/** A revisioned projection for the task's archived conversation picker. */
+export const chatConversationSessionListSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  chatId: chatIdentifierSchema,
+  activeSessionId: chatIdentifierSchema,
+  sessions: z.array(chatConversationSessionSummarySchema),
+}).strict().superRefine((result, context) => {
+  const sessionIds = new Set<string>()
+  for (const [index, session] of result.sessions.entries()) {
+    if (session.id === result.activeSessionId) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['sessions', index, 'id'], message: 'Active conversation cannot be listed as archived' })
+    }
+    if (sessionIds.has(session.id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['sessions', index, 'id'], message: 'Archived conversation session ids must be unique' })
+    }
+    sessionIds.add(session.id)
+  }
+})
+export type ChatConversationSessionList = z.infer<typeof chatConversationSessionListSchema>
+
 export const chatCreateRequestSchema = z.object({
   requestId: chatRequestIdSchema,
   title: z.string().trim().min(1).max(255).optional(),
 }).strict()
 export type ChatCreateRequest = z.infer<typeof chatCreateRequestSchema>
+
+/** Archive the current non-empty AI conversation and activate a fresh one. */
+export const chatCreateConversationSessionRequestSchema = z.object({
+  requestId: chatRequestIdSchema,
+  chatId: chatIdentifierSchema,
+}).strict()
+export type ChatCreateConversationSessionRequest = z.infer<typeof chatCreateConversationSessionRequestSchema>
+
+/** Archive the current non-empty AI conversation, then restore an archive. */
+export const chatSwitchConversationSessionRequestSchema = z.object({
+  requestId: chatRequestIdSchema,
+  chatId: chatIdentifierSchema,
+  targetSessionId: chatIdentifierSchema,
+}).strict()
+export type ChatSwitchConversationSessionRequest = z.infer<typeof chatSwitchConversationSessionRequestSchema>
 
 export const chatSetModeRequestSchema = z.object({
   requestId: chatRequestIdSchema,

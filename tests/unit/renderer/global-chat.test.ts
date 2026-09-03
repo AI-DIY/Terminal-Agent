@@ -427,14 +427,37 @@ describe('global chat store', () => {
     expect(transport.compact).toHaveBeenCalledWith(expect.objectContaining({ sshContextSessionIds: ['primary', 'alternate'], skillIds: ['security-review'] }))
   })
 
-  it('defers an automatic SSH-context default until live session metadata is complete', () => {
+  it('keeps SSH context opt-in until the user explicitly checks a host', () => {
     const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
 
-    expect(panel).toContain("import { chatContextSessionsAreResolved, defaultChatContextSessionIds, normalizeChatContextSessionIds } from '../../../../shared/chat-context-selection'")
+    expect(panel).toContain("import { chatContextSessionsAreResolved, normalizeChatContextSessionIds } from '../../../../shared/chat-context-selection'")
     expect(panel).toContain('watch([chatId, associatedContextSessionIds, contextSessionRows], () => {')
     expect(panel).toContain('if (!chatContextSessionsAreResolved(')
     expect(panel).toContain('if (current === undefined && associatedContextSessionIds.value.size === 0) return')
-    expect(panel).toContain('persistedContextSelections[id] = defaultChatContextSessionIds(contextSessionRows.value)')
+    expect(panel).toContain('persistedContextSelections[id] = []')
+    expect(panel).toContain("terminal-agent.ai-context-session-ids.v2")
+    expect(panel).toContain('return normalizeChatContextSessionIds(contextSessionRows.value, requested ?? [])')
+    expect(panel).not.toContain('defaultChatContextSessionIds(contextSessionRows.value)')
+  })
+
+  it('offers safe new-session and session-switch controls in the AI workspace header', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+
+    expect(panel).toContain("newSession: []")
+    expect(panel).toContain("switchSession: [chatId: string]")
+    expect(panel).toContain('const canCreateConversationSession = computed(() => messages.value.length > 0')
+    expect(panel).toContain('aria-label="新建会话"')
+    expect(panel).toContain('aria-label="切换会话"')
+    expect(panel).toContain('v-for="session in conversationSessions"')
+    expect(panel).toContain('emit(\'newSession\')')
+    expect(panel).toContain('emit(\'switchSession\', targetChatId)')
+    expect(panel).toContain('defineExpose({ hydrateConversation })')
+    expect(panel).toContain("store.hydrate(id, messages, false)")
+    expect(panel).not.toContain('void window.terminalAgent.chats.get(id)')
+    expect(panel).not.toContain('watch(() => props.conversationSessionVersion')
+    expect(panel).toContain("store.setDraft(id, '')")
+    expect(panel).toContain('store.setPendingImages(id, [])')
+    expect(panel).toContain('if (!actionChatId || props.sessionBusy) return')
   })
 
   it('composes text-only content while retaining old image records for hydration', () => {

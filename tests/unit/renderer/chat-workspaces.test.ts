@@ -54,6 +54,14 @@ function api(chats: ChatSummary[], workspaces: ChatWorkspace[], revision = 4, li
 }
 
 describe('chat workspaces store', () => {
+  it('recognizes whether the active AI conversation has content worth backing up', async () => {
+    const { hasConversationContent } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const current = summary({ id: 'current', title: '当前任务', createdAt: '2026-08-16T01:00:00.000Z', updatedAt: '2026-08-16T05:00:00.000Z' })
+
+    expect(hasConversationContent(workspace(current, { messages: [{ id: 'm', chatId: 'current', role: 'user', content: '已保存内容', createdAt: '2026-08-16T01:01:00.000Z', state: 'complete' }] }))).toBe(true)
+    expect(hasConversationContent(workspace(current))).toBe(false)
+  })
+
   it('preserves operation ownership when opened events interleave before open promises resolve', async () => {
     const { createWorkbenchSessionOwnershipTracker } = await import('../../../src/renderer/src/stores/chat-workspaces')
     const tracker = createWorkbenchSessionOwnershipTracker<{ id: string }>()
@@ -1325,6 +1333,23 @@ describe('durable chat workbench components', () => {
     expect(view).toContain('window.terminalAgent.chats.transferSessions({')
     expect(view).toContain('sourceChatId: chatId')
     expect(view).not.toContain('for (const sessionId of sessionIds)')
+  })
+
+  it('changes AI conversations within a task without transferring its SSH sessions', () => {
+    const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
+    const createConversation = view.slice(view.indexOf('async function createConversationSession'), view.indexOf('async function switchConversationSession'))
+    const switchConversation = view.slice(view.indexOf('async function switchConversationSession'), view.indexOf('async function renameTask'))
+
+    expect(createConversation).toContain('window.terminalAgent.chats.createConversationSession({')
+    expect(switchConversation).toContain('window.terminalAgent.chats.switchConversationSession({')
+    expect(createConversation).toContain('globalChatPanel.value?.hydrateConversation(snapshot.chat.messages)')
+    expect(switchConversation).toContain('globalChatPanel.value?.hydrateConversation(snapshot.chat.messages)')
+    expect(createConversation).not.toContain('transferSessions')
+    expect(switchConversation).not.toContain('transferSessions')
+    expect(createConversation).not.toContain('chatStore.create(')
+    expect(switchConversation).not.toContain('chatStore.create(')
+    expect(createConversation).not.toContain('shellViews')
+    expect(switchConversation).not.toContain('shellViews')
   })
 
   it('creates a missing fallback only inside the atomic transfer request', () => {

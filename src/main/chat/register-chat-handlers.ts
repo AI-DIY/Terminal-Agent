@@ -1,11 +1,13 @@
 import { ipcMain, type WebContents } from 'electron'
 import {
   chatCreateRequestSchema,
+  chatCreateConversationSessionRequestSchema,
   chatBindSessionRequestSchema,
   chatIdentifierSchema,
   chatRemoveRequestSchema,
   chatResolveSessionRequestSchema,
   chatSetModeRequestSchema,
+  chatSwitchConversationSessionRequestSchema,
   chatTransferSessionsRequestSchema,
   chatRunRequestSchema,
   chatCompactRequestSchema,
@@ -20,9 +22,9 @@ import type { ChatRuntime } from './chat-runtime'
 import { chatPlanEditStepRequestSchema, chatPlanRemoveStepRequestSchema, chatPlanCancelRequestSchema, chatPlanExecuteRequestSchema } from '../../shared/chat-plan'
 import type { ExecutionPlanService } from './execution-plan-service'
 
-const channels = ['chats:list', 'chats:create', 'chats:get', 'chats:resolve-session', 'chats:set-mode', 'chats:update-title', 'chats:pin', 'chats:unpin', 'chats:remove', 'chats:bind-session', 'chats:transfer-sessions'] as const
+const channels = ['chats:list', 'chats:create', 'chats:get', 'chats:conversation-sessions:list', 'chats:conversation-sessions:create', 'chats:conversation-sessions:switch', 'chats:resolve-session', 'chats:set-mode', 'chats:update-title', 'chats:pin', 'chats:unpin', 'chats:remove', 'chats:bind-session', 'chats:transfer-sessions'] as const
 
-type ChatHandlerService = Pick<ChatService, 'list' | 'create' | 'get' | 'resolveSession' | 'setMode' | 'updateTitle' | 'pin' | 'unpin' | 'remove' | 'associateSession' | 'transferSessions' | 'closeSession' | 'reconcileSessions' | 'onChanged'>
+type ChatHandlerService = Pick<ChatService, 'list' | 'create' | 'get' | 'listConversationSessions' | 'createConversationSession' | 'switchConversationSession' | 'resolveSession' | 'setMode' | 'updateTitle' | 'pin' | 'unpin' | 'remove' | 'associateSession' | 'transferSessions' | 'closeSession' | 'reconcileSessions' | 'onChanged'>
   & Pick<ChatService, 'appendMessage'>
   & Partial<Pick<ChatService, 'syncSessionMetadata'>>
 type SessionLookup = Pick<SessionService, 'snapshot' | 'onClosed'> & Partial<Pick<SessionService, 'onUpdated'>>
@@ -41,6 +43,27 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
   ipcMain.handle('chats:get', (event, chatId: unknown) => {
     assertTrustedSender(event, trustedSender)
     return service.get(chatIdentifierSchema.parse(chatId))
+  })
+  ipcMain.handle('chats:conversation-sessions:list', (event, chatId: unknown) => {
+    assertTrustedSender(event, trustedSender)
+    return service.listConversationSessions(chatIdentifierSchema.parse(chatId))
+  })
+  ipcMain.handle('chats:conversation-sessions:create', async (event, request: unknown) => {
+    assertTrustedSender(event, trustedSender)
+    const parsed = chatCreateConversationSessionRequestSchema.parse(request)
+    // A stream is keyed only by task today.  Finish its cancellation before
+    // changing the active inner conversation so delayed output cannot land in
+    // the conversation the user just opened.
+    await runtime?.cancel(parsed.chatId)
+    return service.createConversationSession(parsed)
+  })
+  ipcMain.handle('chats:conversation-sessions:switch', async (event, request: unknown) => {
+    assertTrustedSender(event, trustedSender)
+    const parsed = chatSwitchConversationSessionRequestSchema.parse(request)
+    // See create: cancellation is intentionally ordered before this atomic
+    // persistence mutation, not delegated to the renderer.
+    await runtime?.cancel(parsed.chatId)
+    return service.switchConversationSession(parsed)
   })
   ipcMain.handle('chats:resolve-session', (event, request: unknown) => {
     assertTrustedSender(event, trustedSender)

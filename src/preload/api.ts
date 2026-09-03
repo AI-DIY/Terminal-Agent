@@ -12,13 +12,16 @@ import type {
   BastionLaunchResult,
   ChatChangedEvent,
   ChatBindSessionRequest,
+  ChatConversationSessionList,
   ChatCreateRequest,
+  ChatCreateConversationSessionRequest,
   ChatListSnapshot,
   ChatRemoveRequest,
   ChatPinRequest,
   ChatResolveSessionRequest,
   ChatSessionResolution,
   ChatSetModeRequest,
+  ChatSwitchConversationSessionRequest,
   ChatUnpinRequest,
   ChatTransferSessionsRequest,
   ChatUpdateTitleRequest,
@@ -82,6 +85,9 @@ export type TerminalAgentApi = {
     list(): Promise<ChatListSnapshot>
     create(request: ChatCreateRequest): Promise<ChatWorkspaceSnapshot>
     get(chatId: string): Promise<ChatWorkspaceSnapshot>
+    listConversationSessions(chatId: string): Promise<ChatConversationSessionList>
+    createConversationSession(request: ChatCreateConversationSessionRequest): Promise<ChatWorkspaceSnapshot>
+    switchConversationSession(request: ChatSwitchConversationSessionRequest): Promise<ChatWorkspaceSnapshot>
     resolveSession(request: ChatResolveSessionRequest): Promise<ChatSessionResolution>
     setMode(request: ChatSetModeRequest): Promise<ChatWorkspaceSnapshot>
     updateTitle(request: ChatUpdateTitleRequest): Promise<ChatWorkspaceSnapshot>
@@ -215,6 +221,9 @@ export function createTerminalAgentApi(ipcRenderer: {
       list: () => ipcRenderer.invoke('chats:list') as Promise<ChatListSnapshot>,
       create: (request: ChatCreateRequest) => ipcRenderer.invoke('chats:create', request) as Promise<ChatWorkspaceSnapshot>,
       get: (chatId: string) => ipcRenderer.invoke('chats:get', chatId) as Promise<ChatWorkspaceSnapshot>,
+      listConversationSessions: (chatId: string) => ipcRenderer.invoke('chats:conversation-sessions:list', chatId) as Promise<ChatConversationSessionList>,
+      createConversationSession: (request: ChatCreateConversationSessionRequest) => ipcRenderer.invoke('chats:conversation-sessions:create', request) as Promise<ChatWorkspaceSnapshot>,
+      switchConversationSession: (request: ChatSwitchConversationSessionRequest) => ipcRenderer.invoke('chats:conversation-sessions:switch', request) as Promise<ChatWorkspaceSnapshot>,
       resolveSession: (request: ChatResolveSessionRequest) => ipcRenderer.invoke('chats:resolve-session', request) as Promise<ChatSessionResolution>,
       setMode: (request: ChatSetModeRequest) => ipcRenderer.invoke('chats:set-mode', request) as Promise<ChatWorkspaceSnapshot>,
       updateTitle: (request: ChatUpdateTitleRequest) => ipcRenderer.invoke('chats:update-title', request) as Promise<ChatWorkspaceSnapshot>,

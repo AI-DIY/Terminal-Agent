@@ -86,12 +86,28 @@ describe('V18 production visual contract', () => {
     const store = rendererSource('stores/chat-workspaces.ts')
 
     expect(workbench).toContain("'未选择任务'")
-    expect(workbench).toContain('此任务没有关联 SSH。')
+    expect(workbench).not.toContain('此任务没有关联 SSH。')
+    expect(workbench).toContain('<template #empty>')
+    expect(workbench).toContain('<SshConnectionLauncher')
     expect(shell).toContain('当前任务')
     expect(shellCanvas).toContain('返回实时任务')
+    expect(shellCanvas).toContain('<section v-if="currentSessions.length === 0" class="empty-slot"><slot name="empty" /></section>')
+    expect(shellCanvas).not.toContain('<slot name="history"')
     expect(store).toContain('无法读取任务。')
     expect(store).toContain('无法新建任务。')
     expect(store).toContain('无法删除任务。')
+  })
+
+  it('anchors the current task beside the brand and separates the greeting from action buttons', () => {
+    const shell = rendererSource('components/workbench/WorkbenchShell.vue')
+    const header = shell.slice(shell.indexOf('<header class="app-header"'), shell.indexOf('</header>'))
+
+    expect(header.indexOf('class="brand"')).toBeLessThan(header.indexOf('class="current-chat"'))
+    expect(header.indexOf('class="current-chat"')).toBeLessThan(header.indexOf('class="header-welcome"'))
+    expect(header.indexOf('class="header-welcome"')).toBeLessThan(header.indexOf('class="app-header-actions"'))
+    expect(shell).toContain('.header-welcome { flex: 0 0 auto; margin-right: 12px;')
+    expect(shell).toContain('.app-header-actions { display: flex; align-items: center; gap: 6px;')
+    expect(shell).toContain('.current-chat .task-copy { display: none; }')
   })
 
   it('keeps the independent diagnostic tools ordered ahead of native window controls', () => {

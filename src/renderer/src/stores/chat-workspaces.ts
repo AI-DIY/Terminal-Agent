@@ -16,6 +16,13 @@ export type ChatGroup = {
   chats: ChatSummary[]
 }
 
+/** A session backup is meaningful only after at least one persisted message. */
+export function hasConversationContent(
+  workspace: Pick<ChatWorkspace, 'messages'> | null | undefined,
+): boolean {
+  return Boolean(workspace?.messages.length)
+}
+
 export function isInteractiveWorkbenchWorkspace(
   selected: Pick<ChatWorkspace, 'id' | 'shells'> | null,
   liveChatId: string | null,

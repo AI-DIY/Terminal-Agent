@@ -245,6 +245,40 @@ describe('chatDocumentSchema semantic invariants', () => {
     expect(chatDocumentSchema.parse(validDocument())).toEqual(validDocument())
   })
 
+  it('validates archived task-internal conversations without requiring a version bump for legacy documents', () => {
+    const document = validDocument()
+    document.messages[0].conversationSessionId = 'conversation-archive-1'
+    document.chats[0].activeConversationSessionId = 'conversation-active-1'
+    document.chats[0].activeConversationSessionCreatedAt = updatedAt
+    document.chats[0].nextConversationSessionOrdinal = 2
+    document.conversationSessions = [{
+      id: 'conversation-archive-1', chatId: 'chat-1', label: '会话1',
+      createdAt, updatedAt: messageAt, archivedAt: updatedAt,
+    }]
+
+    expect(chatDocumentSchema.parse(document)).toEqual(document)
+
+    const collidingActive = structuredClone(document)
+    collidingActive.chats[0].activeConversationSessionId = 'conversation-archive-1'
+    expect(chatDocumentSchema.safeParse(collidingActive).success).toBe(false)
+
+    const staleOrdinal = structuredClone(document)
+    staleOrdinal.chats[0].nextConversationSessionOrdinal = 1
+    expect(chatDocumentSchema.safeParse(staleOrdinal).success).toBe(false)
+
+    const unknownMessageSession = structuredClone(document)
+    unknownMessageSession.messages[0].conversationSessionId = 'missing-session'
+    expect(chatDocumentSchema.safeParse(unknownMessageSession).success).toBe(false)
+
+    const emptyArchive = structuredClone(document)
+    emptyArchive.messages = []
+    emptyArchive.operations = emptyArchive.operations.filter(operation => operation.kind !== 'appendMessage')
+    expect(chatDocumentSchema.safeParse(emptyArchive).success).toBe(false)
+
+    const legacy = validDocument()
+    expect(chatDocumentSchema.parse(legacy)).toEqual(legacy)
+  })
+
   it('accepts v2 pin and unpin snapshots without advancing the task updatedAt', () => {
     const titleAt = '2026-08-16T08:00:00.001Z'
     const pinnedAt = '2026-08-16T08:00:00.002Z'

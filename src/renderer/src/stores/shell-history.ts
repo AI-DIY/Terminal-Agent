@@ -40,28 +40,49 @@ export function createShellHistoryStore(api: ShellHistoryApi) {
   async function open(request: ShellHistoryListRequest): Promise<void> {
     lastRequest = { ...request }
     const generation = ++selectionGeneration
+    let loadingInitialSelection = false
     state.loading = true
     state.error = ''
+    // Do not leave the previous host's records visible while a newly selected
+    // host list is in flight.  The dialog opens immediately, so stale rows
+    // here could otherwise be mistaken for the newly requested connection.
+    state.records = []
+    state.details = {}
+    state.selectedId = null
+    state.selected = null
     try {
       const records = await api.list(request)
       if (generation !== selectionGeneration) return
       state.records = records
-      state.details = {}
-      state.selectedId = null
-      state.selected = null
-      if (records[0]) await select(records[0].id, generation)
-      await Promise.all(latestHistoryByHost(records)
-        .filter(record => record.id !== records[0]?.id)
-        .map(async record => {
-          const detail = await api.get(record.id)
-          if (generation === selectionGeneration) state.details[detail.id] = detail
-        }))
+      const initialRecord = records[0]
+      if (initialRecord) {
+        loadingInitialSelection = true
+        void select(initialRecord.id, generation)
+      }
+      void prefetchLatestHistoryDetails(records, initialRecord?.id, generation)
     } catch (error) {
       if (generation !== selectionGeneration) return
       state.error = error instanceof Error ? error.message : '无法读取 Shell 历史。'
     } finally {
-      if (generation === selectionGeneration) state.loading = false
+      if (generation === selectionGeneration && !loadingInitialSelection) state.loading = false
     }
+  }
+
+  function prefetchLatestHistoryDetails(
+    records: readonly ShellHistorySummary[],
+    selectedHistoryId: string | undefined,
+    generation: number,
+  ): void {
+    void Promise.all(latestHistoryByHost(records)
+      .filter(record => record.id !== selectedHistoryId)
+      .map(async record => {
+        const detail = await api.get(record.id)
+        if (generation === selectionGeneration) state.details[detail.id] = detail
+      }))
+      .catch(error => {
+        if (generation !== selectionGeneration) return
+        state.error = error instanceof Error ? error.message : '无法读取 Shell 历史。'
+      })
   }
 
   async function select(historyId: string, expectedGeneration = ++selectionGeneration): Promise<void> {

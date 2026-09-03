@@ -4,11 +4,13 @@ import {
   chatAssociateShellRequestSchema,
   chatBindSessionRequestSchema,
   chatCloseAssociationRequestSchema,
+  chatCreateConversationSessionRequestSchema,
   chatCreateRequestSchema,
   chatIdentifierSchema,
   chatPinRequestSchema,
   chatRemoveRequestSchema,
   chatSetModeRequestSchema,
+  chatSwitchConversationSessionRequestSchema,
   chatTransferSessionsRequestSchema,
   chatUnpinRequestSchema,
   chatUpdateTitleRequestSchema,
@@ -18,11 +20,15 @@ import {
   type ChatAssociateShellRequest,
   type ChatBindSessionRequest,
   type ChatCloseAssociationRequest,
+  type ChatConversationSessionList,
+  type ChatConversationSessionSummary,
+  type ChatCreateConversationSessionRequest,
   type ChatCreateRequest,
   type ChatMessageRecord,
   type ChatPinRequest,
   type ChatRemoveRequest,
   type ChatSetModeRequest,
+  type ChatSwitchConversationSessionRequest,
   type ChatTransferSessionsRequest,
   type ChatShellAssociation,
   type ChatSummary,
@@ -33,17 +39,23 @@ import {
 import { AtomicJsonStore, type AtomicJsonStoreOptions } from '../persistence/atomic-json-store'
 import type { ChatMessageContent } from '../../shared/chat-content'
 import {
+  activeConversationSessionCreatedAt,
+  activeConversationSessionId,
   chatDocumentSchema,
+  conversationSessionOrdinal,
   emptyChatDocument,
   guardChatDocumentVersion,
   type ChatDocument,
   type ChatOperation,
   type PersistedAssociation,
   type PersistedChat,
+  type PersistedConversationSession,
+  type PersistedMessage,
 } from './chat-contracts'
 
 export type ChatMutation<T> = { value: T; changed: boolean; liveChatId: string | null }
 export type ChatList = { chats: ChatSummary[]; liveChatId: string | null }
+export type ChatConversationSessionListValue = Omit<ChatConversationSessionList, 'revision'>
 
 const interruptedStreamRecoveryContent = '聊天请求已中断，请重试。'
 
@@ -106,11 +118,34 @@ export class ChatRepository {
     return toWorkspace(await this.store.load(), parsed)
   }
 
+  /**
+   * Lists only restorable conversations belonging to one task.  The active
+   * conversation is intentionally represented separately so a picker cannot
+   * accidentally select the currently displayed history as an archive.
+   */
+  async listConversationSessions(chatId: string): Promise<ChatConversationSessionListValue> {
+    const parsed = chatIdentifierSchema.parse(chatId)
+    const document = await this.store.load()
+    const chat = requireChat(document, parsed)
+    const sessions: ChatConversationSessionSummary[] = conversationSessionsForChat(document, chat.id)
+      .map(session => ({
+        id: session.id,
+        label: session.label,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        archivedAt: session.archivedAt,
+      }))
+      .sort((left, right) => conversationSessionOrdinal(left.label) - conversationSessionOrdinal(right.label)
+        || left.archivedAt.localeCompare(right.archivedAt)
+        || left.id.localeCompare(right.id))
+    return { chatId: chat.id, activeSessionId: activeConversationSessionId(chat), sessions }
+  }
+
   async findRetryMessage(chatId: string, content?: ChatMessageContent): Promise<string | undefined> {
     const parsed = chatIdentifierSchema.parse(chatId)
     const document = await this.store.load()
-    requireChat(document, parsed)
-    const messages = document.messages.filter(message => message.chatId === parsed)
+    const chat = requireChat(document, parsed)
+    const messages = conversationMessages(document, chat.id, activeConversationSessionId(chat))
     const assistant = messages.at(-1)
     const user = messages.at(-2)
     if (assistant?.role !== 'assistant' || assistant.state !== 'error' || user?.role !== 'user') return undefined
@@ -262,6 +297,58 @@ export class ChatRepository {
     })
   }
 
+  /**
+   * Archives the current non-empty AI conversation and starts a blank one in
+   * the same task.  This does not create a ChatWorkspace or touch terminal
+   * associations, keeping task identity and live ownership intact.
+   */
+  async createConversationSession(request: ChatCreateConversationSessionRequest): Promise<ChatMutation<ChatWorkspace>> {
+    const parsed = chatCreateConversationSessionRequestSchema.parse(request)
+    const fingerprint = requestFingerprint('createConversationSession', [parsed.chatId])
+    return this.mutate(parsed.requestId, 'createConversationSession', parsed.chatId, fingerprint, (document, timestamp) => {
+      const chat = requireChat(document, parsed.chatId)
+      const activeSessionId = activeConversationSessionId(chat)
+      if (conversationMessages(document, chat.id, activeSessionId).length === 0) {
+        throw new Error('Cannot create a conversation session from an empty conversation')
+      }
+      archiveActiveConversation(document, chat, timestamp)
+      const nextSessionId = this.createId()
+      assertAvailableConversationSessionId(document, nextSessionId)
+      chat.activeConversationSessionId = nextSessionId
+      chat.activeConversationSessionCreatedAt = timestamp
+      chat.updatedAt = timestamp
+      return { chatId: chat.id }
+    })
+  }
+
+  /**
+   * Restores one archived AI conversation into the existing task.  If the
+   * visible conversation has content it becomes the next numbered archive;
+   * empty workspaces are intentionally not saved as phantom sessions.
+   */
+  async switchConversationSession(request: ChatSwitchConversationSessionRequest): Promise<ChatMutation<ChatWorkspace>> {
+    const parsed = chatSwitchConversationSessionRequestSchema.parse(request)
+    const fingerprint = requestFingerprint('switchConversationSession', [parsed.chatId, parsed.targetSessionId])
+    return this.mutate(parsed.requestId, 'switchConversationSession', parsed.chatId, fingerprint, (document, timestamp) => {
+      const chat = requireChat(document, parsed.chatId)
+      const sessions = document.conversationSessions ?? []
+      const targetIndex = sessions.findIndex(session => session.chatId === chat.id && session.id === parsed.targetSessionId)
+      if (targetIndex < 0) throw new Error('Unknown archived conversation session')
+
+      const activeSessionId = activeConversationSessionId(chat)
+      if (conversationMessages(document, chat.id, activeSessionId).length > 0) {
+        archiveActiveConversation(document, chat, timestamp)
+      }
+
+      const [target] = sessions.splice(targetIndex, 1)
+      if (!target) throw new Error('Unknown archived conversation session')
+      chat.activeConversationSessionId = target.id
+      chat.activeConversationSessionCreatedAt = target.createdAt
+      chat.updatedAt = timestamp
+      return { chatId: chat.id }
+    })
+  }
+
   async appendMessage(request: ChatAppendMessageRequest): Promise<ChatMutation<ChatWorkspace>> {
     const parsed = chatAppendMessageRequestSchema.parse(request)
     const fingerprint = requestFingerprint('appendMessage', [
@@ -277,6 +364,7 @@ export class ChatRepository {
         ...(parsed.executionPlan ? { executionPlan: structuredClone(parsed.executionPlan) } : {}),
         id,
         createdAt: timestamp,
+        conversationSessionId: activeConversationSessionId(chat),
       })
       if (parsed.role === 'user') markChatStarted(chat)
       chat.updatedAt = timestamp
@@ -294,6 +382,9 @@ export class ChatRepository {
       const chat = requireChat(document, parsed.chatId)
       const message = document.messages.find(item => item.id === parsed.messageId && item.chatId === parsed.chatId)
       if (!message) throw new Error('Unknown chat message')
+      if (messageConversationSessionId(message) !== activeConversationSessionId(chat)) {
+        throw new Error('Cannot update a message from an inactive conversation session')
+      }
       message.content = Array.isArray(parsed.content) ? structuredClone(parsed.content) : parsed.content
       message.state = parsed.state
       if (parsed.retryable === undefined) delete message.retryable
@@ -712,6 +803,12 @@ export class ChatRepository {
         replaceLiveChatIfCurrent(current, parsed.chatId)
         current.messages = current.messages.filter(message => message.chatId !== parsed.chatId)
         current.associations = current.associations.filter(association => association.chatId !== parsed.chatId)
+        current.conversationSessions = current.conversationSessions?.filter(session => session.chatId !== parsed.chatId)
+        if (existing) {
+          delete existing.activeConversationSessionId
+          delete existing.activeConversationSessionCreatedAt
+          delete existing.nextConversationSessionOrdinal
+        }
         current.operations = current.operations.map(operation => operation.chatId === parsed.chatId
           ? { requestId: operation.requestId, kind: operation.kind, chatId: operation.chatId, fingerprint: operation.fingerprint, appliedAt: operation.appliedAt }
           : operation)
@@ -841,10 +938,82 @@ function requireChat(document: ChatDocument, chatId: string) {
   return chat
 }
 
+function conversationSessionsForChat(document: ChatDocument, chatId: string): PersistedConversationSession[] {
+  return (document.conversationSessions ?? []).filter(session => session.chatId === chatId)
+}
+
+function messageConversationSessionId(message: PersistedMessage): string {
+  return message.conversationSessionId ?? message.chatId
+}
+
+function conversationMessages(document: ChatDocument, chatId: string, conversationSessionId: string): PersistedMessage[] {
+  return document.messages.filter(message => message.chatId === chatId
+    && messageConversationSessionId(message) === conversationSessionId)
+}
+
+function archiveActiveConversation(document: ChatDocument, chat: PersistedChat, archivedAt: string): void {
+  const id = activeConversationSessionId(chat)
+  const messages = conversationMessages(document, chat.id, id)
+  if (messages.length === 0) throw new Error('Cannot archive an empty conversation')
+  assertNoArchivedConversationSessionId(document, id)
+
+  const ordinal = nextConversationSessionOrdinal(document, chat)
+  if (ordinal >= Number.MAX_SAFE_INTEGER) throw new Error('Conversation session numbering exhausted')
+  const createdAt = activeConversationSessionCreatedAt(chat)
+  const updatedAt = conversationUpdatedAt(document, chat, id)
+  const sessions = document.conversationSessions ??= []
+  sessions.push({
+    id,
+    chatId: chat.id,
+    label: `会话${ordinal}`,
+    createdAt,
+    updatedAt,
+    archivedAt,
+  })
+  chat.nextConversationSessionOrdinal = ordinal + 1
+}
+
+function assertNoArchivedConversationSessionId(document: ChatDocument, id: string): void {
+  if ((document.conversationSessions ?? []).some(session => session.id === id)) {
+    throw new Error('Conversation session id already exists')
+  }
+}
+
+function assertAvailableConversationSessionId(document: ChatDocument, id: string): void {
+  assertNoArchivedConversationSessionId(document, id)
+  if (document.chats.some(chat => !chat.deletedAt && activeConversationSessionId(chat) === id)) {
+    throw new Error('Conversation session id already exists')
+  }
+}
+
+function nextConversationSessionOrdinal(document: ChatDocument, chat: PersistedChat): number {
+  if (chat.nextConversationSessionOrdinal !== undefined) return chat.nextConversationSessionOrdinal
+  const largestArchivedOrdinal = conversationSessionsForChat(document, chat.id)
+    .reduce((largest, session) => Math.max(largest, conversationSessionOrdinal(session.label)), 0)
+  return largestArchivedOrdinal + 1
+}
+
+function conversationUpdatedAt(document: ChatDocument, chat: PersistedChat, conversationSessionId: string): string {
+  const messages = conversationMessages(document, chat.id, conversationSessionId)
+  const messageIds = new Set(messages.map(message => message.id))
+  let updatedAt = activeConversationSessionCreatedAt(chat)
+  const observe = (value: string): void => {
+    if (value.localeCompare(updatedAt) > 0) updatedAt = value
+  }
+  for (const message of messages) observe(message.createdAt)
+  for (const operation of document.operations) {
+    if ((operation.kind === 'appendMessage' || operation.kind === 'updateMessage')
+      && operation.resultId !== undefined
+      && messageIds.has(operation.resultId)) {
+      observe(operation.appliedAt)
+    }
+  }
+  return updatedAt
+}
+
 function toWorkspace(document: ChatDocument, chatId: string): ChatWorkspace {
   const chat = requireChat(document, chatId)
-  const messages: ChatMessageRecord[] = document.messages
-    .filter(message => message.chatId === chatId)
+  const messages: ChatMessageRecord[] = conversationMessages(document, chatId, activeConversationSessionId(chat))
     .map(message => ({
       id: message.id,
       chatId: message.chatId,
@@ -871,7 +1040,17 @@ function toWorkspace(document: ChatDocument, chatId: string): ChatWorkspace {
       ...(association.closedAt ? { closedAt: association.closedAt } : {}),
     }))
   return {
-    ...chat,
+    // Keep persistence-only inner-session metadata out of the public task
+    // workspace contract.  The renderer receives its active message
+    // projection above; archive identifiers are exposed only through the
+    // dedicated conversation-session picker endpoint.
+    id: chat.id,
+    title: chat.title,
+    titleState: chat.titleState,
+    pinnedAt: chat.pinnedAt,
+    createdAt: chat.createdAt,
+    updatedAt: chat.updatedAt,
+    mode: chat.mode,
     shellCount: shells.length,
     live: shells.some(shell => shell.status === 'open'),
     messages,
@@ -981,11 +1160,17 @@ export function nextLogicalTimestamp(now: Date, document: ChatDocument): string 
     observe(chat.updatedAt)
     observe(chat.deletedAt)
     observe(chat.pinnedAt ?? undefined)
+    observe(chat.activeConversationSessionCreatedAt)
   }
   for (const message of document.messages) observe(message.createdAt)
   for (const association of document.associations) {
     observe(association.associatedAt)
     observe(association.closedAt)
+  }
+  for (const session of document.conversationSessions ?? []) {
+    observe(session.createdAt)
+    observe(session.updatedAt)
+    observe(session.archivedAt)
   }
   for (const operation of document.operations) {
     observe(operation.appliedAt)

@@ -17,12 +17,17 @@ describe('chat preload API', () => {
     const pin = { requestId: 'pin-1', chatId: 'chat-1' }
     const bind = { requestId: 'bind-1', chatId: 'chat-1', sessionId: 's1' }
     const transfer = { requestId: 'transfer-1', sourceChatId: 'chat-1', targetChatId: 'chat-2', sessionIds: ['s1', 's2'] }
+    const createConversation = { requestId: 'conversation-create-1', chatId: 'chat-1' }
+    const switchConversation = { requestId: 'conversation-switch-1', chatId: 'chat-1', targetSessionId: 'conversation-1' }
 
     expect(Object.isFrozen(api)).toBe(true)
     expect(Object.isFrozen(api.chats)).toBe(true)
     await api.chats.list()
     await api.chats.create(create)
     await api.chats.get('chat-1')
+    await api.chats.listConversationSessions('chat-1')
+    await api.chats.createConversationSession(createConversation)
+    await api.chats.switchConversationSession(switchConversation)
     await api.chats.resolveSession({ sessionId: 's1' })
     await api.chats.setMode(mode)
     await api.chats.remove(remove)
@@ -35,14 +40,17 @@ describe('chat preload API', () => {
     expect(ipc.invoke).toHaveBeenNthCalledWith(1, 'chats:list')
     expect(ipc.invoke).toHaveBeenNthCalledWith(2, 'chats:create', create)
     expect(ipc.invoke).toHaveBeenNthCalledWith(3, 'chats:get', 'chat-1')
-    expect(ipc.invoke).toHaveBeenNthCalledWith(4, 'chats:resolve-session', { sessionId: 's1' })
-    expect(ipc.invoke).toHaveBeenNthCalledWith(5, 'chats:set-mode', mode)
-    expect(ipc.invoke).toHaveBeenNthCalledWith(6, 'chats:remove', remove)
-    expect(ipc.invoke).toHaveBeenNthCalledWith(7, 'chats:update-title', rename)
-    expect(ipc.invoke).toHaveBeenNthCalledWith(8, 'chats:pin', pin)
-    expect(ipc.invoke).toHaveBeenNthCalledWith(9, 'chats:unpin', pin)
-    expect(ipc.invoke).toHaveBeenNthCalledWith(10, 'chats:bind-session', bind)
-    expect(ipc.invoke).toHaveBeenNthCalledWith(11, 'chats:transfer-sessions', transfer)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(4, 'chats:conversation-sessions:list', 'chat-1')
+    expect(ipc.invoke).toHaveBeenNthCalledWith(5, 'chats:conversation-sessions:create', createConversation)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(6, 'chats:conversation-sessions:switch', switchConversation)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(7, 'chats:resolve-session', { sessionId: 's1' })
+    expect(ipc.invoke).toHaveBeenNthCalledWith(8, 'chats:set-mode', mode)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(9, 'chats:remove', remove)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(10, 'chats:update-title', rename)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(11, 'chats:pin', pin)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(12, 'chats:unpin', pin)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(13, 'chats:bind-session', bind)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(14, 'chats:transfer-sessions', transfer)
   })
 
   it('unsubscribes the exact listener wrapper registered for chat changes', () => {

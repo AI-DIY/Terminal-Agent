@@ -4,10 +4,12 @@ import {
   chatChangedEventSchema,
   chatBindSessionRequestSchema,
   chatCloseAssociationRequestSchema,
+  chatCreateConversationSessionRequestSchema,
   chatCreateRequestSchema,
   chatPinRequestSchema,
   chatRemoveRequestSchema,
   chatSetModeRequestSchema,
+  chatSwitchConversationSessionRequestSchema,
   chatTransferSessionsRequestSchema,
   type ChatTransferSessionsRequest,
   chatUpdateTitleRequestSchema,
@@ -18,11 +20,14 @@ import {
   type ChatChangedEvent,
   type ChatBindSessionRequest,
   type ChatCloseAssociationRequest,
+  type ChatConversationSessionList,
+  type ChatCreateConversationSessionRequest,
   type ChatCreateRequest,
   type ChatPinRequest,
   type ChatRemoveRequest,
   type ChatSessionResolution,
   type ChatSetModeRequest,
+  type ChatSwitchConversationSessionRequest,
   type ChatUpdateTitleRequest,
   type ChatUnpinRequest,
   type ChatWorkspace,
@@ -34,7 +39,7 @@ import { sanitizeShellHistoryDisplay } from '../shell-history/shell-history-cont
 import { createHash, randomUUID } from 'node:crypto'
 import type { ChatMutation, ChatRepository, ChatTransferMutation, SessionAssociationMetadata } from './chat-repository'
 
-type ChatRepositoryPort = Pick<ChatRepository, 'listSnapshot' | 'get' | 'findRetryMessage' | 'recoverInterruptedStreams' | 'create' | 'appendMessage' | 'updateMessage' | 'updateTitle' | 'pin' | 'unpin' | 'setMode' | 'associateShell' | 'associateOrCreateShell' | 'recordSessionRequest' | 'transferSessions' | 'closeAssociation' | 'closeSession' | 'findOpenSession' | 'findSessionRequest' | 'openSessionIds' | 'remove'>
+type ChatRepositoryPort = Pick<ChatRepository, 'listSnapshot' | 'get' | 'listConversationSessions' | 'findRetryMessage' | 'recoverInterruptedStreams' | 'create' | 'createConversationSession' | 'switchConversationSession' | 'appendMessage' | 'updateMessage' | 'updateTitle' | 'pin' | 'unpin' | 'setMode' | 'associateShell' | 'associateOrCreateShell' | 'recordSessionRequest' | 'transferSessions' | 'closeAssociation' | 'closeSession' | 'findOpenSession' | 'findSessionRequest' | 'openSessionIds' | 'remove'>
 
 export class ChatService {
   private readonly changedListeners = new Set<(event: ChatChangedEvent) => void>()
@@ -64,6 +69,15 @@ export class ChatService {
     }
   }
 
+  async listConversationSessions(chatId: string): Promise<ChatConversationSessionList> {
+    while (true) {
+      await this.waitForMutations()
+      const revision = this.revision
+      const sessions = await this.repository.listConversationSessions(chatId)
+      if (revision === this.revision && this.pendingMutations.size === 0) return { revision, ...sessions }
+    }
+  }
+
   async findRetryMessage(chatId: string, content?: ChatMessageContent): Promise<string | undefined> {
     await this.waitForMutations()
     return this.repository.findRetryMessage(chatId, content)
@@ -78,6 +92,16 @@ export class ChatService {
   async create(request: ChatCreateRequest): Promise<ChatWorkspaceSnapshot> {
     const parsed = chatCreateRequestSchema.parse(request)
     return this.trackMutation(() => this.apply(this.repository.create(parsed), 'created'))
+  }
+
+  async createConversationSession(request: ChatCreateConversationSessionRequest): Promise<ChatWorkspaceSnapshot> {
+    const parsed = chatCreateConversationSessionRequestSchema.parse(request)
+    return this.trackMutation(() => this.apply(this.repository.createConversationSession(parsed), 'updated'))
+  }
+
+  async switchConversationSession(request: ChatSwitchConversationSessionRequest): Promise<ChatWorkspaceSnapshot> {
+    const parsed = chatSwitchConversationSessionRequestSchema.parse(request)
+    return this.trackMutation(() => this.apply(this.repository.switchConversationSession(parsed), 'updated'))
   }
 
   async appendMessage(request: ChatAppendMessageRequest): Promise<ChatWorkspaceSnapshot> {

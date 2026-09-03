@@ -10,6 +10,7 @@ import type { AtomicJsonStoreFileSystem } from '../../../src/main/persistence/at
 function service() {
   const repository = {
     create: vi.fn(), listSnapshot: vi.fn(), get: vi.fn(), setMode: vi.fn(), remove: vi.fn(),
+    listConversationSessions: vi.fn(), createConversationSession: vi.fn(), switchConversationSession: vi.fn(),
     appendMessage: vi.fn(), updateTitle: vi.fn(), pin: vi.fn(), unpin: vi.fn(), associateShell: vi.fn(), associateOrCreateShell: vi.fn(), recordSessionRequest: vi.fn(), transferSessions: vi.fn(), closeAssociation: vi.fn(), closeSession: vi.fn(), findOpenSession: vi.fn(), findSessionRequest: vi.fn(), openSessionIds: vi.fn(), recoverInterruptedStreams: vi.fn(),
   }
   return { repository, service: new ChatService(repository as unknown as ChatRepository) }
@@ -70,6 +71,52 @@ describe('ChatService', () => {
 
     expect(listener).toHaveBeenCalledWith({ revision: 1, kind: 'created', chat: workspace, liveChatId: workspace.id })
     await expect(chatService.list()).resolves.toEqual({ revision: 1, chats: [workspace], liveChatId: workspace.id })
+  })
+
+  it('revision-stamps task-internal conversation lists and publishes same-task restores', async () => {
+    const { repository, service: chatService } = service()
+    const active = {
+      id: 'chat-1', title: '任务', titleState: 'custom' as const, pinnedAt: null,
+      createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.001Z',
+      shellCount: 1, mode: 'copilot' as const, live: true, messages: [], shells: [],
+    }
+    const restored = {
+      ...active,
+      updatedAt: '2026-08-16T08:00:00.002Z',
+      messages: [{
+        id: 'message-1', chatId: active.id, role: 'user' as const, content: '已恢复',
+        createdAt: '2026-08-16T08:00:00.001Z', state: 'complete' as const,
+      }],
+    }
+    const sessions = {
+      chatId: active.id,
+      activeSessionId: 'active-session',
+      sessions: [{
+        id: 'archive-session', label: '会话1', createdAt: active.createdAt,
+        updatedAt: active.updatedAt, archivedAt: active.updatedAt,
+      }],
+    }
+    repository.listConversationSessions.mockResolvedValue(sessions)
+    repository.createConversationSession.mockResolvedValue({ value: active, changed: true, liveChatId: active.id })
+    repository.switchConversationSession.mockResolvedValue({ value: restored, changed: true, liveChatId: active.id })
+    const listener = vi.fn()
+    chatService.onChanged(listener)
+
+    await expect(chatService.listConversationSessions(active.id)).resolves.toEqual({ revision: 0, ...sessions })
+    await expect(chatService.createConversationSession({ requestId: 'conversation-create-1', chatId: active.id }))
+      .resolves.toMatchObject({ revision: 1, chat: { id: active.id, messages: [] }, liveChatId: active.id })
+    await expect(chatService.switchConversationSession({
+      requestId: 'conversation-switch-1', chatId: active.id, targetSessionId: 'archive-session',
+    })).resolves.toMatchObject({ revision: 2, chat: { id: active.id, messages: restored.messages }, liveChatId: active.id })
+
+    expect(repository.createConversationSession).toHaveBeenCalledWith({ requestId: 'conversation-create-1', chatId: active.id })
+    expect(repository.switchConversationSession).toHaveBeenCalledWith({
+      requestId: 'conversation-switch-1', chatId: active.id, targetSessionId: 'archive-session',
+    })
+    expect(listener.mock.calls.map(([event]) => event)).toEqual([
+      { revision: 1, kind: 'updated', chat: active, liveChatId: active.id },
+      { revision: 2, kind: 'updated', chat: restored, liveChatId: active.id },
+    ])
   })
 
   it('retries a workspace read when its result predates the current revision', async () => {

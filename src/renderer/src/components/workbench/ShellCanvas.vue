@@ -5,7 +5,6 @@ import type { ShellHistorySummary } from '../../../../shared/contracts'
 import SessionTabs from '../SessionTabs.vue'
 import TerminalPane from '../TerminalPane.vue'
 import { sessionDisplayLabel, sessionDisplayParts, sessionHasDuplicateHost, sessionLabel, type SessionView } from '../../stores/sessions'
-import { sshHostIdentity } from '../../../../shared/shell-display-label'
 import {
   getLayoutPreferencesStore,
   SHELL_FONT_SIZE_PRESETS,
@@ -14,9 +13,9 @@ import {
 } from '../../stores/layout-preferences'
 
 type HistoryHost = ShellHistorySummary & {
-  /** Optional renderer-only label; the IPC summary remains unchanged. */
+  /** Renderer-only hostname and a connection-start time for disambiguation. */
   displayLabel?: string
-  ordinal?: number
+  connectionTimeLabel?: string
 }
 
 const props = defineProps<{
@@ -68,7 +67,7 @@ const hasOnlineSessions = computed(() => props.currentSessions.length > 0)
 const layoutItemCount = computed(() => hasOnlineSessions.value
   ? orderedCurrentSessions.value.length
   : props.historyHosts.length)
-const historyHostCount = computed(() => new Set(props.historyHosts.map(host => sshHostIdentity({ hostname: host.hostname, displayName: host.title }))).size)
+const historyHostCount = computed(() => new Set(props.historyHosts.map(host => host.hostname)).size)
 const layoutSummary = computed(() => {
   const count = layoutItemCount.value
   const columns = Math.max(1, Math.min(layout.state.columns, count || 1))
@@ -222,22 +221,21 @@ function displayOrdinal(session: SessionView): number | null {
     : null
 }
 
-/**
- * Historical tabs always open the shared read-only history dialog.  They are
- * deliberately not multi-select filters: when an online Shell exists the
- * tab has no active styling, and the playback canvas is mounted only after
- * every online connection for the task has gone away.
- */
+/** Historical tabs always open the shared read-only history dialog. */
 function handleHistoryHostClick(host: HistoryHost): void {
   openHistoricalSessionHistory(host.hostname, host.id)
 }
 
 function historyHostLabel(host: HistoryHost): string {
-  return host.displayLabel ?? host.title
+  return host.hostname
+}
+
+function historyConnectionTimeLabel(host: HistoryHost): string {
+  return host.connectionTimeLabel ?? `连接于 ${host.startedAt}`
 }
 
 function historyHostActionLabel(host: HistoryHost): string {
-  return `打开 SSH 历史 ${historyHostLabel(host)}`
+  return `打开 SSH 历史 ${historyHostLabel(host)}，${historyConnectionTimeLabel(host)}`
 }
 
 watch(
@@ -252,7 +250,6 @@ watch(
     if (!isLive && currentSessionCount === 0 && !historyIds) layoutMenuOpen.value = false
     if (isLive || currentSessionCount === 0) menuHistoryId.value = null
     if (currentSessionCount > 0) activeHistoryId.value = null
-    if (currentSessionCount === 0 && !activeHistoryId.value) activeHistoryId.value = props.historyHosts[0]?.id ?? null
     if (activeHistoryId.value && !props.historyHosts.some(host => host.id === activeHistoryId.value)) activeHistoryId.value = null
   },
 )
@@ -269,17 +266,17 @@ watch(
         @close="closeSession"
         @reorder="emit('reorder', $event)"
       />
-       <div v-else class="history-toolbar-title"><strong>SSH 历史回放</strong><span>{{ historyHostCount }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
+       <div v-else class="history-toolbar-title"><strong>SSH 历史连接</strong><span>{{ historyHostCount }} 台主机 · {{ historyHosts.length }} 条记录</span></div>
       <div class="hostbar-tools">
         <div v-if="isLive" class="shell-title">
           <strong>SSH</strong>
           <span>{{ shellCount }} 个主机 · {{ displayedSessionIds.length }} 个连接</span>
         </div>
-        <span v-else class="history-readonly-note">以下 SSH 已关闭，仅提供只读回放</span>
+        <span v-else class="history-readonly-note">当前任务没有在线 SSH</span>
         <button v-if="isLive" type="button" class="connect-button" @click="emit('connect')"><Plus :size="13" aria-hidden="true" /><span>新建 SSH 连接</span></button>
         <button v-else-if="liveChatAvailable" type="button" class="connect-button" @click="emit('restoreLive')">返回实时任务</button>
         <button
-          v-if="(isLive && currentSessions.length) || (!isLive && historyHosts.length)"
+          v-if="isLive && currentSessions.length"
           type="button"
           class="layout-button"
           aria-label="SSH 窗口布局"
@@ -289,7 +286,7 @@ watch(
         ><LayoutGrid :size="13" aria-hidden="true" /><span>SSH 窗口布局</span></button>
       </div>
     </header>
-    <section v-if="layoutMenuOpen && ((isLive && currentSessions.length) || (!isLive && historyHosts.length))" class="layout-menu" aria-label="SSH 窗口布局设置">
+    <section v-if="layoutMenuOpen && isLive && currentSessions.length" class="layout-menu" aria-label="SSH 窗口布局设置">
       <strong>SSH 窗口布局</strong>
       <label>每行数量
         <select :value="layout.state.columns" @change="updateLayout('columns', $event)">
@@ -317,7 +314,7 @@ watch(
           class="history-session-tab"
           :class="{ active: historyTabActive(host.id), dragging: host.id === draggingHistoryId, 'drag-over': host.id === dragOverHistoryId && host.id !== draggingHistoryId }"
           draggable="true"
-            :title="`拖动排序：${historyHostLabel(host)}`"
+            :title="`拖动排序：${historyHostLabel(host)} · ${historyConnectionTimeLabel(host)}`"
           @dragstart="beginHistoryDrag(host.id, $event)"
           @dragover="trackHistoryDragOver(host.id, $event)"
           @drop="dropHistory(host.id, $event)"
@@ -326,12 +323,13 @@ watch(
           <button
             type="button"
             class="history-shell-tab"
+            :data-history-id="host.id"
             :aria-label="historyHostActionLabel(host)"
             :aria-current="historyTabActive(host.id) ? 'page' : undefined"
             @click="handleHistoryHostClick(host)"
             @contextmenu.prevent="emit('historyMenu', host.id)"
-          ><span class="host-status" aria-hidden="true" /><strong>{{ historyHostLabel(host) }}</strong><small>已关闭</small></button>
-          <section v-if="menuHistoryId === host.id" class="history-context-menu" role="menu" :aria-label="`历史 SSH 操作 ${host.hostname}`">
+          ><span class="host-status" aria-hidden="true" /><strong>{{ historyHostLabel(host) }}</strong><small>已关闭 · {{ historyConnectionTimeLabel(host) }}</small></button>
+          <section v-if="menuHistoryId === host.id" class="history-context-menu" role="menu" :aria-label="`历史 SSH 操作 ${historyHostLabel(host)}，${historyConnectionTimeLabel(host)}`">
             <button
               type="button"
               role="menuitem"
@@ -380,8 +378,7 @@ watch(
         </article>
       </section>
 
-      <section v-if="currentSessions.length === 0 && (!isLive || historyHosts.length > 0)" class="history-slot"><slot name="history" /></section>
-      <section v-else-if="currentSessions.length === 0 && isLive" class="empty-slot"><slot name="empty" /></section>
+      <section v-if="currentSessions.length === 0" class="empty-slot"><slot name="empty" /></section>
     </div>
   </section>
 </template>
@@ -427,19 +424,19 @@ watch(
 .terminal-actions button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); }
 .terminal-actions button:hover,.terminal-actions button:focus-visible { background: var(--hover); color: var(--text-strong); }.terminal-actions .close-terminal:hover { color: var(--red); }
 .terminal-frame :deep(.terminal-pane) { height: 100%; min-height: 0; border: 0; }
-.history-context-menu { position: absolute; z-index: 9; top: 30px; right: auto; left: 0; display: grid; min-width: 154px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
+.history-context-menu { position: absolute; z-index: 9; top: 25px; right: auto; left: 0; display: grid; min-width: 154px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
 .history-context-menu button { min-height: 29px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 11px; text-align: left; }.history-context-menu button:hover,.history-context-menu button:focus-visible { background: var(--surface-soft); outline: 1px solid var(--accent); }.history-context-menu button:disabled { color: var(--muted); cursor: not-allowed; }
-.empty-slot,.history-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
-.history-shell-toolbar { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; min-height: 38px; padding: 4px 9px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 86%, var(--surface)); }
-.history-shell-heading { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }.history-shell-heading strong { color: var(--text-strong); font-size: 10px; }.history-shell-heading span { color: var(--muted); font-size: 9px; }
-.history-session-tabs { display: flex; min-width: 0; min-height: 0; height: 30px; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.empty-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.history-shell-toolbar { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: 32px; padding: 3px 8px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 86%, var(--surface)); }
+.history-shell-heading { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }.history-shell-heading strong { color: var(--text-strong); font-size: 9px; }.history-shell-heading span { color: var(--muted); font-size: 8px; }
+.history-session-tabs { display: flex; min-width: 0; min-height: 0; height: 25px; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }
 .history-session-tabs:hover,.history-session-tabs:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }
 .history-session-tabs::-webkit-scrollbar { width: 0; height: 5px; }.history-session-tabs::-webkit-scrollbar-track { background: transparent; }.history-session-tabs::-webkit-scrollbar-thumb { border: 1px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }.history-session-tabs:hover::-webkit-scrollbar-thumb,.history-session-tabs:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
-.history-session-tab { position: relative; display: flex; box-sizing: border-box; height: 100%; min-height: 0; flex: 0 0 auto; align-items: center; max-width: 245px; border: 1px solid transparent; border-bottom-width: 2px; background: transparent; color: var(--muted); white-space: nowrap; cursor: grab; }
+.history-session-tab { position: relative; display: flex; box-sizing: border-box; height: 100%; min-height: 0; flex: 0 0 auto; align-items: center; max-width: 228px; border: 1px solid transparent; border-bottom-width: 2px; background: transparent; color: var(--muted); white-space: nowrap; cursor: grab; }
 .history-session-tab:hover { background: var(--hover); }.history-session-tab:active { cursor: grabbing; }.history-session-tab.active { border-color: var(--red); background: var(--amber-soft); color: var(--text-strong); }.history-session-tab.dragging { opacity: .48; }.history-session-tab.drag-over { box-shadow: inset 2px 0 0 var(--focus); }
-.history-session-tab > .history-shell-tab { display: flex; min-width: 0; align-items: center; gap: 7px; height: 100%; padding: 0 8px 0 10px; border: 0; background: transparent; color: inherit; font-size: 10px; text-align: left; white-space: nowrap; }
-.history-session-tab > .history-shell-tab:hover,.history-session-tab > .history-shell-tab:focus-visible { outline: 0; }.history-session-tab > .history-shell-tab strong { max-width: 128px; overflow: hidden; color: var(--text-strong); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }.history-session-tab > .history-shell-tab small { color: var(--faint); font-size: 9px; }
-.host-status { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }.history-session-tab.active .host-status { background: var(--accent); }
+.history-session-tab > .history-shell-tab { display: flex; min-width: 0; align-items: center; gap: 5px; height: 100%; padding: 0 6px 0 8px; border: 0; background: transparent; color: inherit; font-size: 9px; text-align: left; white-space: nowrap; }
+.history-session-tab > .history-shell-tab:hover,.history-session-tab > .history-shell-tab:focus-visible { outline: 0; }.history-session-tab > .history-shell-tab strong { max-width: 112px; overflow: hidden; color: var(--text-strong); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }.history-session-tab > .history-shell-tab small { color: var(--faint); font-size: 8px; }
+.host-status { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }.history-session-tab.active .host-status { background: var(--accent); }
 @media (max-width: 1180px) {
   .shell-title { display: none; }
   .history-shell-heading span { display: none; }

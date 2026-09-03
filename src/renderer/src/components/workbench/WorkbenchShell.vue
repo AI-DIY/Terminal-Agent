@@ -85,7 +85,8 @@ onBeforeUnmount(widthSaver.flush)
   <main class="workbench-shell" :class="`theme-${layout.state.theme}`" :style="shellStyle">
     <header class="app-header" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
       <div class="brand"><span class="brand-mark" aria-hidden="true">TA</span><strong>Terminal-Agent</strong><span class="app-version">v{{ currentVersion || '—' }}</span></div>
-      <div class="current-chat"><span class="welcome-copy">欢迎回来，<b>{{ welcomeName }}</b></span><span class="welcome-divider" aria-hidden="true">·</span><span class="task-copy">当前任务&nbsp; / &nbsp;<b>{{ currentChatTitle }}</b><em>{{ currentChatShellCount }} 个 SSH</em></span></div>
+      <div class="current-chat"><span class="task-copy">当前任务&nbsp; / &nbsp;<b>{{ currentChatTitle }}</b><em>{{ currentChatShellCount }} 个 SSH</em></span></div>
+      <div class="header-welcome">欢迎回来，<b>{{ welcomeName }}</b></div>
       <div class="app-header-actions"><slot name="app-actions" /></div>
     </header>
     <section class="workspace" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
@@ -134,13 +135,10 @@ onBeforeUnmount(widthSaver.flush)
 .brand { display: flex; align-items: center; gap: 9px; min-width: 176px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; font-weight: 700; }.app-version { align-self: flex-end; margin: 0 0 8px -4px; color: var(--faint); font-size: 9px; font-weight: 600; letter-spacing: .02em; }.brand-mark { display: grid; place-items: center; box-sizing: border-box; width: 28px; height: 28px; border: 1px solid #535e6a; border-radius: 0; background: #1d242c; color: #fff; font-size: 10px; font-weight: 800; }
 .current-chat { display: flex; align-items: center; min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .current-chat b { color: var(--text-strong); font-size: 11px; font-weight: 680; }
-.current-chat > span { margin-left: 9px; color: var(--faint); }
-.current-chat .welcome-copy { flex: 0 0 auto; margin-left: 0; color: var(--muted); }
-.current-chat .welcome-copy b { color: var(--accent); font-size: 10px; }
-.current-chat .welcome-divider { flex: 0 0 auto; color: var(--line); }
-.current-chat > .welcome-copy + .welcome-divider { margin-left: 8px; }
 .current-chat .task-copy { min-width: 0; overflow: hidden; margin-left: 0; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .current-chat .task-copy em { margin-left: 9px; color: var(--faint); font-style: normal; }
+.header-welcome { flex: 0 0 auto; margin-right: 12px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.header-welcome b { color: var(--accent); font-size: 10px; }
 .app-header-actions { display: flex; align-items: center; gap: 6px; min-width: 0; -webkit-app-region: no-drag; }
 .app-header-actions :deep(*) { -webkit-app-region: no-drag; }
 .workspace { display: grid; grid-template-columns: var(--left-width) 3px minmax(450px, 1fr) 3px var(--right-width); min-width: 0; min-height: 0; overflow: hidden; }
@@ -160,9 +158,9 @@ onBeforeUnmount(widthSaver.flush)
 @media (max-width: 1000px) {
   .workspace { grid-template-columns: min(var(--left-width), 170px) 3px minmax(320px, 1fr) 3px min(var(--right-width), 300px); }
   .brand { min-width: 150px; }
-  /* Keep the new greeting visible in compact windows; only the verbose task
-     summary needs to yield space to the header action buttons. */
-  .current-chat .task-copy,.current-chat .welcome-divider { display: none; }
+  /* Keep the greeting visible in compact windows while the task slot yields
+     its space to the header action buttons. */
+  .current-chat .task-copy { display: none; }
 }
 @media (max-width: 1080px) {
   .app-header-actions :deep(.header-button) { width: 30px; min-width: 30px; padding: 0; justify-content: center; }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { terminalAgentNamespace } from '../../../src/preload/api'
-import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema, chatAppendMessageRequestSchema, chatAssociateShellRequestSchema, chatBindSessionRequestSchema, chatChangedEventSchema, chatCloseAssociationRequestSchema, chatCreateRequestSchema, chatListSnapshotSchema, chatMessageRecordSchema, chatPinRequestSchema, chatRemoveRequestSchema, chatRunRequestSchema, chatRuntimeEventSchema, chatSetModeRequestSchema, chatShellAssociationSchema, chatSummarySchema, chatTimestampSchema, chatUnpinRequestSchema, chatUpdateMessageRequestSchema, chatUpdateTitleRequestSchema } from '../../../src/shared/contracts'
+import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema, chatAppendMessageRequestSchema, chatAssociateShellRequestSchema, chatBindSessionRequestSchema, chatChangedEventSchema, chatCloseAssociationRequestSchema, chatCreateConversationSessionRequestSchema, chatCreateRequestSchema, chatConversationSessionListSchema, chatListSnapshotSchema, chatMessageRecordSchema, chatPinRequestSchema, chatRemoveRequestSchema, chatRunRequestSchema, chatRuntimeEventSchema, chatSetModeRequestSchema, chatShellAssociationSchema, chatSummarySchema, chatSwitchConversationSessionRequestSchema, chatTimestampSchema, chatUnpinRequestSchema, chatUpdateMessageRequestSchema, chatUpdateTitleRequestSchema } from '../../../src/shared/contracts'
 
 const { exposeInMainWorld } = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn()
@@ -288,6 +288,42 @@ describe('durable chat navigation contracts', () => {
     expect(() => chatBindSessionRequestSchema.parse({
       requestId: 'bind-1', chatId: 'chat-1', sessionId: 's1', hostname: 'forged',
     })).toThrow()
+  })
+
+  it('exposes only archived AI conversations and an explicit active conversation id', () => {
+    const archived = {
+      id: 'conversation-1',
+      label: '会话1',
+      createdAt: '2026-08-16T08:00:00.000Z',
+      updatedAt: '2026-08-16T08:01:00.000Z',
+      archivedAt: '2026-08-16T08:02:00.000Z',
+    }
+    const response = {
+      revision: 4,
+      chatId: 'chat-1',
+      activeSessionId: 'conversation-active',
+      sessions: [archived],
+    }
+    expect(chatConversationSessionListSchema.parse(response)).toEqual(response)
+    expect(() => chatConversationSessionListSchema.parse({
+      ...response,
+      sessions: [...response.sessions, { ...archived, id: 'conversation-active' }],
+    })).toThrow()
+    expect(() => chatConversationSessionListSchema.parse({
+      ...response,
+      sessions: [...response.sessions, { ...archived }],
+    })).toThrow()
+    expect(() => chatConversationSessionListSchema.parse({ ...response, privateKey: 'secret' })).toThrow()
+  })
+
+  it('accepts only opaque task and conversation identifiers for AI-session mutations', () => {
+    const create = { requestId: 'conversation-create-1', chatId: 'chat-1' }
+    const switchSession = { requestId: 'conversation-switch-1', chatId: 'chat-1', targetSessionId: 'conversation-1' }
+    expect(chatCreateConversationSessionRequestSchema.parse(create)).toEqual(create)
+    expect(chatSwitchConversationSessionRequestSchema.parse(switchSession)).toEqual(switchSession)
+    expect(() => chatCreateConversationSessionRequestSchema.parse({ ...create, title: '会话1' })).toThrow()
+    expect(() => chatSwitchConversationSessionRequestSchema.parse({ ...switchSession, messages: [] })).toThrow()
+    expect(() => chatSwitchConversationSessionRequestSchema.parse({ requestId: 'conversation-switch-1', chatId: 'chat-1' })).toThrow()
   })
 
   it('accepts an atomic fallback target while rejecting duplicate sessions and self-transfer', async () => {

@@ -18,10 +18,21 @@ export const persistedChatSchema = z.object({
   updatedAt: chatTimestampSchema,
   mode: sessionModeSchema,
   deletedAt: chatTimestampSchema.optional(),
+  /**
+   * The task's currently visible AI conversation.  These fields are optional
+   * so existing version-two task documents keep their original meaning: their
+   * chat id is also the active conversation id.
+   */
+  activeConversationSessionId: chatIdentifierSchema.optional(),
+  activeConversationSessionCreatedAt: chatTimestampSchema.optional(),
+  /** The next monotonically assigned backup label number for this task. */
+  nextConversationSessionOrdinal: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
 }).strict()
 
 export const persistedMessageSchema = chatMessageRecordSchema.extend({
   requestId: chatRequestIdSchema,
+  /** Absent on legacy messages, which belong to their chat id's conversation. */
+  conversationSessionId: chatIdentifierSchema.optional(),
 }).strict()
 
 export const persistedAssociationSchema = chatShellAssociationSchema.extend({
@@ -29,9 +40,33 @@ export const persistedAssociationSchema = chatShellAssociationSchema.extend({
   closeRequestId: chatRequestIdSchema.optional(),
 }).strict()
 
+const persistedConversationSessionLabelSchema = z.string().trim().min(1).max(255)
+  .regex(/^会话[1-9]\d*$/)
+  .refine(label => Number.isSafeInteger(Number(label.slice(2))), 'Conversation session label is out of range')
+
+/**
+ * An archived, task-internal AI conversation.  Shell associations deliberately
+ * remain task-level data and are not copied or moved when this record changes.
+ */
+export const persistedConversationSessionSchema = z.object({
+  id: chatIdentifierSchema,
+  chatId: chatIdentifierSchema,
+  label: persistedConversationSessionLabelSchema,
+  createdAt: chatTimestampSchema,
+  updatedAt: chatTimestampSchema,
+  archivedAt: chatTimestampSchema,
+}).strict().superRefine((session, context) => {
+  if (Date.parse(session.updatedAt) < Date.parse(session.createdAt)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['updatedAt'], message: 'conversation session updatedAt precedes createdAt' })
+  }
+  if (Date.parse(session.archivedAt) < Date.parse(session.updatedAt)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['archivedAt'], message: 'conversation session archivedAt precedes updatedAt' })
+  }
+})
+
 export const chatOperationSchema = z.object({
   requestId: chatRequestIdSchema,
-  kind: z.enum(['create', 'appendMessage', 'updateMessage', 'updateTitle', 'setMode', 'associateShell', 'bindSession', 'closeAssociation', 'pin', 'unpin', 'remove']),
+  kind: z.enum(['create', 'appendMessage', 'updateMessage', 'updateTitle', 'setMode', 'associateShell', 'bindSession', 'closeAssociation', 'createConversationSession', 'switchConversationSession', 'pin', 'unpin', 'remove']),
   chatId: chatIdentifierSchema,
   fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
   appliedAt: chatTimestampSchema,
@@ -52,17 +87,25 @@ export const chatDocumentSchema = z.object({
   chats: z.array(persistedChatSchema),
   messages: z.array(persistedMessageSchema),
   associations: z.array(persistedAssociationSchema),
+  /** Optional for version-two documents written before inner conversations. */
+  conversationSessions: z.array(persistedConversationSessionSchema).optional(),
   operations: z.array(chatOperationSchema),
 }).strict().superRefine((document, context) => {
   requireUnique(document.chats, chat => chat.id, ['chats'], 'chat id', context)
   requireUnique(document.messages, message => message.id, ['messages'], 'message id', context)
   requireUnique(document.associations, association => association.id, ['associations'], 'association id', context)
+  const conversationSessions = document.conversationSessions ?? []
+  requireUnique(conversationSessions, session => session.id, ['conversationSessions'], 'conversation session id', context)
   requireUnique(document.operations, operation => operation.requestId, ['operations'], 'operation requestId', context)
 
   const chatsById = new Map(document.chats.map((chat, index) => [chat.id, { chat, index }]))
   const messagesById = new Map(document.messages.map((message, index) => [message.id, { message, index }]))
   const associationsById = new Map(document.associations.map((association, index) => [association.id, { association, index }]))
   const operationsByRequestId = new Map(document.operations.map((operation, index) => [operation.requestId, { operation, index }]))
+  const archivedConversationIdsByChat = new Map<string, Set<string>>()
+  const archivedConversationLabelsByChat = new Map<string, Set<string>>()
+  const maximumConversationOrdinalByChat = new Map<string, number>()
+  const conversationIdsWithMessagesByChat = new Map<string, Set<string>>()
   const appendOperationsByMessageId = new Map<string, ChatOperation>()
   for (const operation of document.operations) {
     if (operation.kind === 'appendMessage' && operation.resultId) appendOperationsByMessageId.set(operation.resultId, operation)
@@ -75,6 +118,39 @@ export const chatDocumentSchema = z.object({
     }
   }
 
+  for (const [index, session] of conversationSessions.entries()) {
+    const chatEntry = chatsById.get(session.chatId)
+    if (!chatEntry) {
+      addIssue(context, ['conversationSessions', index, 'chatId'], 'conversation session references a missing chat')
+      continue
+    }
+    if (chatEntry.chat.deletedAt) {
+      addIssue(context, ['conversationSessions', index, 'chatId'], 'conversation session cannot reference a deleted chat')
+      continue
+    }
+    requireTimeOrder(chatEntry.chat.createdAt, session.createdAt, ['conversationSessions', index, 'createdAt'], 'conversation session createdAt precedes chat createdAt', context)
+    requireTimeOrder(session.createdAt, session.updatedAt, ['conversationSessions', index, 'updatedAt'], 'conversation session updatedAt precedes createdAt', context)
+    requireTimeOrder(session.updatedAt, session.archivedAt, ['conversationSessions', index, 'archivedAt'], 'conversation session archivedAt precedes updatedAt', context)
+    requireTimeOrder(session.archivedAt, chatEntry.chat.updatedAt, ['conversationSessions', index, 'archivedAt'], 'conversation session archivedAt follows chat updatedAt', context)
+
+    const ids = archivedConversationIdsByChat.get(session.chatId) ?? new Set<string>()
+    ids.add(session.id)
+    archivedConversationIdsByChat.set(session.chatId, ids)
+
+    const labels = archivedConversationLabelsByChat.get(session.chatId) ?? new Set<string>()
+    if (labels.has(session.label)) {
+      addIssue(context, ['conversationSessions', index, 'label'], 'conversation session labels must be unique within a chat')
+    }
+    labels.add(session.label)
+    archivedConversationLabelsByChat.set(session.chatId, labels)
+
+    const ordinal = conversationSessionOrdinal(session.label)
+    maximumConversationOrdinalByChat.set(
+      session.chatId,
+      Math.max(maximumConversationOrdinalByChat.get(session.chatId) ?? 0, ordinal),
+    )
+  }
+
   for (const [index, chat] of document.chats.entries()) {
     requireTimeOrder(chat.createdAt, chat.updatedAt, ['chats', index, 'updatedAt'], 'chat updatedAt precedes createdAt', context)
     if (chat.deletedAt) {
@@ -82,6 +158,25 @@ export const chatDocumentSchema = z.object({
       if (chat.title !== '已删除任务') addIssue(context, ['chats', index, 'title'], 'deleted chat must use the safe tombstone title')
       if (chat.titleState !== 'custom') addIssue(context, ['chats', index, 'titleState'], 'deleted chat must use the custom title state')
       if (chat.pinnedAt !== null) addIssue(context, ['chats', index, 'pinnedAt'], 'deleted chat cannot remain pinned')
+      if (chat.activeConversationSessionId !== undefined) addIssue(context, ['chats', index, 'activeConversationSessionId'], 'deleted chat cannot retain an active conversation session')
+      if (chat.activeConversationSessionCreatedAt !== undefined) addIssue(context, ['chats', index, 'activeConversationSessionCreatedAt'], 'deleted chat cannot retain an active conversation session timestamp')
+      if (chat.nextConversationSessionOrdinal !== undefined) addIssue(context, ['chats', index, 'nextConversationSessionOrdinal'], 'deleted chat cannot retain conversation session numbering')
+      continue
+    }
+
+    if ((chat.activeConversationSessionId === undefined) !== (chat.activeConversationSessionCreatedAt === undefined)) {
+      addIssue(context, ['chats', index], 'active conversation session id and createdAt must be stored together')
+    }
+    const activeConversationId = activeConversationSessionId(chat)
+    const activeConversationCreatedAt = activeConversationSessionCreatedAt(chat)
+    requireTimeOrder(chat.createdAt, activeConversationCreatedAt, ['chats', index, 'activeConversationSessionCreatedAt'], 'active conversation createdAt precedes chat createdAt', context)
+    requireTimeOrder(activeConversationCreatedAt, chat.updatedAt, ['chats', index, 'activeConversationSessionCreatedAt'], 'active conversation createdAt follows chat updatedAt', context)
+    if (archivedConversationIdsByChat.get(chat.id)?.has(activeConversationId)) {
+      addIssue(context, ['chats', index, 'activeConversationSessionId'], 'active conversation cannot also be archived')
+    }
+    const maximumOrdinal = maximumConversationOrdinalByChat.get(chat.id) ?? 0
+    if (chat.nextConversationSessionOrdinal !== undefined && chat.nextConversationSessionOrdinal <= maximumOrdinal) {
+      addIssue(context, ['chats', index, 'nextConversationSessionOrdinal'], 'conversation session numbering must advance beyond archived labels')
     }
   }
   for (const [index, message] of document.messages.entries()) {
@@ -93,6 +188,14 @@ export const chatDocumentSchema = z.object({
     } else {
       requireTimeOrder(chatEntry.chat.createdAt, message.createdAt, ['messages', index, 'createdAt'], 'message createdAt precedes chat createdAt', context)
       requireTimeOrder(message.createdAt, chatEntry.chat.updatedAt, ['messages', index, 'createdAt'], 'message createdAt follows chat updatedAt', context)
+      const sessionId = message.conversationSessionId ?? message.chatId
+      const activeConversationId = activeConversationSessionId(chatEntry.chat)
+      if (sessionId !== activeConversationId && !archivedConversationIdsByChat.get(message.chatId)?.has(sessionId)) {
+        addIssue(context, ['messages', index, 'conversationSessionId'], 'message references an unknown conversation session')
+      }
+      const sessionIds = conversationIdsWithMessagesByChat.get(message.chatId) ?? new Set<string>()
+      sessionIds.add(sessionId)
+      conversationIdsWithMessagesByChat.set(message.chatId, sessionIds)
     }
 
     const operationEntry = operationsByRequestId.get(message.requestId)
@@ -103,6 +206,11 @@ export const chatDocumentSchema = z.object({
       if (operation.kind !== 'appendMessage') addIssue(context, ['messages', index, 'requestId'], 'message operation must be appendMessage')
       if (operation.chatId !== message.chatId) addIssue(context, ['messages', index, 'chatId'], 'message operation references another chat')
       if (operation.resultId !== message.id) addIssue(context, ['messages', index, 'id'], 'message operation resultId must match the message id')
+    }
+  }
+  for (const [index, session] of conversationSessions.entries()) {
+    if (!conversationIdsWithMessagesByChat.get(session.chatId)?.has(session.id)) {
+      addIssue(context, ['conversationSessions', index], 'archived conversation session must contain at least one message')
     }
   }
   for (const [index, association] of document.associations.entries()) {
@@ -376,13 +484,14 @@ function addIssue(context: z.RefinementCtx, path: PropertyKey[], message: string
 export type PersistedChat = z.infer<typeof persistedChatSchema>
 export type PersistedMessage = z.infer<typeof persistedMessageSchema>
 export type PersistedAssociation = z.infer<typeof persistedAssociationSchema>
+export type PersistedConversationSession = z.infer<typeof persistedConversationSessionSchema>
 export type ChatOperation = z.infer<typeof chatOperationSchema>
 export type ChatDocument = z.infer<typeof chatDocumentSchema>
 
 export const incompatibleChatDocumentVersionMessage = '任务数据版本不兼容，请清空旧任务数据后重试。'
 
 export function emptyChatDocument(): ChatDocument {
-  return { version: 2, liveChatId: null, chats: [], messages: [], associations: [], operations: [] }
+  return { version: 2, liveChatId: null, chats: [], messages: [], associations: [], conversationSessions: [], operations: [] }
 }
 
 export function guardChatDocumentVersion(persisted: unknown): { value: unknown; changed: boolean } {
@@ -400,6 +509,23 @@ function systemTaskTitle(state: 'new' | 'started', createdAt: string): string {
   const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? ''
   const prefix = state === 'new' ? '新建任务' : '任务'
   return `${prefix} ${value('year')}-${value('month')}-${value('day')} ${value('hour')}:${value('minute')}:${value('second')}`
+}
+
+/**
+ * Pre-inner-session version-two documents deliberately fall back to their
+ * task id.  Keeping this rule in one place avoids rewriting old messages just
+ * to make them part of their original conversation.
+ */
+export function activeConversationSessionId(chat: PersistedChat): string {
+  return chat.activeConversationSessionId ?? chat.id
+}
+
+export function activeConversationSessionCreatedAt(chat: PersistedChat): string {
+  return chat.activeConversationSessionCreatedAt ?? chat.createdAt
+}
+
+export function conversationSessionOrdinal(label: string): number {
+  return Number(label.slice('会话'.length))
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

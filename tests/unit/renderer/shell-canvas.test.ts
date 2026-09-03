@@ -32,7 +32,9 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(view).toContain('@history-menu="openHistoricalShellMenu"')
     expect(view).toContain('async function openHistoricalShellMenu(historyId: string): Promise<void>')
     expect(view).toContain('shellCanvas.value?.openHistoryMenu(historyId)')
-    expect(openHistory.indexOf('await shellHistory.open({ chatId')).toBeLessThan(openHistory.indexOf('showHistoryDialog.value = true'))
+    expect(openHistory.indexOf('showHistoryDialog.value = true')).toBeLessThan(openHistory.indexOf('await shellHistory.open({ chatId'))
+    expect(openHistory.indexOf('await shellHistory.open({ chatId')).toBeLessThan(openHistory.indexOf('void shellHistory.select(historyId)'))
+    expect(openHistory).toContain('historyDialogRequestGeneration')
   })
 
   it('renders history as independently ordered tabs rather than a multi-select filter', () => {
@@ -53,16 +55,16 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(canvas.match(/class="layout-menu"/g)?.length).toBe(1)
     expect(view).toContain('function reorderHistory(historyIds: string[]): void')
     expect(view).toContain('@reorder-history="reorderHistory"')
-    expect(view).toContain('historyPlaybackRecords = computed(() => historyHosts.value)')
-    expect(view).toContain(':style="historyGridStyle"')
+    expect(view).not.toContain('historyPlaybackRecords')
+    expect(view).not.toContain('history-shell-card')
   })
 
-  it('labels historical-only tasks as closed read-only playback instead of live SSH activity', () => {
+  it('labels history without presenting it as the active SSH workspace', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
 
-    expect(canvas).toContain('SSH 历史回放')
+    expect(canvas).toContain('SSH 历史连接')
     expect(canvas).toContain('{{ historyHostCount }} 台主机')
-    expect(canvas).toContain('以下 SSH 已关闭，仅提供只读回放')
+    expect(canvas).toContain('当前任务没有在线 SSH')
     expect(canvas).toContain('v-if="isLive" class="shell-title"')
   })
 
@@ -76,15 +78,35 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(canvas).toContain("emit('history', hostname, historyId)")
     expect(canvas).toContain('openHistoricalSessionHistory(host.hostname, host.id)')
     expect(view).toContain('async function openShellHistory(hostname?: string, historyId?: string): Promise<void>')
-    expect(view).toContain('await shellHistory.select(historyId)')
+    expect(view).toContain('void shellHistory.select(historyId)')
     expect(view).toContain(':records="historyDialogRecords"')
-    expect(canvas).toContain('v-if="currentSessions.length === 0 && (!isLive || historyHosts.length > 0)"')
+    expect(canvas).toContain('v-if="currentSessions.length === 0" class="empty-slot"')
+    expect(canvas).not.toContain('class="history-slot"')
     expect(canvas).toContain('v-show="currentSessions.length > 0"')
     expect(canvas).toContain(':aria-label="historyHostActionLabel(host)"')
     expect(view).toContain('@history="openShellHistory"')
     expect(view).toContain(':font-size="layoutPreferences.state.fontSize"')
     expect(dialog).toContain('aria-label="Shell 历史"')
-    expect(dialog).toContain('record.displayLabel ?? record.title')
+    expect(dialog).toContain('record.hostname')
+    expect(dialog).toContain('historyConnectionTimeLabel(record)')
+  })
+
+  it('uses the hostname as a history title, uses connection start time to distinguish records, and compacts the strip', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+    const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
+    const dialog = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellHistoryDialog.vue', import.meta.url), 'utf8')
+
+    expect(view).toContain('displayLabel: record.hostname')
+    expect(view).toContain('connectionTimeLabel: formatHistoryConnectionTime(record.startedAt)')
+    expect(view).not.toContain('sshHostnameDisplayLabels')
+    expect(canvas).toContain('return host.hostname')
+    expect(canvas).toContain('historyConnectionTimeLabel(host)')
+    expect(dialog).toContain('record.startedAt')
+    expect(dialog).not.toContain('record.displayLabel ?? record.title')
+    expect(canvas).toContain('min-height: 32px')
+    expect(canvas).toContain('height: 25px')
+    expect(canvas).toContain('font-size: 10px')
+    expect(canvas).toContain('font-size: 8px')
   })
 
   it('vertically centers the closed-Shell history title and summary in their toolbar', () => {

@@ -6,6 +6,106 @@ import {
 } from '../../../src/renderer/src/stores/shell-history'
 
 describe('renderer Shell history', () => {
+  it('opens after the history list arrives while loading the initial detail and host prefetches in the background', async () => {
+    const initialDetail = deferred<ReturnType<typeof historyDetail>>()
+    const secondaryDetail = deferred<ReturnType<typeof historyDetail>>()
+    const api = createHistoryApi()
+    api.list.mockResolvedValueOnce([
+      summary({ id: 'history-newest', hostname: 'web-01', endedAt: '2026-08-16T08:02:00.000Z' }),
+      summary({ id: 'history-db', hostname: 'db-01', endedAt: '2026-08-16T08:01:00.000Z' }),
+    ])
+    api.get.mockImplementation((historyId: string) => (
+      historyId === 'history-newest' ? initialDetail.promise : secondaryDetail.promise
+    ))
+    const store = createShellHistoryStore(api)
+
+    await store.open({ chatId: 'chat-history' })
+
+    expect(store.state.records.map(record => record.id)).toEqual(['history-newest', 'history-db'])
+    expect(store.state.selected).toBeNull()
+    expect(store.state.loading).toBe(true)
+    expect(api.get).toHaveBeenCalledWith('history-newest')
+    expect(api.get).toHaveBeenCalledWith('history-db')
+
+    initialDetail.resolve(historyDetail('history-newest', 'web-01'))
+    await vi.waitFor(() => {
+      expect(store.state.selected).toEqual(expect.objectContaining({ id: 'history-newest' }))
+      expect(store.state.loading).toBe(false)
+    })
+
+    secondaryDetail.resolve(historyDetail('history-db', 'db-01'))
+    await vi.waitFor(() => {
+      expect(store.state.details['history-db']).toEqual(expect.objectContaining({ id: 'history-db' }))
+    })
+  })
+
+  it('clears a prior host projection while the next dialog list is loading', async () => {
+    const nextList = deferred<ReturnType<typeof summary>[]>()
+    const api = createHistoryApi()
+    const store = createShellHistoryStore(api)
+    await store.open({ chatId: 'chat-history' })
+    await vi.waitFor(() => expect(store.state.records).not.toHaveLength(0))
+    api.list.mockImplementationOnce(() => nextList.promise)
+
+    const opening = store.open({ chatId: 'chat-history', hostname: 'db-01' })
+
+    expect(store.state.loading).toBe(true)
+    expect(store.state.records).toEqual([])
+    expect(store.state.selected).toBeNull()
+
+    nextList.resolve([summary({ id: 'history-db', hostname: 'db-01', endedAt: '2026-08-16T08:03:00.000Z' })])
+    await opening
+    await vi.waitFor(() => {
+      expect(store.state.records.map(record => record.id)).toEqual(['history-db'])
+    })
+  })
+
+  it('ignores a stale initial-detail response after the user selects another history record', async () => {
+    const initialDetail = deferred<ReturnType<typeof historyDetail>>()
+    const selectedDetail = deferred<ReturnType<typeof historyDetail>>()
+    const api = createHistoryApi()
+    api.get.mockImplementation((historyId: string) => {
+      if (historyId === 'history-newest') return initialDetail.promise
+      if (historyId === 'history-old') return selectedDetail.promise
+      throw new Error(`Unexpected history detail request: ${historyId}`)
+    })
+    const store = createShellHistoryStore(api)
+
+    await store.open({ chatId: 'chat-history' })
+    const selecting = store.select('history-old')
+    initialDetail.resolve(historyDetail('history-newest', 'web-01'))
+    selectedDetail.resolve(historyDetail('history-old', 'web-01'))
+    await selecting
+
+    expect(store.state.selected).toEqual(expect.objectContaining({ id: 'history-old' }))
+    expect(store.state.details['history-newest']).toBeUndefined()
+  })
+
+  it('contains a background-prefetch failure in the active history view', async () => {
+    const initialDetail = deferred<ReturnType<typeof historyDetail>>()
+    const api = createHistoryApi()
+    api.list.mockResolvedValueOnce([
+      summary({ id: 'history-newest', hostname: 'web-01', endedAt: '2026-08-16T08:02:00.000Z' }),
+      summary({ id: 'history-db', hostname: 'db-01', endedAt: '2026-08-16T08:01:00.000Z' }),
+    ])
+    api.get.mockImplementation((historyId: string) => {
+      if (historyId === 'history-newest') return initialDetail.promise
+      return Promise.reject(new Error('无法预热历史详情。'))
+    })
+    const store = createShellHistoryStore(api)
+
+    await store.open({ chatId: 'chat-history' })
+    await vi.waitFor(() => {
+      expect(store.state.error).toBe('无法预热历史详情。')
+    })
+
+    initialDetail.resolve(historyDetail('history-newest', 'web-01'))
+    await vi.waitFor(() => {
+      expect(store.state.selected).toEqual(expect.objectContaining({ id: 'history-newest' }))
+      expect(store.state.loading).toBe(false)
+    })
+  })
+
   it('opens the first safe history record and keeps the terminal playback read-only', async () => {
     const api = createHistoryApi()
     const store = createShellHistoryStore(api)
@@ -141,6 +241,19 @@ function createHistoryApi() {
     })),
     duplicate: vi.fn().mockResolvedValue({ id: 'session-copy', hostname: 'web-01', mode: 'copilot' }),
     reconnect: vi.fn().mockResolvedValue({ id: 'session-reconnected', hostname: 'web-01', mode: 'copilot', chatId: 'chat-history' }),
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(promiseResolve => { resolve = promiseResolve })
+  return { promise, resolve }
+}
+
+function historyDetail(id: string, hostname: string) {
+  return {
+    ...summary({ id, hostname, endedAt: '2026-08-16T08:02:00.000Z' }),
+    output: `${hostname} safe output`,
   }
 }
 
