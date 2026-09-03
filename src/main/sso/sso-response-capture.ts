@@ -43,6 +43,7 @@ export class SsoResponseCapture {
   private readiness: Promise<void> | undefined
   private resolveReadiness: (() => void) | undefined
   private rejectReadiness: ((reason: Error) => void) | undefined
+  private readinessSettled = false
   private resolveResult: ((identity: SsoIdentity) => void) | undefined
   private rejectResult: ((reason: Error) => void) | undefined
 
@@ -110,10 +111,10 @@ export class SsoResponseCapture {
   private async enableNetwork(): Promise<void> {
     try {
       await this.debugger.send('Network.enable')
-      this.resolveReadiness?.()
+      this.settleReadiness()
     } catch {
       const error = new Error('Unable to start SSO sign-in')
-      this.rejectReadiness?.(error)
+      this.settleReadiness(error)
       await this.fail(error.message)
     }
   }
@@ -192,12 +193,14 @@ export class SsoResponseCapture {
 
   private async succeed(identity: SsoIdentity): Promise<void> {
     if (!this.active) return
+    this.settleReadiness()
     await this.cleanup()
     this.resolveResult?.(identity)
   }
 
   private async fail(message: string): Promise<void> {
     if (!this.active) return
+    this.settleReadiness(new Error(message))
     await this.cleanup()
     this.rejectResult?.(new Error(message))
   }
@@ -225,6 +228,16 @@ export class SsoResponseCapture {
     } catch {
       // A detached debugger needs no further action.
     }
+  }
+
+  private settleReadiness(error?: Error): void {
+    if (this.readinessSettled) return
+    this.readinessSettled = true
+    if (error) {
+      this.rejectReadiness?.(error)
+      return
+    }
+    this.resolveReadiness?.()
   }
 }
 

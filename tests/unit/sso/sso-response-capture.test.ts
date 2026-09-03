@@ -231,4 +231,49 @@ describe('SsoResponseCapture', () => {
     await expect(result).rejects.toThrow('SSO sign-in cancelled')
     await capture.dispose()
   })
+
+  it('rejects readiness when debugger attach fails', async () => {
+    const window = new FakeAuthWindow()
+    window.debugger.attach.mockImplementation(() => { throw new Error('raw attach details') })
+    const capture = new SsoResponseCapture(window, completeConfig())
+    capture.start()
+    await expect(capture.ready()).rejects.toThrow('Unable to start SSO sign-in')
+  })
+
+  it('rejects readiness promptly on disposal while enable is unresolved and ignores late enable completion', async () => {
+    let releaseEnable: (() => void) | undefined
+    const enableDone = new Promise<void>(resolve => { releaseEnable = resolve })
+    const window = new FakeAuthWindow()
+    window.debugger.send.mockImplementation(async (command: string, parameters?: { requestId?: string }) => {
+      if (command === 'Network.enable') await enableDone
+      if (command === 'Network.getResponseBody') return window.debugger.bodies.get(parameters?.requestId ?? '')
+      return undefined
+    })
+    const capture = new SsoResponseCapture(window, completeConfig())
+    capture.start()
+    const readiness = expect(capture.ready()).rejects.toThrow('SSO sign-in cancelled')
+    await capture.dispose()
+    await readiness
+    releaseEnable?.()
+    await flush()
+    await expect(capture.ready()).rejects.toThrow('SSO sign-in cancelled')
+  })
+
+  it('rejects readiness promptly when the auth window closes during unresolved enable', async () => {
+    let releaseEnable: (() => void) | undefined
+    const enableDone = new Promise<void>(resolve => { releaseEnable = resolve })
+    const window = new FakeAuthWindow()
+    window.debugger.send.mockImplementation(async (command: string) => {
+      if (command === 'Network.enable') await enableDone
+      return undefined
+    })
+    const capture = new SsoResponseCapture(window, completeConfig())
+    const result = capture.start()
+    const readiness = expect(capture.ready()).rejects.toThrow('SSO sign-in window closed')
+    window.emit('closed')
+    await readiness
+    await expect(result).rejects.toThrow('SSO sign-in window closed')
+    releaseEnable?.()
+    await flush()
+  })
 })
