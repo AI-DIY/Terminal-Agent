@@ -77,6 +77,12 @@ import {
   type UpdaterProgress,
   type UpdaterState,
 } from '../main/updater/updater-contracts'
+import {
+  ssoAuthSnapshotSchema,
+  ssoConfigurationSchema,
+  type SsoAuthSnapshot,
+  type SsoConfiguration,
+} from '../shared/sso-contracts'
 
 export const terminalAgentNamespace = 'terminalAgent' as const
 
@@ -208,6 +214,13 @@ export type TerminalAgentApi = {
     onProgress(listener: (event: UpdaterProgress) => void): () => void
     onStatus(listener: (state: UpdaterState) => void): () => void
     onError(listener: (message: string) => void): () => void
+  }
+  sso: {
+    getConfig(): Promise<SsoConfiguration>
+    saveConfig(input: SsoConfiguration): Promise<SsoConfiguration>
+    getState(): Promise<SsoAuthSnapshot>
+    retry(): Promise<void>
+    onState(listener: (state: SsoAuthSnapshot) => void): () => void
   }
 }
 
@@ -412,6 +425,19 @@ export function createTerminalAgentApi(ipcRenderer: {
         const handler = (_event: unknown, payload: unknown) => listener(z.string().trim().min(1).max(2_000).parse(payload))
         ipcRenderer.on(updaterChannels.error, handler)
         return () => ipcRenderer.removeListener(updaterChannels.error, handler)
+      },
+    }),
+    sso: Object.freeze({
+      getConfig: async () => ssoConfigurationSchema.parse(await ipcRenderer.invoke('sso:config:get')),
+      saveConfig: async (input: SsoConfiguration) => ssoConfigurationSchema.parse(
+        await ipcRenderer.invoke('sso:config:save', ssoConfigurationSchema.parse(input)),
+      ),
+      getState: async () => ssoAuthSnapshotSchema.parse(await ipcRenderer.invoke('sso:state:get')),
+      retry: async () => { await ipcRenderer.invoke('sso:retry') },
+      onState: (listener: (state: SsoAuthSnapshot) => void) => {
+        const handler = (_event: unknown, payload: unknown) => listener(ssoAuthSnapshotSchema.parse(payload))
+        ipcRenderer.on('sso:state', handler)
+        return () => ipcRenderer.removeListener('sso:state', handler)
       },
     }),
   })

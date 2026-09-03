@@ -2,9 +2,75 @@ import { describe, expect, it, vi } from 'vitest'
 import { createTerminalAgentApi } from '../../../src/preload/api'
 import type { ShellHistoryDetail } from '../../../src/shared/contracts'
 
+const ssoConfiguration = {
+  enabled: true,
+  loginPageUrl: 'https://login.example.test',
+  platformUrlMatcher: { mode: 'exact' as const, value: 'https://platform.example.test' },
+  userInfoUrlMatcher: { mode: 'regex' as const, value: '^https://platform\\.example\\.test/api/me$' },
+  employeeIdField: 'employee.id',
+  nameField: 'profile.name',
+}
+
+const authenticatedSsoState = {
+  state: 'authenticated' as const,
+  identity: { employeeId: 'E-42', name: 'Ada Lovelace' },
+}
+
 function createIpc() {
   return { invoke: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
 }
+
+describe('SSO preload API', () => {
+  it('exposes only a frozen SSO namespace and validates save input before IPC', async () => {
+    const ipc = createIpc()
+    ipc.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'sso:state:get') return authenticatedSsoState
+      return ssoConfiguration
+    })
+    const api = createTerminalAgentApi(ipc)
+
+    expect(Object.isFrozen(api.sso)).toBe(true)
+    expect(Object.keys(api.sso)).toEqual(['getConfig', 'saveConfig', 'getState', 'retry', 'onState'])
+    await expect(api.sso.saveConfig({
+      enabled: true,
+      loginPageUrl: '',
+      platformUrlMatcher: { mode: 'invalid', value: '' },
+      userInfoUrlMatcher: { mode: 'exact', value: '' },
+      employeeIdField: '',
+      nameField: '',
+    } as never)).rejects.toThrow()
+    expect(ipc.invoke).not.toHaveBeenCalled()
+
+    await expect(api.sso.getConfig()).resolves.toEqual(ssoConfiguration)
+    await expect(api.sso.saveConfig(ssoConfiguration)).resolves.toEqual(ssoConfiguration)
+    await expect(api.sso.getState()).resolves.toEqual(authenticatedSsoState)
+    await api.sso.retry()
+
+    expect(ipc.invoke).toHaveBeenNthCalledWith(1, 'sso:config:get')
+    expect(ipc.invoke).toHaveBeenNthCalledWith(2, 'sso:config:save', ssoConfiguration)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(3, 'sso:state:get')
+    expect(ipc.invoke).toHaveBeenNthCalledWith(4, 'sso:retry')
+  })
+
+  it('validates SSO IPC responses and event payloads before exposing them', async () => {
+    const ipc = createIpc()
+    ipc.invoke.mockResolvedValue({ state: 'authenticated', unexpected: true })
+    const api = createTerminalAgentApi(ipc)
+
+    await expect(api.sso.getConfig()).rejects.toThrow()
+    await expect(api.sso.getState()).rejects.toThrow()
+    const listener = vi.fn()
+    const unsubscribe = api.sso.onState(listener)
+    const wrapper = ipc.on.mock.calls.find(([channel]) => channel === 'sso:state')?.[1]
+
+    wrapper?.({}, authenticatedSsoState)
+    expect(listener).toHaveBeenCalledWith(authenticatedSsoState)
+    expect(() => wrapper?.({}, { state: 'authenticated', identity: { employeeId: '', name: 'Ada' } })).toThrow()
+    unsubscribe()
+
+    expect(ipc.removeListener).toHaveBeenCalledWith('sso:state', wrapper)
+  })
+})
 
 describe('chat preload API', () => {
   it('freezes the chat domain and routes only named chat operations', async () => {
