@@ -10,6 +10,51 @@ vi.mock('electron', () => ({ ipcMain: { handle, removeHandler } }))
 describe('registerChatHandlers', () => {
   beforeEach(() => { handle.mockReset(); removeHandler.mockReset() })
 
+  it('strips skill ids for unauthenticated send and compact requests while preserving other fields', async () => {
+    const service = {
+      list: vi.fn(), create: vi.fn(), get: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), remove: vi.fn(), associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(), reconcileSessions: vi.fn(), onChanged: vi.fn(() => () => undefined), appendMessage: vi.fn(),
+    }
+    const runtime = { send: vi.fn(async () => undefined), compactAndPersist: vi.fn(async () => undefined), cancel: vi.fn() }
+    const trusted = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    const sessions = { snapshot: vi.fn(() => []), onClosed: vi.fn(() => () => undefined) }
+    const dispose = registerChatHandlers(service as never, trusted as never, sessions as never, runtime as never, undefined, { skillAuthorization: { isAuthenticated: () => false } })
+    await handlerFor('chat:send')({ sender: trusted }, { chatId: 'chat-1', runId: '31313131-3131-4131-8131-313131313131', content: 'hello', skillIds: ['teleagent-operations'] })
+    await handlerFor('chat:compact')({ sender: trusted }, { requestId: 'compact-1', chatId: 'chat-1', skillIds: ['teleagent-operations'] })
+    expect(runtime.send).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'chat-1', skillIds: [] }), expect.any(Function))
+    expect(runtime.compactAndPersist).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'compact-1', skillIds: [] }), expect.any(Function))
+    dispose()
+  })
+
+  it('defaults omitted skill ids to an empty list when no authorization port is provided', async () => {
+    const service = {
+      list: vi.fn(), create: vi.fn(), get: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), remove: vi.fn(), associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(), reconcileSessions: vi.fn(), onChanged: vi.fn(() => () => undefined), appendMessage: vi.fn(),
+    }
+    const runtime = { send: vi.fn(async () => undefined), compactAndPersist: vi.fn(async () => undefined), cancel: vi.fn() }
+    const trusted = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    const sessions = { snapshot: vi.fn(() => []), onClosed: vi.fn(() => () => undefined) }
+    const dispose = registerChatHandlers(service as never, trusted as never, sessions as never, runtime as never)
+    await handlerFor('chat:send')({ sender: trusted }, { chatId: 'chat-1', runId: '31313131-3131-4131-8131-313131313131', content: 'hello' })
+    await handlerFor('chat:compact')({ sender: trusted }, { requestId: 'compact-1', chatId: 'chat-1' })
+    expect(runtime.send).toHaveBeenCalledWith(expect.objectContaining({ skillIds: [] }), expect.any(Function))
+    expect(runtime.compactAndPersist).toHaveBeenCalledWith(expect.objectContaining({ skillIds: [] }), expect.any(Function))
+    dispose()
+  })
+
+  it('preserves valid skill ids only when the authorization port reports authenticated', async () => {
+    const service = {
+      list: vi.fn(), create: vi.fn(), get: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), remove: vi.fn(), associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(), reconcileSessions: vi.fn(), onChanged: vi.fn(() => () => undefined), appendMessage: vi.fn(),
+    }
+    const runtime = { send: vi.fn(async () => undefined), compactAndPersist: vi.fn(async () => undefined), cancel: vi.fn() }
+    const trusted = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    const sessions = { snapshot: vi.fn(() => []), onClosed: vi.fn(() => () => undefined) }
+    const dispose = registerChatHandlers(service as never, trusted as never, sessions as never, runtime as never, undefined, { skillAuthorization: { isAuthenticated: () => true } })
+    await handlerFor('chat:send')({ sender: trusted }, { chatId: 'chat-1', runId: '31313131-3131-4131-8131-313131313131', content: 'hello', retry: true, skillIds: ['security-review'] })
+    await handlerFor('chat:compact')({ sender: trusted }, { requestId: 'compact-1', chatId: 'chat-1', sshContextLines: 25, skillIds: ['security-review'] })
+    expect(runtime.send).toHaveBeenCalledWith(expect.objectContaining({ retry: true, skillIds: ['security-review'] }), expect.any(Function))
+    expect(runtime.compactAndPersist).toHaveBeenCalledWith(expect.objectContaining({ sshContextLines: 25, skillIds: ['security-review'] }), expect.any(Function))
+    dispose()
+  })
+
   it('rejects every untrusted channel before reading payloads or calling the service', async () => {
     const service = { list: vi.fn(), create: vi.fn(), get: vi.fn(), listConversationSessions: vi.fn(), createConversationSession: vi.fn(), switchConversationSession: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), updateTitle: vi.fn(), pin: vi.fn(), unpin: vi.fn(), remove: vi.fn(), associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(), reconcileSessions: vi.fn(), onChanged: vi.fn(() => () => undefined) }
     const sessions = { snapshot: vi.fn(), onClosed: vi.fn(() => () => undefined) }

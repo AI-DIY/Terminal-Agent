@@ -71,10 +71,15 @@ import { ExecutionPlanService } from './chat/execution-plan-service'
 import { modelHostname, uniqueModelHostnames } from '../shared/model-context'
 import { normalizeChatContextSessionIds } from '../shared/chat-context-selection'
 import { normalizeBuiltInSkillIds } from '../shared/built-in-skills'
+import { SsoConfigService, getSsoConfigPath } from './settings/sso-config-service'
+import { SsoAuthenticationService } from './sso/sso-authentication-service'
+import { registerSsoHandlers } from './sso/register-sso-handlers'
 
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
 let diagnostics: DiagnosticsController | undefined
+const ssoConfig = new SsoConfigService(getSsoConfigPath(app.getPath('home')))
+const ssoAuth = new SsoAuthenticationService(ssoConfig)
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
 const keyMaterials = new KeyMaterialStore()
 const secretStore = new ElectronSecretStore()
@@ -250,6 +255,7 @@ let unregisterHostMemoryHandlers: (() => void) | undefined
 let unregisterDiagnosticsHandlers: (() => void) | undefined
 let unregisterUpdaterHandlers: (() => void) | undefined
 let unregisterSessionObservation: SessionObservationRegistration | undefined
+let unregisterSsoHandlers: (() => void) | undefined
 
 /**
  * Electron exposes `app.getVersion()` in production.  A few lightweight
@@ -345,6 +351,9 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
     unregisterHostMemoryHandlers = undefined
     unregisterSessionObservation?.()
     unregisterSessionObservation = undefined
+    unregisterSsoHandlers?.()
+    unregisterSsoHandlers = undefined
+    void ssoAuth.dispose()
     mainWindow = undefined
   })
 
@@ -370,7 +379,11 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
       pending: () => unregisterSessionObservation?.pending() ?? [],
     },
   )
-  unregisterChatHandlers = registerChatHandlers(chats, mainWindow.webContents, sessions, chatRuntime)
+  ssoAuth.attachRenderer(mainWindow.webContents)
+  unregisterSsoHandlers = registerSsoHandlers(ssoConfig, ssoAuth, mainWindow.webContents)
+  unregisterChatHandlers = registerChatHandlers(chats, mainWindow.webContents, sessions, chatRuntime, undefined, {
+    skillAuthorization: { isAuthenticated: () => ssoAuth.getState().state === 'authenticated' },
+  })
   unregisterShellHistoryHandlers = registerShellHistoryHandlers(shellHistory, mainWindow.webContents)
   unregisterWorkbenchSettingsHandlers = registerWorkbenchSettingsHandlers(
     workbenchPreferences,
@@ -413,6 +426,8 @@ if (isPrimaryInstance) {
       writeInstallPath: writeWindowsInstallPath,
     })
     void regexRules.load().catch(() => undefined)
+    await ssoConfig.ensureInitialized()
+    await ssoAuth.initialize()
     const initialPreferences = await workbenchPreferences.load().catch(createDefaultWorkbenchPreferences)
     await recoverChatStreamsBeforeCreatingMainWindow(
       () => chats.recoverInterruptedStreams(),
@@ -421,14 +436,14 @@ if (isPrimaryInstance) {
     void accessClientLaunches.tryOpenFromArgv(process.argv)
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length !== 0 || isRestoringMainWindow) return
+      if (mainWindow || isRestoringMainWindow) return
       isRestoringMainWindow = true
       void workbenchPreferences.load()
         .then(preferences => {
-          if (BrowserWindow.getAllWindows().length === 0) createMainWindow(preferences.theme)
+          if (!mainWindow) createMainWindow(preferences.theme)
         })
         .catch(() => {
-          if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+          if (!mainWindow) createMainWindow()
         })
         .finally(() => { isRestoringMainWindow = false })
     })

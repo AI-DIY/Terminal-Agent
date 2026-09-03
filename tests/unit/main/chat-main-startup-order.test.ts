@@ -26,6 +26,10 @@ const state = vi.hoisted(() => {
   const recordPackagedWindowsInstallPath = vi.fn()
   const regexLoad = vi.fn()
   const setApplicationMenu = vi.fn()
+  const ensureSsoInitialized = vi.fn()
+  const initializeSsoAuth = vi.fn()
+  const attachSsoRenderer = vi.fn()
+  const registerSsoHandlers = vi.fn(() => vi.fn())
   const appOn = vi.fn((event: string, listener: () => void) => { listeners.set(event, listener) })
 
   const reset = () => {
@@ -39,6 +43,10 @@ const state = vi.hoisted(() => {
     recordPackagedWindowsInstallPath.mockReset().mockResolvedValue(undefined)
     regexLoad.mockReset().mockResolvedValue(undefined)
     setApplicationMenu.mockReset()
+    ensureSsoInitialized.mockReset().mockResolvedValue(undefined)
+    initializeSsoAuth.mockReset().mockResolvedValue({ state: 'configuration-required' })
+    attachSsoRenderer.mockReset()
+    registerSsoHandlers.mockReset().mockImplementation(() => vi.fn())
     appOn.mockClear()
   }
 
@@ -55,6 +63,10 @@ const state = vi.hoisted(() => {
     regexLoad,
     setApplicationMenu,
     appOn,
+    ensureSsoInitialized,
+    initializeSsoAuth,
+    attachSsoRenderer,
+    registerSsoHandlers,
     reset,
   }
 })
@@ -136,6 +148,21 @@ vi.mock('../../../src/main/settings/workbench-preferences-service', () => ({
     load() { return state.loadWorkbenchPreferences() }
   },
 }))
+vi.mock('../../../src/main/settings/sso-config-service', () => ({
+  getSsoConfigPath: vi.fn(() => 'D:\\terminal-agent-home\\.ta\\user-config'),
+  SsoConfigService: class SsoConfigService {
+    ensureInitialized() { return state.ensureSsoInitialized() }
+  },
+}))
+vi.mock('../../../src/main/sso/sso-authentication-service', () => ({
+  SsoAuthenticationService: class SsoAuthenticationService {
+    initialize() { return state.initializeSsoAuth() }
+    attachRenderer(sender: unknown) { return state.attachSsoRenderer(sender) }
+    getState() { return { state: 'configuration-required' } }
+    dispose() { return Promise.resolve() }
+  },
+}))
+vi.mock('../../../src/main/sso/register-sso-handlers', () => ({ registerSsoHandlers: state.registerSsoHandlers }))
 
 beforeEach(() => {
   state.reset()
@@ -150,6 +177,8 @@ describe('main chat startup ordering', () => {
       expect(state.regexLoad).toHaveBeenCalledOnce()
       expect(state.loadWorkbenchPreferences).toHaveBeenCalledOnce()
     })
+    expect(state.ensureSsoInitialized).toHaveBeenCalledOnce()
+    expect(state.initializeSsoAuth).toHaveBeenCalledOnce()
     expect(state.recoverInterruptedStreams).not.toHaveBeenCalled()
     expect(state.windows).toHaveLength(0)
 
@@ -159,6 +188,8 @@ describe('main chat startup ordering', () => {
 
     state.recovery.resolve()
     await vi.waitFor(() => expect(state.windows).toHaveLength(1))
+    expect(state.initializeSsoAuth.mock.invocationCallOrder[0]).toBeLessThan(state.attachSsoRenderer.mock.invocationCallOrder[0]!)
+    expect(state.registerSsoHandlers).toHaveBeenCalledOnce()
     expect(state.windows[0]?.options).toMatchObject({
       show: false,
       titleBarStyle: 'hidden',
@@ -207,6 +238,19 @@ describe('main chat startup ordering', () => {
     restoredPreferences.resolve({ theme: 'graphite' })
     await vi.waitFor(() => expect(state.windows).toHaveLength(1))
     expect(state.windows[0]?.options.titleBarOverlay).toEqual({ color: '#25292e', symbolColor: '#f0f3f6', height: 48 })
+  })
+
+  it('restores the main renderer even while a transient authentication window is still closing', async () => {
+    await importMain()
+    await startFirstWindow('pearl')
+    state.windows[0]?.emitClosed()
+    const { BrowserWindow } = await import('electron')
+    new BrowserWindow({ show: true })
+    const activate = await activateListener()
+    state.loadWorkbenchPreferences.mockClear().mockResolvedValueOnce({ theme: 'graphite' })
+    activate()
+    await vi.waitFor(() => expect(state.loadWorkbenchPreferences).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(state.windows).toHaveLength(2))
   })
 })
 

@@ -107,6 +107,19 @@ vi.mock('../../../src/main/settings/workbench-preferences-service', () => ({
     saveTheme(theme: 'pearl' | 'graphite') { return state.workbenchSaveTheme(theme) }
   },
 }))
+vi.mock('../../../src/main/settings/sso-config-service', () => ({
+  getSsoConfigPath: vi.fn(() => 'D:\\terminal-agent-home\\.ta\\user-config'),
+  SsoConfigService: class SsoConfigService { ensureInitialized() { return Promise.resolve() } },
+}))
+vi.mock('../../../src/main/sso/sso-authentication-service', () => ({
+  SsoAuthenticationService: class SsoAuthenticationService {
+    initialize() { return Promise.resolve({ state: 'configuration-required' }) }
+    attachRenderer() {}
+    getState() { return { state: 'configuration-required' } }
+    dispose() { return Promise.resolve() }
+  },
+}))
+vi.mock('../../../src/main/sso/register-sso-handlers', () => ({ registerSsoHandlers: vi.fn(() => vi.fn()) }))
 vi.mock('../../../src/main/settings/register-workbench-settings-handlers', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../src/main/settings/register-workbench-settings-handlers')>()
   return {
@@ -166,7 +179,7 @@ describe('main chat lifecycle', () => {
 
     expect(state.chatRepositoryConstructor).toHaveBeenCalledWith(join('D:\\terminal-agent-user-data', 'chat-workspaces.json'))
     expect(state.chatServiceConstructor).toHaveBeenCalledOnce()
-    expect(state.registerChatHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.anything(), expect.anything())
+    expect(state.registerChatHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.anything(), expect.anything(), undefined, expect.objectContaining({ skillAuthorization: expect.anything() }))
     expect(state.workbenchPreferencesConstructor).toHaveBeenCalledWith(join('D:\\terminal-agent-user-data', 'workbench-preferences.json'))
     expect(state.registerWorkbenchSettingsHandlers).toHaveBeenCalledWith(expect.anything(), window.webContents, expect.any(Function), expect.any(Function))
     expect(state.setApplicationMenu).toHaveBeenCalledWith(null)

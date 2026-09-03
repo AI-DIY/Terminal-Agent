@@ -28,8 +28,9 @@ type ChatHandlerService = Pick<ChatService, 'list' | 'create' | 'get' | 'listCon
   & Pick<ChatService, 'appendMessage'>
   & Partial<Pick<ChatService, 'syncSessionMetadata'>>
 type SessionLookup = Pick<SessionService, 'snapshot' | 'onClosed'> & Partial<Pick<SessionService, 'onUpdated'>>
+type ChatHandlerOptions = { skillAuthorization?: { isAuthenticated(): boolean } }
 
-export function registerChatHandlers(service: ChatHandlerService, trustedSender: WebContents, sessions: SessionLookup, runtime?: ChatRuntime, plans?: ExecutionPlanService): () => void {
+export function registerChatHandlers(service: ChatHandlerService, trustedSender: WebContents, sessions: SessionLookup, runtime?: ChatRuntime, plans?: ExecutionPlanService, options: ChatHandlerOptions = {}): () => void {
   plans ??= (runtime as ChatRuntime & { planService?: ExecutionPlanService } | undefined)?.planService
   ipcMain.handle('chats:list', async event => {
     assertTrustedSender(event, trustedSender)
@@ -130,7 +131,8 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
     ipcMain.handle('chat:send', async (event, request: unknown) => {
       assertTrustedSender(event, trustedSender)
       const parsed = chatRunRequestSchema.parse(request)
-      await runtime.send(parsed, payload => {
+      const guarded = skillsAuthenticated(options) ? parsed : { ...parsed, skillIds: [] }
+      await runtime.send(guarded, payload => {
         const safe = chatRuntimeEventSchema.parse(payload)
         if (!trustedSender.isDestroyed()) trustedSender.send('chat:event', safe)
       })
@@ -142,6 +144,7 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
     ipcMain.handle('chat:compact', async (event, request: unknown) => {
       assertTrustedSender(event, trustedSender)
       const parsed = chatCompactRequestSchema.parse(request)
+      const guarded = skillsAuthenticated(options) ? parsed : { ...parsed, skillIds: [] }
       const persistSummary = (summary: string) => service.appendMessage({
         requestId: parsed.requestId,
         chatId: parsed.chatId,
@@ -154,8 +157,8 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
       // expose the original compact() method.  The production ChatRuntime
       // always provides compactAndPersist, which holds its lock through this
       // callback and closes the snapshot race.
-      if (typeof runtime.compactAndPersist === 'function') return runtime.compactAndPersist(parsed, persistSummary)
-      const summary = await runtime.compact(parsed)
+      if (typeof runtime.compactAndPersist === 'function') return runtime.compactAndPersist(guarded, persistSummary)
+      const summary = await runtime.compact(guarded)
       return persistSummary(summary)
     })
   }
@@ -201,4 +204,12 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
 
 function assertTrustedSender(event: { sender: WebContents }, trustedSender: WebContents): void {
   if (event.sender !== trustedSender) throw new Error('Untrusted renderer')
+}
+
+function skillsAuthenticated(options: ChatHandlerOptions): boolean {
+  try {
+    return options.skillAuthorization?.isAuthenticated() === true
+  } catch {
+    return false
+  }
 }
