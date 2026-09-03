@@ -109,6 +109,26 @@ export class AtomicJsonStore<T> {
     return operation
   }
 
+  /** Create the target exactly once; a competing creator's document wins unchanged. */
+  createIfMissing(): Promise<T> {
+    const operation = this.queue.then(async () => {
+      const empty = this.schema.parse(this.empty())
+      await this.fileSystem.mkdir(dirname(this.path), { recursive: true })
+      try {
+        await this.writeExclusively(this.path, JSON.stringify(empty))
+        this.corruptBackup = undefined
+        return structuredClone(empty)
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== 'EEXIST') throw error
+        const current = await this.readCurrent()
+        return structuredClone(current.value)
+      }
+    })
+
+    this.queue = operation.then(() => undefined, () => undefined)
+    return operation
+  }
+
   private async readCurrent(): Promise<{ value: T; migrated: boolean }> {
     let source: Buffer
 

@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   createDefaultSsoConfiguration,
@@ -10,6 +9,7 @@ import {
 import { parseSsoFieldPath } from '../sso/sso-field-path'
 import { normalizeSsoUrl, validateSsoMatcher } from '../sso/sso-url-matcher'
 import { AtomicJsonStore } from '../persistence/atomic-json-store'
+import type { AtomicJsonStoreOptions } from '../persistence/atomic-json-store'
 
 export { createDefaultSsoConfiguration }
 
@@ -20,22 +20,15 @@ export function getSsoConfigPath(homeDirectory: string): string {
 export class SsoConfigService {
   private readonly store: AtomicJsonStore<SsoDocument>
 
-  constructor(private readonly path: string) {
+  constructor(private readonly path: string, options: Pick<AtomicJsonStoreOptions, 'fileSystem'> = {}) {
     this.store = new AtomicJsonStore(path, ssoDocumentSchema, () => ({
       version: 1,
       sso: createDefaultSsoConfiguration(),
-    }))
+    }), options)
   }
 
   async ensureInitialized(): Promise<SsoConfiguration> {
-    try {
-      await readFile(this.path)
-    } catch (error) {
-      if (!isMissingFile(error)) throw error
-      const document = await this.store.update(current => current)
-      return document.sso
-    }
-    return (await this.store.load()).sso
+    return (await this.store.createIfMissing()).sso
   }
 
   async get(): Promise<SsoConfiguration> {
@@ -61,8 +54,4 @@ export class SsoConfigService {
       return false
     }
   }
-}
-
-function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }

@@ -15,7 +15,7 @@ describe('SSO URL matcher', () => {
   })
 
   it('retains query for regex matching and is stateless across repeated calls', () => {
-    const matcher = { mode: 'regex' as const, value: '^https://platform\\.example/home\\?code=\\w+$' }
+    const matcher = { mode: 'regex' as const, value: '^https://platform\\.example/home\\?code=(?:one|two)$' }
     expect(matchesSsoUrl(matcher, 'https://platform.example/home?code=one#fragment')).toBe(true)
     expect(matchesSsoUrl(matcher, 'https://platform.example/home?code=two')).toBe(true)
     expect(matchesSsoUrl(matcher, 'https://platform.example/home')).toBe(false)
