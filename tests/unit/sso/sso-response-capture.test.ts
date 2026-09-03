@@ -188,4 +188,47 @@ describe('SsoResponseCapture', () => {
     expect(window.debugger.send).toHaveBeenCalledWith('Network.disable')
     expect(window.debugger.detach).toHaveBeenCalledOnce()
   })
+
+  it('does not report readiness until Network.enable completes', async () => {
+    let releaseEnable: (() => void) | undefined
+    const enableDone = new Promise<void>(resolve => { releaseEnable = resolve })
+    const window = new FakeAuthWindow()
+    window.debugger.send.mockImplementation(async (command: string, parameters?: { requestId?: string }) => {
+      if (command === 'Network.enable') await enableDone
+      if (command === 'Network.getResponseBody') return window.debugger.bodies.get(parameters?.requestId ?? '')
+      return undefined
+    })
+    const capture = new SsoResponseCapture(window, completeConfig())
+    capture.start()
+    let ready = false
+    const readiness = capture.ready().then(() => { ready = true })
+    await flush()
+    expect(ready).toBe(false)
+    releaseEnable?.()
+    await expect(readiness).resolves.toBeUndefined()
+    await capture.dispose()
+  })
+
+  it('discards candidates with malformed configured field paths without unhandled rejection', async () => {
+    const window = new FakeAuthWindow()
+    const configuration = { ...completeConfig(), nameField: 'data..name' }
+    const capture = new SsoResponseCapture(window, configuration)
+    const result = capture.start()
+    capture.notifyNavigation('https://platform.example/home')
+    window.response('bad-fields', 'https://platform.example/api/userinfo')
+    window.debugger.bodies.set('bad-fields', { body: JSON.stringify({ data: { em: [{ name: 'Ignored', employeeId: 'E-5' }] } }), base64Encoded: false })
+    window.loadingFinished('bad-fields')
+    await flush()
+    await capture.dispose()
+    await expect(result).rejects.toThrow('SSO sign-in cancelled')
+  })
+
+  it('settles an active identity promise when explicitly disposed', async () => {
+    const window = new FakeAuthWindow()
+    const capture = new SsoResponseCapture(window, completeConfig())
+    const result = capture.start()
+    await capture.dispose()
+    await expect(result).rejects.toThrow('SSO sign-in cancelled')
+    await capture.dispose()
+  })
 })

@@ -40,6 +40,9 @@ export class SsoResponseCapture {
   private capturedIdentity: SsoIdentity | undefined
   private timeout: ReturnType<typeof setTimeout> | undefined
   private result: Promise<SsoIdentity> | undefined
+  private readiness: Promise<void> | undefined
+  private resolveReadiness: (() => void) | undefined
+  private rejectReadiness: ((reason: Error) => void) | undefined
   private resolveResult: ((identity: SsoIdentity) => void) | undefined
   private rejectResult: ((reason: Error) => void) | undefined
 
@@ -61,6 +64,12 @@ export class SsoResponseCapture {
       this.resolveResult = resolve
       this.rejectResult = reject
     })
+    void this.result.catch(() => undefined)
+    this.readiness = new Promise<void>((resolve, reject) => {
+      this.resolveReadiness = resolve
+      this.rejectReadiness = reject
+    })
+    void this.readiness.catch(() => undefined)
 
     try {
       this.debugger.attach('1.3')
@@ -73,6 +82,10 @@ export class SsoResponseCapture {
 
     void this.enableNetwork()
     return this.result
+  }
+
+  ready(): Promise<void> {
+    return this.readiness ?? Promise.reject(new Error('SSO sign-in has not started'))
   }
 
   notifyNavigation(url: string): void {
@@ -90,14 +103,18 @@ export class SsoResponseCapture {
   }
 
   async dispose(): Promise<void> {
-    await this.cleanup()
+    if (!this.active) return
+    await this.fail('SSO sign-in cancelled')
   }
 
   private async enableNetwork(): Promise<void> {
     try {
       await this.debugger.send('Network.enable')
+      this.resolveReadiness?.()
     } catch {
-      await this.fail('Unable to start SSO sign-in')
+      const error = new Error('Unable to start SSO sign-in')
+      this.rejectReadiness?.(error)
+      await this.fail(error.message)
     }
   }
 
@@ -151,8 +168,14 @@ export class SsoResponseCapture {
       return
     }
 
-    const name = readSsoField(payload, this.configuration.nameField)
-    const employeeId = readSsoField(payload, this.configuration.employeeIdField)
+    let name: string | undefined
+    let employeeId: string | undefined
+    try {
+      name = readSsoField(payload, this.configuration.nameField)
+      employeeId = readSsoField(payload, this.configuration.employeeIdField)
+    } catch {
+      return
+    }
     if (!name || !employeeId) return
     this.capturedIdentity = { name, employeeId }
     if (this.platformNavigationObserved) await this.succeed(this.capturedIdentity)
