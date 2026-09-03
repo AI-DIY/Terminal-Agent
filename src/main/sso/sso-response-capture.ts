@@ -193,7 +193,6 @@ export class SsoResponseCapture {
 
   private async succeed(identity: SsoIdentity): Promise<void> {
     if (!this.active) return
-    this.settleReadiness()
     await this.cleanup()
     this.resolveResult?.(identity)
   }

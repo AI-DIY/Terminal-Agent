@@ -276,4 +276,28 @@ describe('SsoResponseCapture', () => {
     releaseEnable?.()
     await flush()
   })
+
+  it('keeps readiness pending when navigation and identity arrive before Network.enable completes', async () => {
+    let releaseEnable: (() => void) | undefined
+    const enableDone = new Promise<void>(resolve => { releaseEnable = resolve })
+    const window = new FakeAuthWindow()
+    window.debugger.send.mockImplementation(async (command: string, parameters?: { requestId?: string }) => {
+      if (command === 'Network.enable') await enableDone
+      if (command === 'Network.getResponseBody') return window.debugger.bodies.get(parameters?.requestId ?? '')
+      return undefined
+    })
+    const capture = new SsoResponseCapture(window, completeConfig())
+    const result = capture.start()
+    let ready = false
+    const readiness = capture.ready().then(() => { ready = true })
+    capture.notifyNavigation('https://platform.example/home')
+    window.response('early', 'https://platform.example/api/userinfo')
+    window.debugger.bodies.set('early', { body: JSON.stringify({ data: { em: [{ name: 'Early', employeeId: 'E-6' }] } }), base64Encoded: false })
+    window.loadingFinished('early')
+    await flush()
+    expect(ready).toBe(false)
+    releaseEnable?.()
+    await readiness
+    await expect(result).resolves.toEqual({ name: 'Early', employeeId: 'E-6' })
+  })
 })
