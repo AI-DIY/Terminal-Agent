@@ -132,7 +132,10 @@ describe('V18 production visual contract', () => {
     expect(workbench).toContain('未登录状态不能使用技能')
     expect(skills).toContain('未登录状态不能使用技能')
     expect(skills).toContain(':disabled="!sso.skillsAvailable"')
-    expect(chat).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
+    const sendBlock = chat.slice(chat.indexOf('function send()'), chat.indexOf('function cancel()'))
+    const compactBlock = chat.slice(chat.indexOf('async function compactContext()'), chat.indexOf('function insertNewline()'))
+    expect(sendBlock).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
+    expect(compactBlock).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
   })
 
   it('renders model routing as the approved V18 option cards', () => {

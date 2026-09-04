@@ -12,16 +12,23 @@ describe('SkillsView SSO restrictions', () => {
   })
 
   it('disables every built-in switch and forces the unavailable count to zero', () => {
-    expect(source).toContain('const enabledCount = computed(() => sso.skillsAvailable.value ?')
-    expect(source).toContain(': 0)')
-    expect(source).toContain(':disabled="!sso.skillsAvailable"')
+    const countBlock = source.slice(source.indexOf('const enabledCount ='), source.indexOf('function saveDisplayName'))
+    const inputBlock = source.slice(source.indexOf('<input type="checkbox"'), source.indexOf('</label>', source.indexOf('<input type="checkbox"')))
+    const cardBlock = source.slice(source.indexOf('<article v-for="skill in SKILLS"'), source.indexOf('</article>', source.indexOf('<article v-for="skill in SKILLS"')))
+    expect(countBlock).toContain('sso.skillsAvailable.value ?')
+    expect(countBlock).toContain(': 0)')
+    expect(inputBlock).toContain(':disabled="!sso.skillsAvailable"')
+    expect(cardBlock).toContain('sso.skillsAvailable && preferences.state.skills[skill.id]')
+    expect(cardBlock).toContain("sso.skillsAvailable && preferences.state.skills[skill.id] ? '已启用' : '已停用'")
   })
 
   it('guards direct toggle calls before mutating local preferences', () => {
-    const guard = source.indexOf('if (!sso.skillsAvailable.value) return')
-    const mutation = source.indexOf('preferences.setSkillEnabled', guard)
+    const toggleBlock = source.slice(source.indexOf('function toggleSkill'), source.indexOf('function closeSkills'))
+    const guard = toggleBlock.indexOf('if (!sso.skillsAvailable.value) return')
+    const mutation = toggleBlock.indexOf('preferences.setSkillEnabled')
     expect(guard).toBeGreaterThan(-1)
     expect(mutation).toBeGreaterThan(guard)
+    expect(toggleBlock).toContain('preferences.setSkillEnabled(skill.id, !preferences.state.skills[skill.id])')
   })
 
   it('keeps local skill choices visible when authenticated', () => {

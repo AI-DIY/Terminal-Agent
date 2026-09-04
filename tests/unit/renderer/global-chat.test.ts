@@ -429,8 +429,16 @@ describe('global chat store', () => {
 
   it('never sends local skill preferences while the gate is disabled', async () => {
     const source = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
-    expect(source).toContain('skillsAvailable')
-    expect(source).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
+    const propsBlock = source.slice(source.indexOf('const props ='), source.indexOf('const emit ='))
+    const sendBlock = source.slice(source.indexOf('function send()'), source.indexOf('function cancel()'))
+    const compactBlock = source.slice(source.indexOf('async function compactContext()'), source.indexOf('function insertNewline()'))
+
+    expect(propsBlock).toContain('skillsAvailable?: boolean')
+    expect(propsBlock).toContain('skillsAvailable: false')
+    expect(sendBlock).toContain('store.send(chatId.value, content, selectedContextSessionIds.value, props.skillsAvailable ? enabledSkillIds.value : [])')
+    expect(compactBlock).toContain('store.compact(chatId.value, selectedContextSessionIds.value, props.skillsAvailable ? enabledSkillIds.value : [])')
+    expect(sendBlock).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
+    expect(compactBlock).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
   })
 
   it('keeps SSH context opt-in until the user explicitly checks a host', () => {
