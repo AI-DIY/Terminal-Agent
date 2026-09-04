@@ -1,3 +1,23 @@
+# Terminal-Agent v3.0.0
+
+Release date: 2026-09-04
+
+## SSO 登录门控与配置
+
+- SSO 登录门控默认开启；未完成认证时，应用保持登录页并阻止受保护工作区继续使用，已禁用门控时保留原有本地流程。
+- 登录流程仅被动捕获自然响应中的用户信息，不主动重放、轮询或发起额外请求。
+- 员工号和姓名字段支持多层级 Object Path/JSONPath 路径，平台地址与用户信息地址支持精确匹配和正则表达式匹配。
+- 技能限制：未认证或门控禁用时限制技能入口，避免在身份状态不满足时使用受保护能力。
+- 安装、升级和卸载均保留用户配置；默认配置仅在 `%USERPROFILE%\.ta\user-config` 不存在时创建，不覆盖已有文件，卸载不删除该文件。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-3.0.0.exe`
+- `putty.exe`
+- `quick-start.pdf`
+
+---
+
 # Terminal-Agent v2.1.1
 
 Release date: 2026-09-03
