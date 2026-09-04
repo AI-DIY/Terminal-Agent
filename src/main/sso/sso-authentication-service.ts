@@ -29,7 +29,7 @@ export type AuthenticationWindow = {
   }
   loadURL(url: string): Promise<unknown> | unknown
   close(): void
-  isDestroyed(): boolean
+  isDestroyed?(): boolean
   on(event: 'closed', listener: () => void): unknown
   removeListener(event: 'closed', listener: () => void): unknown
   destroy(): void
@@ -180,7 +180,9 @@ export class SsoAuthenticationService {
     window.webContents.on('did-navigate-in-page', onDidNavigateInPage)
     window.webContents.on('will-navigate', onWillNavigate)
     window.webContents.on('did-frame-navigate', onDidFrameNavigate)
+    let windowClosed = false
     const onClosed = (): void => {
+      windowClosed = true
       if (generation !== this.generation || this.capture !== capture) return
       void this.failSession(generation, 'SSO sign-in window closed')
     }
@@ -213,7 +215,7 @@ export class SsoAuthenticationService {
       if (!this.isCurrentSession(generation, capture, window)) return
       await window.loadURL(configuration.loginPageUrl)
     } catch (error) {
-      await this.failSession(generation, safeCaptureError(error))
+      await this.failSession(generation, windowClosed || isWindowDestroyed(window) ? 'SSO sign-in window closed' : safeCaptureError(error))
     }
   }
 
@@ -275,7 +277,7 @@ export class SsoAuthenticationService {
     return generation === this.generation
       && this.capture === capture
       && this.authWindow === window
-      && !window.isDestroyed()
+      && !isWindowDestroyed(window)
   }
 
   private async cancelCurrentSession(): Promise<void> {
@@ -344,7 +346,7 @@ function createDefaultAuthenticationWindow(): AuthenticationWindow {
 }
 
 async function closeWindow(window: AuthenticationWindow | undefined): Promise<void> {
-  if (!window || window.isDestroyed()) return
+  if (!window || isWindowDestroyed(window)) return
   await new Promise<void>((resolve, reject) => {
     let settled = false
     const settle = (): void => {
@@ -356,12 +358,16 @@ async function closeWindow(window: AuthenticationWindow | undefined): Promise<vo
     const onClosed = (): void => settle()
     window.on('closed', onClosed)
     try { window.close() } catch { /* fall through to forceful destruction */ }
-    if (window.isDestroyed()) { settle(); return }
+    if (isWindowDestroyed(window)) { settle(); return }
     try { window.destroy() } catch { /* verify below before releasing ownership */ }
-    if (window.isDestroyed()) { settle(); return }
+    if (isWindowDestroyed(window)) { settle(); return }
     window.removeListener('closed', onClosed)
     reject(new Error('Unable to destroy SSO sign-in window'))
   })
+}
+
+function isWindowDestroyed(window: AuthenticationWindow): boolean {
+  return window.isDestroyed?.() === true
 }
 
 function cloneSnapshot(snapshot: SsoAuthSnapshot): SsoAuthSnapshot {

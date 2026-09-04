@@ -333,6 +333,27 @@ describe('SsoAuthenticationService', () => {
     expect(window.loadURL).not.toHaveBeenCalledWith(config.loginPageUrl)
   })
 
+  it('reports window closed when login navigation rejects after the authentication window is destroyed', async () => {
+    const { service, window } = createService()
+    let rejectLoginNavigation!: (error: Error) => void
+    const loginNavigation = new Promise<void>((_resolve, reject) => { rejectLoginNavigation = reject })
+    window.loadURL.mockImplementation(async (url: string) => {
+      if (url === config.loginPageUrl) await loginNavigation
+    })
+    await service.initialize()
+
+    const retrying = service.retry()
+    await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledWith(config.loginPageUrl))
+    window.destroyed = true
+    rejectLoginNavigation(new Error('ERR_ABORTED (-3) loading login page'))
+    await retrying
+
+    expect(service.getState()).toEqual({
+      state: 'error',
+      errorMessage: 'SSO sign-in window closed',
+    })
+  })
+
   it('preserves the terminal window-closed error while asynchronous capture teardown rejects cancellation', async () => {
     const { service, capture, window } = createService()
     let releaseDispose!: () => void
