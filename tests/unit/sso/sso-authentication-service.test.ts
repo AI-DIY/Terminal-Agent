@@ -333,6 +333,29 @@ describe('SsoAuthenticationService', () => {
     expect(window.loadURL).not.toHaveBeenCalledWith(config.loginPageUrl)
   })
 
+  it('reports window closed when local priming aborts before the close lifecycle completes', async () => {
+    const { service, window } = createService()
+    let rejectBlankNavigation!: (error: Error) => void
+    const blankNavigation = new Promise<void>((_resolve, reject) => { rejectBlankNavigation = reject })
+    window.loadURL.mockImplementation(async (url: string) => {
+      if (url === 'about:blank') await blankNavigation
+    })
+    await service.initialize()
+
+    const retrying = service.retry()
+    await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledWith('about:blank'))
+    rejectBlankNavigation(new Error('ERR_ABORTED (-3) loading about:blank'))
+    expect(window.isDestroyed()).toBe(false)
+    window.emit('close')
+
+    await retrying
+
+    expect(service.getState()).toEqual({
+      state: 'error',
+      errorMessage: 'SSO sign-in window closed',
+    })
+  })
+
   it('reports window closed when login navigation rejects after the authentication window is destroyed', async () => {
     const { service, window } = createService()
     let rejectLoginNavigation!: (error: Error) => void

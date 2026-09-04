@@ -30,8 +30,8 @@ export type AuthenticationWindow = {
   loadURL(url: string): Promise<unknown> | unknown
   close(): void
   isDestroyed?(): boolean
-  on(event: 'closed', listener: () => void): unknown
-  removeListener(event: 'closed', listener: () => void): unknown
+  on(event: 'close' | 'closed', listener: () => void): unknown
+  removeListener(event: 'close' | 'closed', listener: () => void): unknown
   destroy(): void
 }
 
@@ -181,17 +181,22 @@ export class SsoAuthenticationService {
     window.webContents.on('will-navigate', onWillNavigate)
     window.webContents.on('did-frame-navigate', onDidFrameNavigate)
     let windowClosed = false
+    const onClose = (): void => {
+      windowClosed = true
+    }
     const onClosed = (): void => {
       windowClosed = true
       if (generation !== this.generation || this.capture !== capture) return
       void this.failSession(generation, 'SSO sign-in window closed')
     }
+    window.on('close', onClose)
     window.on('closed', onClosed)
     this.removeNavigationListeners = () => {
       window.webContents.removeListener?.('did-navigate', onDidNavigate)
       window.webContents.removeListener?.('did-navigate-in-page', onDidNavigateInPage)
       window.webContents.removeListener?.('will-navigate', onWillNavigate)
       window.webContents.removeListener?.('did-frame-navigate', onDidFrameNavigate)
+      window.removeListener('close', onClose)
       window.removeListener('closed', onClosed)
     }
 
