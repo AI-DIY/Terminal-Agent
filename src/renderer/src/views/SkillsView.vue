@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
 import { BUILT_IN_SKILLS, type BuiltInSkillId } from '../../../shared/built-in-skills'
 import { DISPLAY_NAME_MAX_LENGTH, getUserPreferencesStore } from '../stores/user-preferences'
 import { getSsoStore } from '../stores/sso'
+import { resolveBuiltInSkillControls, toggleBuiltInSkill } from '../stores/skill-capability'
 
 const emit = defineEmits<{ close: [] }>()
 const preferences = getUserPreferencesStore()
@@ -28,7 +29,16 @@ watch(() => preferences.state.displayName, value => {
   if (value !== draftDisplayName.value) draftDisplayName.value = value
 })
 
-const enabledCount = computed(() => sso.skillsAvailable.value ? SKILLS.filter(skill => preferences.state.skills[skill.id]).length : 0)
+const skillControls = computed(() => resolveBuiltInSkillControls(sso.skillsAvailable.value, preferences.state.skills))
+const enabledCount = computed(() => skillControls.value.enabledCount)
+
+function skillControl(id: BuiltInSkillId): (typeof skillControls.value.controls)[number] {
+  return skillControls.value.controls.find(control => control.id === id) ?? {
+    id,
+    enabled: false,
+    disabled: true,
+  }
+}
 
 function saveDisplayName(): void {
   preferences.setDisplayName(draftDisplayName.value)
@@ -39,8 +49,7 @@ function saveDisplayName(): void {
 }
 
 function toggleSkill(skill: SkillDefinition): void {
-  if (!sso.skillsAvailable.value) return
-  preferences.setSkillEnabled(skill.id, !preferences.state.skills[skill.id])
+  toggleBuiltInSkill(sso.skillsAvailable.value, skill.id, preferences.state.skills, preferences.setSkillEnabled)
 }
 
 function closeSkills(): void {
@@ -92,18 +101,18 @@ onBeforeUnmount(() => {
           <span class="catalog-badge">无需联网</span>
         </div>
         <div class="skill-grid">
-          <article v-for="skill in SKILLS" :key="skill.id" class="skill-card" :class="{ enabled: sso.skillsAvailable && preferences.state.skills[skill.id] }">
+          <article v-for="skill in SKILLS" :key="skill.id" class="skill-card" :class="{ enabled: skillControl(skill.id).enabled }">
             <div class="skill-card-head">
               <span class="skill-icon"><component :is="skill.icon" :size="17" aria-hidden="true" /></span>
               <div class="skill-card-title"><h3>{{ skill.name }}</h3><span>{{ skill.source }}</span></div>
               <label class="skill-toggle">
-                <input type="checkbox" :checked="preferences.state.skills[skill.id]" :disabled="!sso.skillsAvailable" :aria-label="`${preferences.state.skills[skill.id] ? '停用' : '启用'} ${skill.name}`" @change="toggleSkill(skill)">
+                <input type="checkbox" :checked="skillControl(skill.id).enabled" :disabled="skillControl(skill.id).disabled" :aria-label="`${skillControl(skill.id).enabled ? '停用' : '启用'} ${skill.name}`" @change="toggleSkill(skill)">
                 <span aria-hidden="true" class="toggle-track"><span class="toggle-thumb" /></span>
               </label>
             </div>
             <p>{{ skill.description }}</p>
             <small><Check :size="12" aria-hidden="true" />{{ skill.detail }}</small>
-            <span class="skill-status">{{ sso.skillsAvailable && preferences.state.skills[skill.id] ? '已启用' : '已停用' }}</span>
+            <span class="skill-status">{{ skillControl(skill.id).enabled ? '已启用' : '已停用' }}</span>
           </article>
         </div>
       </section>

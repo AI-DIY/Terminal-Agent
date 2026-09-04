@@ -33,7 +33,7 @@ class FakeWindow extends EventEmitter {
     on: vi.fn((event: string, listener: (...args: unknown[]) => void) => this.on(`webContents:${event}`, listener)),
     removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => this.removeListener(`webContents:${event}`, listener)),
   }
-  readonly loadURL = vi.fn(async (_url: string) => undefined)
+  readonly loadURL = vi.fn(async (url: string) => { void url })
   readonly close = vi.fn(() => this.emit('closed'))
   readonly isDestroyed = vi.fn(() => false)
 }

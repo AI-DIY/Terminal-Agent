@@ -1,38 +1,41 @@
-import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { BUILT_IN_SKILLS, type BuiltInSkillId } from '../../../src/shared/built-in-skills'
+import { resolveBuiltInSkillControls, toggleBuiltInSkill } from '../../../src/renderer/src/stores/skill-capability'
 
-const source = readFileSync(new URL('../../../src/renderer/src/views/SkillsView.vue', import.meta.url), 'utf8')
+function enabledPreferences(): Record<BuiltInSkillId, boolean> {
+  return Object.fromEntries(BUILT_IN_SKILLS.map(skill => [skill.id, true])) as Record<BuiltInSkillId, boolean>
+}
 
 describe('SkillsView SSO restrictions', () => {
-  it('uses the SSO capability gate and shows the unavailable warning', () => {
-    expect(source).toContain("import { getSsoStore } from '../stores/sso'")
-    expect(source).toContain('const sso = getSsoStore()')
-    expect(source).toContain('未登录状态不能使用技能')
-    expect(source).toContain('role="alert"')
+  it('exposes every built-in control as disabled with zero enabled skills while unavailable', () => {
+    const controls = resolveBuiltInSkillControls(false, enabledPreferences())
+
+    expect(controls.enabledCount).toBe(0)
+    expect(controls.controls).toHaveLength(BUILT_IN_SKILLS.length)
+    expect(controls.controls.map(control => control.id)).toEqual(BUILT_IN_SKILLS.map(skill => skill.id))
+    expect(controls.controls.every(control => control.disabled)).toBe(true)
+    expect(controls.controls.every(control => !control.enabled)).toBe(true)
   })
 
-  it('disables every built-in switch and forces the unavailable count to zero', () => {
-    const countBlock = source.slice(source.indexOf('const enabledCount ='), source.indexOf('function saveDisplayName'))
-    const inputBlock = source.slice(source.indexOf('<input type="checkbox"'), source.indexOf('</label>', source.indexOf('<input type="checkbox"')))
-    const cardBlock = source.slice(source.indexOf('<article v-for="skill in SKILLS"'), source.indexOf('</article>', source.indexOf('<article v-for="skill in SKILLS"')))
-    expect(countBlock).toContain('sso.skillsAvailable.value ?')
-    expect(countBlock).toContain(': 0)')
-    expect(inputBlock).toContain(':disabled="!sso.skillsAvailable"')
-    expect(cardBlock).toContain('sso.skillsAvailable && preferences.state.skills[skill.id]')
-    expect(cardBlock).toContain("sso.skillsAvailable && preferences.state.skills[skill.id] ? '已启用' : '已停用'")
+  it('does not mutate a locally enabled skill when an unavailable control is toggled', () => {
+    const preferences = enabledPreferences()
+    const update = vi.fn((id: BuiltInSkillId, enabled: boolean) => { preferences[id] = enabled })
+
+    const changed = toggleBuiltInSkill(false, 'security-review', preferences, update)
+
+    expect(changed).toBe(false)
+    expect(update).not.toHaveBeenCalled()
+    expect(preferences['security-review']).toBe(true)
   })
 
-  it('guards direct toggle calls before mutating local preferences', () => {
-    const toggleBlock = source.slice(source.indexOf('function toggleSkill'), source.indexOf('function closeSkills'))
-    const guard = toggleBlock.indexOf('if (!sso.skillsAvailable.value) return')
-    const mutation = toggleBlock.indexOf('preferences.setSkillEnabled')
-    expect(guard).toBeGreaterThan(-1)
-    expect(mutation).toBeGreaterThan(guard)
-    expect(toggleBlock).toContain('preferences.setSkillEnabled(skill.id, !preferences.state.skills[skill.id])')
-  })
+  it('keeps enabled controls interactive when the SSO capability is available', () => {
+    const preferences = enabledPreferences()
+    const update = vi.fn((id: BuiltInSkillId, enabled: boolean) => { preferences[id] = enabled })
+    const controls = resolveBuiltInSkillControls(true, preferences)
 
-  it('keeps local skill choices visible when authenticated', () => {
-    expect(source).toContain('preferences.state.skills[skill.id]')
-    expect(source).toContain('preferences.setSkillEnabled(skill.id')
+    expect(controls.enabledCount).toBe(BUILT_IN_SKILLS.length)
+    expect(controls.controls.every(control => !control.disabled && control.enabled)).toBe(true)
+    expect(toggleBuiltInSkill(true, 'security-review', preferences, update)).toBe(true)
+    expect(update).toHaveBeenCalledWith('security-review', false)
   })
 })

@@ -1,4 +1,4 @@
-/* global require, process */
+/* global require, process, setTimeout */
 /* eslint-disable @typescript-eslint/no-require-imports */
 
 const { app, BrowserWindow } = require('electron')

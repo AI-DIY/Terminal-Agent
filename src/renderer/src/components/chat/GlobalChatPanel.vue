@@ -10,6 +10,7 @@ import { planTargetLabelForShells } from './plan-target-label'
 import { chatContextSessionsAreResolved, normalizeChatContextSessionIds } from '../../../../shared/chat-context-selection'
 import { sshHostIdentity, sshHostnameDisplayLabels } from '../../../../shared/shell-display-label'
 import { getUserPreferencesStore } from '../../stores/user-preferences'
+import { runChatActionWithSkillGate } from '../../stores/skill-capability'
 
 type ContextSession = {
   id: string
@@ -276,7 +277,9 @@ function send(): void {
     if (content) {
       // A new user message always starts a fresh view at the end of the transcript.
       followMessages.value = true
-      void store.send(chatId.value, content, selectedContextSessionIds.value, props.skillsAvailable ? enabledSkillIds.value : [])
+      void runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (
+        store.send(chatId.value, content, selectedContextSessionIds.value, skillIds)
+      ))
       scrollMessagesToBottom()
     }
   }
@@ -323,7 +326,9 @@ async function compactContext(): Promise<void> {
   if (!chatId.value || compacting.value || props.sessionBusy) return
   compactError.value = ''
   try {
-    await store.compact(chatId.value, selectedContextSessionIds.value, props.skillsAvailable ? enabledSkillIds.value : [])
+    await runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (
+      store.compact(chatId.value, selectedContextSessionIds.value, skillIds)
+    ))
   } catch (error) {
     compactError.value = error instanceof Error ? error.message : '上下文压缩失败，请稍后再试。'
   }

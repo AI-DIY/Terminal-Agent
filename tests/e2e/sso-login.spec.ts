@@ -14,6 +14,7 @@ import {
   type E2ePrimaryFailure,
   type SsoE2eDirectories,
 } from './sso-e2e-environment'
+import { expectedSsoEndpointLedger, scopedSsoEndpointLedger } from './sso-request-ledger'
 
 const electronExecutablePath = electronExecutablePathValue as unknown as string
 const mainEntry = join(process.cwd(), 'out/main/main.js')
@@ -26,7 +27,6 @@ type SsoFixture = {
   platformUrl: string
   userInfoUrl: string
   readonly requestEntries: readonly string[]
-  readonly userInfoRequestEntries: readonly string[]
   activate(): void
 }
 
@@ -111,6 +111,16 @@ async function verifyPassiveCapture(mode: 'exact' | 'regex'): Promise<void> {
     await expect(configurationPage.getByRole('heading', { name: '单点登录', exact: true })).toBeVisible()
     await expect(configurationPage.locator('.workbench-shell')).toHaveCount(0)
     await configureCompleteSsoDraft(configurationPage, fixture, mode)
+    await expect.poll(async () => await configurationPage.evaluate(() => window.terminalAgent.sso.getConfig())).toMatchObject({
+      platformUrlMatcher: {
+        mode,
+        value: mode === 'exact' ? `${fixture.origin}/platform` : `^${escapeRegularExpression(fixture.origin)}/platform\\?tenant=(?:e2e|backup)$`,
+      },
+      userInfoUrlMatcher: {
+        mode,
+        value: mode === 'exact' ? `${fixture.origin}/userinfo` : `^${escapeRegularExpression(fixture.origin)}/userinfo\\?request=natural$`,
+      },
+    })
     await expect(configurationPage.getByRole('heading', { name: '需要登录', exact: true })).toBeVisible()
     await closeElectronApplication(configurationLaunch.app)
     configurationAppClosed = true
@@ -119,11 +129,10 @@ async function verifyPassiveCapture(mode: 'exact' | 'regex'): Promise<void> {
     launch = await launchDirectElectron(directories)
 
     await Promise.all([
-      expect.poll(() => fixture!.requestEntries.includes('GET /login'), { timeout: 20_000 }).toBe(true),
-      expect.poll(() => fixture!.userInfoRequestEntries, { timeout: 20_000 }).toEqual(['GET /userinfo?request=natural']),
+      expect.poll(() => scopedSsoEndpointLedger(fixture!, fixture!.requestEntries), { timeout: 20_000 }).toEqual(expectedSsoEndpointLedger(fixture!)),
       launch.workbenchReady,
     ])
-    expect(fixture.userInfoRequestEntries).toEqual(['GET /userinfo?request=natural'])
+    expect(scopedSsoEndpointLedger(fixture, fixture.requestEntries)).toEqual(expectedSsoEndpointLedger(fixture))
   } catch (error) {
     primaryFailure = { error }
     throw error
@@ -141,6 +150,7 @@ async function verifyPassiveCapture(mode: 'exact' | 'regex'): Promise<void> {
 async function startSsoFixture(): Promise<SsoFixture> {
   const requestEntries: string[] = []
   let active = false
+  let origin = ''
   const server = createHttpServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     if (!active) {
@@ -148,7 +158,7 @@ async function startSsoFixture(): Promise<SsoFixture> {
       response.end()
       return
     }
-    requestEntries.push(`${request.method ?? 'GET'} ${url.pathname}${url.search}`)
+    requestEntries.push(`${request.method ?? 'GET'} ${origin}${url.pathname}${url.search}`)
     if (url.pathname === '/login') {
       response.statusCode = 200
       response.setHeader('Content-Type', 'text/html; charset=utf-8')
@@ -173,7 +183,7 @@ async function startSsoFixture(): Promise<SsoFixture> {
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
   const port = (server.address() as AddressInfo).port
-  const origin = `http://127.0.0.1:${port}`
+  origin = `http://127.0.0.1:${port}`
   return {
     server,
     origin,
@@ -181,7 +191,6 @@ async function startSsoFixture(): Promise<SsoFixture> {
     platformUrl: `${origin}/platform?tenant=e2e`,
     userInfoUrl: `${origin}/userinfo?request=natural`,
     get requestEntries() { return [...requestEntries] },
-    get userInfoRequestEntries() { return requestEntries.filter(entry => /^[^ ]+ \/userinfo(?:\?|$)/.test(entry)) },
     activate() { active = true; requestEntries.splice(0) },
   }
 }
@@ -222,10 +231,10 @@ async function launchDirectElectron(directories: SsoE2eDirectories): Promise<Dir
 
 async function configureCompleteSsoDraft(page: Page, fixture: SsoFixture, mode: 'exact' | 'regex'): Promise<void> {
   const platformMatcher = mode === 'exact'
-    ? fixture.platformUrl
+    ? `${fixture.origin}/platform`
     : `^${escapeRegularExpression(fixture.origin)}/platform\\?tenant=(?:e2e|backup)$`
   const userInfoMatcher = mode === 'exact'
-    ? fixture.userInfoUrl
+    ? `${fixture.origin}/userinfo`
     : `^${escapeRegularExpression(fixture.origin)}/userinfo\\?request=natural$`
 
   const gate = page.getByLabel('启用单点登录门控')

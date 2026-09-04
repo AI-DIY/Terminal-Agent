@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ChatWorkspaceSnapshot } from '../../../src/shared/contracts'
 import { shouldInsertNewlineOnModifiedEnter, shouldSendOnPlainEnter } from '../../../src/renderer/src/components/chat/chat-composer-shortcuts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../../src/renderer/src/stores/global-chat'
+import { runChatActionWithSkillGate } from '../../../src/renderer/src/stores/skill-capability'
 
 function api() {
   return {
@@ -447,18 +448,25 @@ describe('global chat store', () => {
     expect(transport.compact).toHaveBeenCalledWith(expect.objectContaining({ sshContextSessionIds: ['primary', 'alternate'], skillIds: ['security-review'] }))
   })
 
-  it('never sends local skill preferences while the gate is disabled', async () => {
-    const source = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
-    const propsBlock = source.slice(source.indexOf('const props ='), source.indexOf('const emit ='))
-    const sendBlock = source.slice(source.indexOf('function send()'), source.indexOf('function cancel()'))
-    const compactBlock = source.slice(source.indexOf('async function compactContext()'), source.indexOf('function insertNewline()'))
+  it('sends empty skill IDs through both chat actions while the renderer gate is disabled', async () => {
+    const transport = { ...api(), compact: vi.fn(async () => ({
+      revision: 1,
+      chat: { id: 'c1', messages: [] },
+      liveChatId: 'c1',
+    })) }
+    const store = createGlobalChatStore(transport)
+    const locallyEnabled = ['teleagent-operations', 'security-review'] as const
 
-    expect(propsBlock).toContain('skillsAvailable?: boolean')
-    expect(propsBlock).toContain('skillsAvailable: false')
-    expect(sendBlock).toContain('store.send(chatId.value, content, selectedContextSessionIds.value, props.skillsAvailable ? enabledSkillIds.value : [])')
-    expect(compactBlock).toContain('store.compact(chatId.value, selectedContextSessionIds.value, props.skillsAvailable ? enabledSkillIds.value : [])')
-    expect(sendBlock).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
-    expect(compactBlock).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
+    await runChatActionWithSkillGate(false, locallyEnabled, skillIds => (
+      store.send('c1', 'check', undefined, skillIds)
+    ))
+    expect(transport.send).toHaveBeenCalledWith(expect.objectContaining({ skillIds: [] }))
+
+    store.hydrate('c1', [{ id: 'u', role: 'user', content: 'check', state: 'complete' }])
+    await runChatActionWithSkillGate(false, locallyEnabled, skillIds => (
+      store.compact('c1', undefined, skillIds)
+    ))
+    expect(transport.compact).toHaveBeenCalledWith(expect.objectContaining({ skillIds: [] }))
   })
 
   it('keeps SSH context opt-in until the user explicitly checks a host', () => {
