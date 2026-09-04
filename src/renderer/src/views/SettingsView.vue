@@ -1,30 +1,36 @@
 <script setup lang="ts">
-import { ArrowLeft, BrainCircuit, Bot, Braces, Database, Eye, Palette } from '@lucide/vue'
-import { ref } from 'vue'
+import { ArrowLeft, BrainCircuit, Bot, Braces, Database, Eye, KeyRound, Palette } from '@lucide/vue'
+import { ref, watch } from 'vue'
 import ModelRoutingSettings from '../components/settings/ModelRoutingSettings.vue'
 import ModelProfileManager from '../components/settings/ModelProfileManager.vue'
 import RegexFenceRules from '../components/settings/RegexFenceRules.vue'
 import AppearanceSettings from '../components/settings/AppearanceSettings.vue'
 import HostMemorySettings from '../components/settings/HostMemorySettings.vue'
+import SsoSettings from '../components/settings/SsoSettings.vue'
 import { SETTINGS_TABS, type SettingsTabId } from './settings-tabs'
 
+const props = withDefaults(defineProps<{ initialTab?: SettingsTabId; lockNavigation?: boolean }>(), { lockNavigation: false })
 const emit = defineEmits<{ close: [] }>()
-const tab = ref<SettingsTabId>('routing')
-const tabIcons = { routing: BrainCircuit, llm: Bot, vlm: Eye, fence: Braces, memory: Database, appearance: Palette }
+const tab = ref<SettingsTabId>(props.initialTab ?? 'routing')
+const tabIcons = { routing: BrainCircuit, llm: Bot, vlm: Eye, fence: Braces, memory: Database, appearance: Palette, sso: KeyRound }
 const modelProfileManager = ref<{ clearTransientKeyForSettingsClose(): void } | null>(null)
 
 function closeSettings(): void {
-  modelProfileManager.value?.clearTransientKeyForSettingsClose()
-  emit('close')
+  if (!props.lockNavigation) {
+    modelProfileManager.value?.clearTransientKeyForSettingsClose()
+    emit('close')
+  }
 }
+
+watch(() => props.initialTab, value => { if (value) tab.value = value })
 </script>
 
 <template>
   <main class="settings">
-    <header class="settings-top"><button type="button" class="back-button" @click="closeSettings"><ArrowLeft :size="15" aria-hidden="true" /><span>返回工作台</span></button><h1>设置</h1></header>
+    <header class="settings-top"><button type="button" class="back-button" :disabled="lockNavigation" @click="closeSettings"><ArrowLeft :size="15" aria-hidden="true" /><span>返回工作台</span></button><h1>设置</h1></header>
     <div class="settings-layout">
       <nav class="settings-nav" aria-label="设置面板">
-        <button v-for="item in SETTINGS_TABS" :key="item.id" type="button" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id"><component :is="tabIcons[item.id]" :size="15" aria-hidden="true" /><span>{{ item.label }}</span></button>
+        <button v-for="item in SETTINGS_TABS" :key="item.id" type="button" :disabled="lockNavigation" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id"><component :is="tabIcons[item.id]" :size="15" aria-hidden="true" /><span>{{ item.label }}</span></button>
       </nav>
       <section class="settings-content">
         <ModelRoutingSettings v-if="tab === 'routing'" />
@@ -32,7 +38,8 @@ function closeSettings(): void {
         <ModelProfileManager v-else-if="tab === 'vlm'" ref="modelProfileManager" kind="vlm" />
         <RegexFenceRules v-else-if="tab === 'fence'" />
         <HostMemorySettings v-else-if="tab === 'memory'" />
-        <AppearanceSettings v-else />
+        <AppearanceSettings v-else-if="tab === 'appearance'" />
+        <SsoSettings v-else @continue="$emit('close')" @workbench="$emit('close')" />
       </section>
     </div>
   </main>

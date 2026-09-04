@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 
 describe('settings panels', () => {
   it('keeps prototype navigation order with host memory ready', () => {
-    expect(SETTINGS_TABS.map(tab => tab.id)).toEqual(['routing', 'llm', 'vlm', 'fence', 'memory', 'appearance'])
+    expect(SETTINGS_TABS.map(tab => tab.id)).toEqual(['routing', 'llm', 'vlm', 'fence', 'memory', 'appearance', 'sso'])
     expect(SETTINGS_TABS.find(tab => tab.id === 'memory')?.status).toBe('ready')
   })
 
@@ -71,5 +71,31 @@ describe('settings panels', () => {
     expect(profileSelectRule).toContain('text-align: left;')
     expect(profileTextRule).toContain('width: 100%;')
     expect(profileTextRule).toContain('text-align: left;')
+  })
+
+  it('includes the SSO panel and the mandated disabled warning', () => {
+    const tabs = readFileSync(new URL('../../../src/renderer/src/views/settings-tabs.ts', import.meta.url), 'utf8')
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/settings/SsoSettings.vue', import.meta.url), 'utf8')
+    const settings = readFileSync(new URL('../../../src/renderer/src/views/SettingsView.vue', import.meta.url), 'utf8')
+
+    expect(tabs).toContain("id: 'sso'")
+    expect(panel).toContain('启用单点登录门控')
+    expect(panel).toContain('登录页 URL')
+    expect(panel).toContain('平台 URL 匹配方式')
+    expect(panel).toContain('平台 URL / 正则')
+    expect(panel).toContain('用户信息接口 URL 匹配方式')
+    expect(panel).toContain('用户信息接口 URL / 正则')
+    expect(panel).toContain('工号字段路径')
+    expect(panel).toContain('姓名字段路径')
+    expect(panel).toContain('关闭登录门控后，应用将以未登录状态运行，内置技能不可使用。')
+    expect(panel).toContain('Object Path')
+    expect(panel).toContain('保存草稿')
+    expect(panel).toContain('保存并继续')
+    expect(panel).toContain('保存并进入工作台')
+    expect(panel).toContain('<option value="exact">')
+    expect(panel).toContain('<option value="regex">')
+    expect(settings).toContain('initialTab?: SettingsTabId')
+    expect(settings).toContain('lockNavigation?: boolean')
+    expect(settings).toContain("props.initialTab ?? 'routing'")
   })
 })

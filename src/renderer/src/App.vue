@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import WorkbenchView from './views/WorkbenchView.vue'
 import SettingsView from './views/SettingsView.vue'
 import SkillsView from './views/SkillsView.vue'
+import LoginView from './views/LoginView.vue'
+import { getSsoStore } from './stores/sso'
 const settingsOpen = ref(false)
 const skillsOpen = ref(false)
+const ready = ref(false)
+const sso = getSsoStore()
+const authState = computed(() => sso.state.state)
 
 function openSettings(): void {
   skillsOpen.value = false
@@ -12,18 +17,29 @@ function openSettings(): void {
 }
 
 function openSkills(): void {
+  if (!sso.skillsAvailable.value) return
   settingsOpen.value = false
   skillsOpen.value = true
 }
 
 function closeSettings(): void { settingsOpen.value = false }
 function closeSkills(): void { skillsOpen.value = false }
+
+function openLoginSettings(): void { settingsOpen.value = true; skillsOpen.value = false }
+
+onMounted(() => { void sso.initialize().finally(() => { ready.value = true }) })
 </script>
 
 <template>
-  <SettingsView v-show="settingsOpen" @close="closeSettings" />
-  <SkillsView v-show="skillsOpen" @close="closeSkills" />
-  <WorkbenchView v-show="!settingsOpen && !skillsOpen" @show-settings="openSettings" @show-skills="openSkills" />
+  <div v-if="!ready" class="app-loading" aria-live="polite">正在加载</div>
+  <SettingsView v-else-if="authState === 'configuration-required'" initial-tab="sso" :lock-navigation="true" />
+  <SettingsView v-else-if="settingsOpen && (authState === 'login-required' || authState === 'authenticating' || authState === 'error')" initial-tab="sso" @close="closeSettings" />
+  <LoginView v-else-if="authState === 'login-required' || authState === 'authenticating' || authState === 'error'" @open-settings="openLoginSettings" />
+  <template v-else-if="authState === 'authenticated' || authState === 'login-disabled'">
+    <SettingsView v-if="settingsOpen" @close="closeSettings" />
+    <SkillsView v-else-if="skillsOpen" @close="closeSkills" />
+    <WorkbenchView v-else @show-settings="openSettings" @show-skills="openSkills" />
+  </template>
 </template>
 
 <style>
