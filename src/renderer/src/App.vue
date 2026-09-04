@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import WorkbenchView from './views/WorkbenchView.vue'
 import SettingsView from './views/SettingsView.vue'
 import SkillsView from './views/SkillsView.vue'
 import LoginView from './views/LoginView.vue'
 import { getSsoStore } from './stores/sso'
 import { initializeSsoFailClosed, resolveRootSurface } from './sso-login-controller'
+import { clearWorkbenchNavigationHandoff, setWorkbenchNavigationHandoff } from './stores/workbench-navigation-handoff'
 const settingsOpen = ref(false)
 const skillsOpen = ref(false)
 const ready = ref(false)
@@ -13,13 +14,17 @@ const sso = getSsoStore()
 const authState = computed(() => sso.state.state)
 const rootSurface = computed(() => resolveRootSurface(authState.value))
 
-function openSettings(): void {
+function openSettings(selectedChatId: string | null): void {
+  if (rootSurface.value !== 'workbench') return
+  setWorkbenchNavigationHandoff(selectedChatId)
   skillsOpen.value = false
   settingsOpen.value = true
 }
 
-function openSkills(): void {
+function openSkills(selectedChatId: string | null): void {
+  if (rootSurface.value !== 'workbench') return
   if (!sso.skillsAvailable.value) return
+  setWorkbenchNavigationHandoff(selectedChatId)
   settingsOpen.value = false
   skillsOpen.value = true
 }
@@ -28,6 +33,10 @@ function closeSettings(): void { settingsOpen.value = false }
 function closeSkills(): void { skillsOpen.value = false }
 
 onMounted(() => { void initializeSsoFailClosed(sso, () => { ready.value = true }) })
+
+watch(rootSurface, surface => {
+  if (surface !== 'workbench') clearWorkbenchNavigationHandoff()
+}, { immediate: true })
 </script>
 
 <template>

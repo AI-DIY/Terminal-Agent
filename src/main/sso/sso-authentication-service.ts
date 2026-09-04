@@ -18,7 +18,7 @@ export type AuthenticationWindow = {
     debugger: {
       attach(protocolVersion?: string): void
       detach(): void
-      send(command: string, parameters?: Record<string, unknown>): Promise<unknown>
+      sendCommand(command: string, parameters?: Record<string, unknown>): Promise<unknown>
       on(event: 'message' | 'detach', listener: (...args: unknown[]) => void): unknown
       removeListener(event: 'message' | 'detach', listener: (...args: unknown[]) => void): unknown
     }
@@ -170,18 +170,24 @@ export class SsoAuthenticationService {
       window.removeListener('closed', onClosed)
     }
 
-    const identityPromise = capture.start()
-    void identityPromise
-      .then(
-        identity => this.completeSession(generation, identity),
-        error => this.failSession(generation, safeCaptureError(error)),
-      )
-      .catch(() => this.failSession(generation, 'Unable to complete SSO sign-in'))
-      .catch(() => undefined)
-
     try {
+      // Electron does not settle Network.enable for a brand-new WebContents
+      // until it has a navigation target. Prime only a local document first,
+      // then preserve the capture readiness barrier before remote navigation.
+      await window.loadURL('about:blank')
+      if (!this.isCurrentSession(generation, capture, window)) return
+
+      const identityPromise = capture.start()
+      void identityPromise
+        .then(
+          identity => this.completeSession(generation, identity),
+          error => this.failSession(generation, safeCaptureError(error)),
+        )
+        .catch(() => this.failSession(generation, 'Unable to complete SSO sign-in'))
+        .catch(() => undefined)
+
       await capture.ready()
-      if (generation !== this.generation || this.capture !== capture) return
+      if (!this.isCurrentSession(generation, capture, window)) return
       await window.loadURL(configuration.loginPageUrl)
     } catch (error) {
       await this.failSession(generation, safeCaptureError(error))
@@ -240,6 +246,13 @@ export class SsoAuthenticationService {
     if (generation !== this.generation || !this.capture) return
     this.setSnapshot({ state: 'error', errorMessage: safeCaptureError(message) })
     await this.finishSession(generation)
+  }
+
+  private isCurrentSession(generation: number, capture: AuthenticationCapture, window: AuthenticationWindow): boolean {
+    return generation === this.generation
+      && this.capture === capture
+      && this.authWindow === window
+      && !window.isDestroyed?.()
   }
 
   private async cancelCurrentSession(): Promise<void> {

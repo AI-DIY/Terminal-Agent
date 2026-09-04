@@ -13,6 +13,7 @@ export type ModelProfilesApi = {
 }
 
 export type ProfileDraft = Omit<RendererModelProfileInput, 'apiKey'>
+export type ProfileEditorDraft = { editingId: string | null; form: ProfileDraft }
 
 export function createProfileDraft(profile?: RendererModelProfile, defaultKind: ModelProfileKind = 'llm'): ProfileDraft {
   const kind = profile?.kind ?? defaultKind
@@ -45,12 +46,20 @@ export function profileDraftInput(draft: ProfileDraft, apiKey = ''): RendererMod
   return value ? { ...input, apiKey: value } : input
 }
 
+function createProfileEditorDraft(kind: ModelProfileKind): ProfileEditorDraft {
+  return { editingId: null, form: createProfileDraft(undefined, kind) }
+}
+
 export function createModelProfilesStore(api: ModelProfilesApi) {
   const state = reactive({
     kind: 'llm' as ModelProfileKind,
     profiles: [] as RendererModelProfile[],
     profilesByKind: { llm: [] as RendererModelProfile[], vlm: [] as RendererModelProfile[] },
     activeProfileIds: { llm: null as string | null, vlm: null as string | null },
+    editorDrafts: {
+      llm: createProfileEditorDraft('llm'),
+      vlm: createProfileEditorDraft('vlm'),
+    },
     routing: 'combined' as ModelRouting,
     loading: false,
     error: '',
@@ -135,7 +144,19 @@ export function createModelProfilesStore(api: ModelProfilesApi) {
     return state.profilesByKind[kind]
   }
 
-  return { state, load, loadAll, profilesForKind, save, test, activate, remove, clearApiKey, setRouting }
+  function editorDraftFor(kind: ModelProfileKind): ProfileEditorDraft {
+    return state.editorDrafts[kind]
+  }
+
+  function replaceEditorDraft(kind: ModelProfileKind, form: ProfileDraft, editingId: string | null): void {
+    const draft = state.editorDrafts[kind]
+    const target = draft.form as unknown as Record<string, unknown>
+    for (const key of Object.keys(target)) delete target[key]
+    Object.assign(draft.form, form)
+    draft.editingId = editingId
+  }
+
+  return { state, load, loadAll, profilesForKind, editorDraftFor, replaceEditorDraft, save, test, activate, remove, clearApiKey, setRouting }
 }
 
 let sharedStore: ReturnType<typeof createModelProfilesStore> | undefined

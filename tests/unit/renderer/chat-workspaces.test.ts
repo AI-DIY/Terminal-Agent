@@ -155,6 +155,20 @@ describe('chat workspaces store', () => {
     expect(result).toEqual(['persisted-owner'])
   })
 
+  it('skips fresh-task creation when a navigation handoff already owns the workspace', async () => {
+    const { initializeWorkbenchTask } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const calls: string[] = []
+
+    await initializeWorkbenchTask({
+      load: async () => { calls.push('load') },
+      shouldCreate: () => false,
+      restore: async () => { calls.push('restore'); return [] },
+      create: async () => { calls.push('create') },
+    })
+
+    expect(calls).toEqual(['load', 'restore'])
+  })
+
   it('keeps a fresh workbench interactive before its first chat is created', async () => {
     const { isInteractiveWorkbenchWorkspace } = await import('../../../src/renderer/src/stores/chat-workspaces')
 
@@ -1419,7 +1433,8 @@ describe('durable chat workbench components', () => {
     const initialize = view.slice(view.indexOf('async function initializeWorkbench'), view.indexOf('function restoreAssociatedShellView'))
 
     expect(initialize).toContain('initializeWorkbenchTask({')
-    expect(initialize).toContain('load: () => chatStore.load()')
+    expect(initialize).toContain('load: async () =>')
+    expect(initialize).toContain('shouldCreate: () =>')
     expect(initialize).toContain('restore: async () =>')
     expect(initialize).toContain('create: () => createChat(false)')
   })

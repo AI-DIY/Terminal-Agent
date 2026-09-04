@@ -8,7 +8,7 @@ type ResponseBody = { body: string; base64Encoded: boolean }
 class FakeDebugger extends EventEmitter {
   readonly attach = vi.fn()
   readonly detach = vi.fn()
-  readonly send = vi.fn(async (command: string, parameters?: { requestId?: string }): Promise<ResponseBody | undefined> => {
+  readonly sendCommand = vi.fn(async (command: string, parameters?: { requestId?: string }): Promise<ResponseBody | undefined> => {
     if (command === 'Network.getResponseBody') return this.bodies.get(parameters?.requestId ?? '')
     return undefined
   })
@@ -64,19 +64,19 @@ describe('SsoResponseCapture', () => {
     const result = capture.start()
 
     expect(window.debugger.attach).toHaveBeenCalledOnce()
-    expect(window.debugger.send).toHaveBeenCalledWith('Network.enable')
+    expect(window.debugger.sendCommand).toHaveBeenCalledWith('Network.enable')
 
     window.response('other', 'https://platform.example/api/other')
     window.response('failed', 'https://platform.example/api/userinfo', 401)
     window.response('r1', 'https://platform.example/api/userinfo')
-    expect(window.debugger.send).not.toHaveBeenCalledWith('Network.getResponseBody', { requestId: 'r1' })
+    expect(window.debugger.sendCommand).not.toHaveBeenCalledWith('Network.getResponseBody', { requestId: 'r1' })
     window.loadingFinished('failed')
-    expect(window.debugger.send).not.toHaveBeenCalledWith('Network.getResponseBody', { requestId: 'failed' })
+    expect(window.debugger.sendCommand).not.toHaveBeenCalledWith('Network.getResponseBody', { requestId: 'failed' })
 
     window.debugger.bodies.set('r1', { body: JSON.stringify({ data: { em: [{ name: 'Zhang San', employeeId: 'E-1' }] } }), base64Encoded: false })
     window.loadingFinished('r1')
     await flush()
-    expect(window.debugger.send).toHaveBeenCalledWith('Network.getResponseBody', { requestId: 'r1' })
+    expect(window.debugger.sendCommand).toHaveBeenCalledWith('Network.getResponseBody', { requestId: 'r1' })
 
     capture.notifyNavigation('https://platform.example/home?code=secret')
     await expect(result).resolves.toEqual({ name: 'Zhang San', employeeId: 'E-1' })
@@ -151,7 +151,7 @@ describe('SsoResponseCapture', () => {
     const rejection = expect(result).rejects.toThrow('SSO sign-in timed out')
     await vi.advanceTimersByTimeAsync(100)
     await rejection
-    expect(window.debugger.send).toHaveBeenCalledWith('Network.disable')
+    expect(window.debugger.sendCommand).toHaveBeenCalledWith('Network.disable')
     expect(window.debugger.detach).toHaveBeenCalledOnce()
     await capture.dispose()
     expect(window.debugger.detach).toHaveBeenCalledOnce()
@@ -177,7 +177,7 @@ describe('SsoResponseCapture', () => {
 
   it('hides debugger command failures and cleans up the attached debugger', async () => {
     const window = new FakeAuthWindow()
-    window.debugger.send.mockImplementation(async (command: string) => {
+    window.debugger.sendCommand.mockImplementation(async (command: string) => {
       if (command === 'Network.enable') throw new Error('raw protocol details')
       return undefined
     })
@@ -185,7 +185,7 @@ describe('SsoResponseCapture', () => {
     const result = capture.start()
 
     await expect(result).rejects.toThrow('Unable to start SSO sign-in')
-    expect(window.debugger.send).toHaveBeenCalledWith('Network.disable')
+    expect(window.debugger.sendCommand).toHaveBeenCalledWith('Network.disable')
     expect(window.debugger.detach).toHaveBeenCalledOnce()
   })
 
@@ -193,7 +193,7 @@ describe('SsoResponseCapture', () => {
     let releaseEnable: (() => void) | undefined
     const enableDone = new Promise<void>(resolve => { releaseEnable = resolve })
     const window = new FakeAuthWindow()
-    window.debugger.send.mockImplementation(async (command: string, parameters?: { requestId?: string }) => {
+    window.debugger.sendCommand.mockImplementation(async (command: string, parameters?: { requestId?: string }) => {
       if (command === 'Network.enable') await enableDone
       if (command === 'Network.getResponseBody') return window.debugger.bodies.get(parameters?.requestId ?? '')
       return undefined
@@ -244,7 +244,7 @@ describe('SsoResponseCapture', () => {
     let releaseEnable: (() => void) | undefined
     const enableDone = new Promise<void>(resolve => { releaseEnable = resolve })
     const window = new FakeAuthWindow()
-    window.debugger.send.mockImplementation(async (command: string, parameters?: { requestId?: string }) => {
+    window.debugger.sendCommand.mockImplementation(async (command: string, parameters?: { requestId?: string }) => {
       if (command === 'Network.enable') await enableDone
       if (command === 'Network.getResponseBody') return window.debugger.bodies.get(parameters?.requestId ?? '')
       return undefined
@@ -263,7 +263,7 @@ describe('SsoResponseCapture', () => {
     let releaseEnable: (() => void) | undefined
     const enableDone = new Promise<void>(resolve => { releaseEnable = resolve })
     const window = new FakeAuthWindow()
-    window.debugger.send.mockImplementation(async (command: string) => {
+    window.debugger.sendCommand.mockImplementation(async (command: string) => {
       if (command === 'Network.enable') await enableDone
       return undefined
     })
@@ -281,7 +281,7 @@ describe('SsoResponseCapture', () => {
     let releaseEnable: (() => void) | undefined
     const enableDone = new Promise<void>(resolve => { releaseEnable = resolve })
     const window = new FakeAuthWindow()
-    window.debugger.send.mockImplementation(async (command: string, parameters?: { requestId?: string }) => {
+    window.debugger.sendCommand.mockImplementation(async (command: string, parameters?: { requestId?: string }) => {
       if (command === 'Network.enable') await enableDone
       if (command === 'Network.getResponseBody') return window.debugger.bodies.get(parameters?.requestId ?? '')
       return undefined

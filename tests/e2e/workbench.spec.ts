@@ -1,7 +1,7 @@
 import { _electron as electron, expect, test as base, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import electronExecutablePathValue from 'electron'
 import { generateKeyPairSync } from 'node:crypto'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
@@ -10,6 +10,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Server } from 'ssh2'
 import { evaluateNodeInspector } from '../helpers/node-inspector-client'
+import {
+  closeE2eResources,
+  createSsoE2eDirectories,
+  removeSsoE2eDirectories,
+  ssoE2eEnvironment,
+  throwCleanupFailures,
+  type E2ePrimaryFailure,
+  type SsoE2eDirectories,
+} from './sso-e2e-environment'
 import {
   linuxCpuModelCommand,
   linuxDiskCommand,
@@ -24,11 +33,9 @@ const electronExecutablePath = electronExecutablePathValue as unknown as string
 type LaunchedTerminalAgent = {
   app: ElectronApplication
   userDataDir: string
+  ssoHomeDir: string
   mainEntry: string
-}
-
-async function removeUserDataDir(directory: string): Promise<void> {
-  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+  directories: SsoE2eDirectories
 }
 
 const test = base.extend<{
@@ -37,26 +44,44 @@ const test = base.extend<{
   launchApp: async ({ playwright: _playwright }, use) => {
     void _playwright
     const launches: LaunchedTerminalAgent[] = []
-    await use(async (appArguments = []) => {
-      const userDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-e2e-'))
-      const mainEntry = join(process.cwd(), 'out/main/main.js')
-      try {
-        const app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, mainEntry, ...appArguments] })
+    let primaryFailure: E2ePrimaryFailure | undefined
+    try {
+      await use(async (appArguments = []) => {
+        const directories = await createSsoE2eDirectories('terminal-agent-e2e-')
+        const { userDataDir, ssoHomeDir } = directories
+        const mainEntry = join(process.cwd(), 'out/main/main.js')
+        let app: ElectronApplication
+        try {
+          app = await electron.launch({
+            args: [`--user-data-dir=${userDataDir}`, mainEntry, ...appArguments],
+            env: ssoE2eEnvironment(ssoHomeDir),
+          })
+        } catch (error) {
+          const cleanupFailures = await closeE2eResources(async () => { await removeSsoE2eDirectories(directories) })
+          throwCleanupFailures({ error }, cleanupFailures)
+          throw error
+        }
+
+        // Claim ownership before firstWindow/setup can throw.
+        const launched = { app, userDataDir, ssoHomeDir, mainEntry, directories }
+        launches.push(launched)
         const page = await app.firstWindow()
         await ensureLegacyWorkbench(page)
         await expect(page.locator('.workbench-shell')).toHaveAttribute('data-workbench-ready', 'true')
-        const launched = { app, userDataDir, mainEntry }
-        launches.push(launched)
         return launched
-      } catch (error) {
-        await removeUserDataDir(userDataDir)
-        throw error
-      }
-    })
-    for (const launch of launches.reverse()) {
-      await launch.app.close().catch(() => undefined)
-      await removeUserDataDir(launch.userDataDir)
+      })
+    } catch (error) {
+      primaryFailure = { error }
     }
+
+    const cleanupFailures = await closeE2eResources(
+      ...launches.reverse().flatMap(launch => [
+        async () => { await launch.app.close() },
+        async () => { await removeSsoE2eDirectories(launch.directories) },
+      ]),
+    )
+    throwCleanupFailures(primaryFailure, cleanupFailures)
+    if (primaryFailure) throw primaryFailure.error
   },
 })
 
@@ -1755,7 +1780,10 @@ test('clearing acknowledged host memory persists removal and requires fresh SSH 
     await test.step('restarts the same user-data directory', async () => {
       await within(10_000, 'Electron did not close after the cleared SSH session ended', initialApp.close())
       app = undefined
-      restarted = await within(10_000, 'Electron did not restart from the cleared user-data directory', electron.launch({ args: [`--user-data-dir=${launch.userDataDir}`, launch.mainEntry] }))
+      restarted = await within(10_000, 'Electron did not restart from the cleared user-data directory', electron.launch({
+        args: [`--user-data-dir=${launch.userDataDir}`, launch.mainEntry],
+        env: ssoE2eEnvironment(launch.ssoHomeDir),
+      }))
       restartedPage = await restarted.firstWindow()
       restartedPage.setDefaultTimeout(10_000)
       await expect.poll(async () => await restartedPage.evaluate(() => window.terminalAgent.settings.memory.getHost('api-prod'))).toBeNull()
@@ -1780,7 +1808,7 @@ test('clearing acknowledged host memory persists removal and requires fresh SSH 
   } finally { await restarted?.close(); await app?.close(); await closeServer(sshServer.server) }
 })
 
-test('keeps an existing SSH terminal mounted after visiting settings and returning to the workbench', async ({ launchApp }) => {
+test('restores an existing SSH terminal after visiting settings and returning to the workbench', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -1790,8 +1818,8 @@ test('keeps an existing SSH terminal mounted after visiting settings and returni
     const panes = page.locator('[data-testid^="terminal-pane-"]')
 
     await connect(page, sshServer.port)
-    const originalPane = await panes.first().elementHandle()
-    if (!originalPane) throw new Error('Expected the connected SSH terminal pane')
+    const originalPaneId = await panes.first().getAttribute('data-testid')
+    if (!originalPaneId) throw new Error('Expected the connected SSH terminal pane')
     await expect(panes).toHaveCount(1)
     await expect(panes.first()).toContainText('ready')
 
@@ -1800,7 +1828,8 @@ test('keeps an existing SSH terminal mounted after visiting settings and returni
     await page.getByRole('button', { name: '返回工作台', exact: true }).click()
 
     await expect(panes).toHaveCount(1)
-    expect(await originalPane.evaluate(node => node.isConnected)).toBe(true)
+    await expect(panes.first()).toBeVisible()
+    expect(await panes.first().getAttribute('data-testid')).toBe(originalPaneId)
     await sendCommand(panes.first(), page, 'after-settings')
     await expect(panes.first()).toContainText('echo:after-settings')
   } finally {
@@ -1851,6 +1880,7 @@ test('selects an unowned startup session over persisted history', async ({ launc
     const rawPort = (rawServer.address() as AddressInfo).port
     restarted = await electron.launch({
       args: [`--user-data-dir=${launch.userDataDir}`, launch.mainEntry, '-raw', '-P', String(rawPort)],
+      env: ssoE2eEnvironment(launch.ssoHomeDir),
     })
     const restoredPage = await restarted.firstWindow()
 
@@ -1950,27 +1980,37 @@ test('adds a visible terminal session when AccessClient starts a second Electron
   rawServer.listen(0, '127.0.0.1')
   await once(rawServer, 'listening')
   let app: ElectronApplication | undefined
+  let second: ChildProcess | undefined
+  let primaryFailure: E2ePrimaryFailure | undefined
 
   try {
     const port = (rawServer.address() as AddressInfo).port
     const launch = await launchApp(['-raw', '-P', String(port)])
-    const { mainEntry, userDataDir } = launch
+    const { mainEntry, userDataDir, ssoHomeDir } = launch
     app = launch.app
     const page = await app.firstWindow()
     const panes = page.locator('[data-testid^="terminal-pane-"]')
     await expect(panes).toHaveCount(1)
 
-    const second = spawn(electronExecutablePath, [`--user-data-dir=${userDataDir}`, mainEntry, '--', '-raw', '-P', String(port)], {
+    second = spawn(electronExecutablePath, [`--user-data-dir=${userDataDir}`, mainEntry, '--', '-raw', '-P', String(port)], {
+      env: ssoE2eEnvironment(ssoHomeDir),
       windowsHide: true,
       stdio: 'ignore',
     })
-    await once(second, 'exit')
+    await waitForChildExit(second)
 
     await expect(panes).toHaveCount(2)
     await expect(page.locator('[data-testid^="terminal-pane-"]:visible')).toHaveCount(2)
+  } catch (error) {
+    primaryFailure = { error }
+    throw error
   } finally {
-    await app?.close()
-    await closeServer(rawServer)
+    const cleanupFailures = await closeE2eResources(
+      async () => { if (second) await stopChildProcess(second) },
+      async () => { await app?.close() },
+      async () => { await closeServer(rawServer) },
+    )
+    throwCleanupFailures(primaryFailure, cleanupFailures)
   }
 })
 
@@ -2001,6 +2041,44 @@ async function connect(page: Awaited<ReturnType<ElectronApplication['firstWindow
   // The optional host-memory consent dialog intentionally masks the workbench.
   // A new pane plus its mounted tab is the connection-complete condition here.
   await expect(page.locator('.session-tabs .select').last()).toBeAttached()
+}
+
+function childHasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null
+}
+
+function waitForChildExit(child: ChildProcess, timeoutMs = 15_000): Promise<void> {
+  if (childHasExited(child)) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const timeout = setTimeout(() => finish(new Error('Child Electron process did not exit in time')), timeoutMs)
+    const cleanup = (): void => {
+      clearTimeout(timeout)
+      child.removeListener('exit', onExit)
+      child.removeListener('error', onError)
+    }
+    const finish = (error?: Error): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (error) reject(error)
+      else resolve()
+    }
+    const onExit = (): void => finish()
+    const onError = (error: Error): void => finish(error)
+    child.once('exit', onExit)
+    child.once('error', onError)
+    if (childHasExited(child)) finish()
+  })
+}
+
+async function stopChildProcess(child: ChildProcess): Promise<void> {
+  if (childHasExited(child)) return
+  const exited = waitForChildExit(child)
+  if (!child.kill() && !childHasExited(child)) {
+    throw new Error('Unable to stop child Electron process')
+  }
+  await exited
 }
 
 async function waitForWorkbenchReady(page: Awaited<ReturnType<ElectronApplication['firstWindow']>>): Promise<void> {

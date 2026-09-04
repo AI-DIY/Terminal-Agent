@@ -5,7 +5,7 @@ import { matchesSsoUrl } from './sso-url-matcher'
 type CdpDebugger = {
   attach(protocolVersion?: string): void
   detach(): void
-  send(command: string, parameters?: Record<string, unknown>): Promise<unknown>
+  sendCommand(command: string, parameters?: Record<string, unknown>): Promise<unknown>
   on(event: 'message' | 'detach', listener: (...args: unknown[]) => void): unknown
   removeListener(event: 'message' | 'detach', listener: (...args: unknown[]) => void): unknown
 }
@@ -110,7 +110,7 @@ export class SsoResponseCapture {
 
   private async enableNetwork(): Promise<void> {
     try {
-      await this.debugger.send('Network.enable')
+      await this.debugger.sendCommand('Network.enable')
       this.settleReadiness()
     } catch {
       const error = new Error('Unable to start SSO sign-in')
@@ -153,7 +153,7 @@ export class SsoResponseCapture {
   private async readResponseBody(requestId: string): Promise<void> {
     let response: unknown
     try {
-      response = await this.debugger.send('Network.getResponseBody', { requestId })
+      response = await this.debugger.sendCommand('Network.getResponseBody', { requestId })
     } catch {
       return
     }
@@ -218,7 +218,7 @@ export class SsoResponseCapture {
     if (!this.debuggerAttached) return
     this.debuggerAttached = false
     try {
-      await this.debugger.send('Network.disable')
+      await this.debugger.sendCommand('Network.disable')
     } catch {
       // Cleanup deliberately hides CDP protocol details from the user.
     }

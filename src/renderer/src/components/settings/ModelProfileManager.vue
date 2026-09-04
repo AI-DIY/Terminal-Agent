@@ -8,7 +8,11 @@ import { createAsyncTestResultGuard } from './model-connection-test'
 
 const props = defineProps<{ kind: ModelProfileKind }>()
 const store = getModelProfilesStore()
-const editingId = ref<string | null>(null)
+const editorDraft = store.editorDraftFor(props.kind)
+const editingId = computed({
+  get: () => editorDraft.editingId,
+  set: value => { editorDraft.editingId = value },
+})
 const busy = ref(false)
 const message = ref('')
 const apiKey = ref('')
@@ -16,7 +20,7 @@ const showApiKey = ref(false)
 const apiKeyRevision = ref(0)
 const replacements = reactive<Record<string, string>>({})
 const testGuard = createAsyncTestResultGuard()
-const form = reactive<ProfileDraft>(createProfileDraft(undefined, props.kind))
+const form = editorDraft.form
 const profiles = computed(() => store.profilesForKind(props.kind))
 const isVlm = computed(() => props.kind === 'vlm')
 const currentProfile = computed(() => editingId.value ? profiles.value.find(profile => profile.id === editingId.value) : undefined)
@@ -47,9 +51,7 @@ function reset(): void {
   setForm(createProfileDraft(undefined, props.kind))
 }
 function setForm(input: ProfileDraft): void {
-  const target = form as unknown as Record<string, unknown>
-  for (const key of Object.keys(target)) delete target[key]
-  Object.assign(form, input)
+  store.replaceEditorDraft(props.kind, input, editingId.value)
 }
 function edit(profile: RendererModelProfile): void {
   editingId.value = profile.id

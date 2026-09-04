@@ -111,11 +111,12 @@ export function createWorkbenchOpenedSessionHandler<TSession extends { id: strin
 
 export async function initializeWorkbenchTask<TResult>(options: {
   load(): Promise<void>
+  shouldCreate?: () => boolean | Promise<boolean>
   restore(): Promise<TResult>
   create(): Promise<unknown>
 }): Promise<TResult> {
   await options.load()
-  await options.create()
+  if (await (options.shouldCreate?.() ?? true)) await options.create()
   return options.restore()
 }
 

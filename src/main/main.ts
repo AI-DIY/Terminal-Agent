@@ -72,13 +72,14 @@ import { modelHostname, uniqueModelHostnames } from '../shared/model-context'
 import { normalizeChatContextSessionIds } from '../shared/chat-context-selection'
 import { normalizeBuiltInSkillIds } from '../shared/built-in-skills'
 import { SsoConfigService, getSsoConfigPath } from './settings/sso-config-service'
+import { resolveSsoConfigHomeDirectory } from './settings/sso-config-home'
 import { SsoAuthenticationService } from './sso/sso-authentication-service'
 import { registerSsoHandlers } from './sso/register-sso-handlers'
 
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
 let diagnostics: DiagnosticsController | undefined
-const ssoConfig = new SsoConfigService(getSsoConfigPath(app.getPath('home')))
+const ssoConfig = new SsoConfigService(getSsoConfigPath(resolveSsoConfigHomeDirectory(app.getPath('home'), process.env, app.isPackaged)))
 const ssoAuth = new SsoAuthenticationService(ssoConfig)
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
 const keyMaterials = new KeyMaterialStore()

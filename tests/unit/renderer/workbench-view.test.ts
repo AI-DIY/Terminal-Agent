@@ -21,7 +21,7 @@ describe('WorkbenchView SSO identity and skill gate', () => {
     expect(button).toContain(':disabled="!skillsAvailable"')
     expect(button).toContain('未登录状态不能使用技能')
     expect(button).toContain('@click="openSkills"')
-    expect(handler).toContain("if (skillsAvailable.value) emit('showSkills')")
+    expect(handler).toContain("if (skillsAvailable.value) emit('showSkills', chatStore.state.selectedId)")
     expect(panelBinding).toContain(':skills-available="skillsAvailable"')
   })
 })

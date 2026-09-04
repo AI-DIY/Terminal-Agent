@@ -71,6 +71,19 @@ function loadSshContextLines(): number {
   }
 }
 
+// Settings/Skills can remount the authenticated WorkbenchView. Preserve only
+// unsent drafts for that renderer/API lifetime; transcripts, runs, errors,
+// and all other runtime state remain scoped to each store instance.
+const transientDrafts = new WeakMap<Api, Record<string, string>>()
+
+function draftsFor(api: Api): Record<string, string> {
+  const existing = transientDrafts.get(api)
+  if (existing) return existing
+  const drafts = reactive<Record<string, string>>({})
+  transientDrafts.set(api, drafts)
+  return drafts
+}
+
 function saveSshContextLines(value: number): void {
   try {
     globalThis.localStorage?.setItem('terminal-agent.ssh-context-lines', String(value))
@@ -85,8 +98,9 @@ export function hasVisibleAssistantError(messages: readonly Pick<Message, 'role'
 }
 
 export function createGlobalChatStore(api: Api) {
+  const drafts = draftsFor(api)
   const state = reactive({
-    drafts: {} as Record<string, string>,
+    drafts,
     messages: {} as Record<string, Message[]>,
     runs: {} as Record<string, string | null>,
     errors: {} as Record<string, string>,
@@ -189,7 +203,8 @@ export function createGlobalChatStore(api: Api) {
       state.runUserMessageIds[chatId] = latestUserMessageId(state.messages[chatId])
     },
     setDraft(chatId: string, value: string): void {
-      state.drafts[chatId] = value
+      if (value) state.drafts[chatId] = value
+      else delete state.drafts[chatId]
     },
     draft(chatId: string): string {
       return state.drafts[chatId] ?? ''
@@ -291,7 +306,7 @@ export function createGlobalChatStore(api: Api) {
       if (!value) return
       const runId = crypto.randomUUID()
       cancelledRuns.delete(chatId)
-      state.drafts[chatId] = ''
+      delete state.drafts[chatId]
       state.pendingImages[chatId] = []
       state.runs[chatId] = runId
       state.progress[chatId] = null

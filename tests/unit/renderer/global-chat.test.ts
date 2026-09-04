@@ -233,6 +233,26 @@ describe('global chat store', () => {
     expect(store.state.messages.c1).toEqual([{ id: 'm1', role: 'assistant', content: 'A ', state: 'streaming' }])
   })
 
+  it('shares only unsent drafts across remounted stores and clears them on send or empty input', async () => {
+    const transport = api()
+    const first = createGlobalChatStore(transport)
+    first.setDraft('c1', 'draft across settings')
+
+    const remounted = createGlobalChatStore(transport)
+    expect(remounted.draft('c1')).toBe('draft across settings')
+    expect(remounted.state.messages).toEqual({})
+    expect(remounted.state.runs).toEqual({})
+
+    await remounted.send('c1', remounted.draft('c1'))
+    expect(first.draft('c1')).toBe('')
+    expect(first.state.messages).toEqual({})
+    expect(first.state.runs).toEqual({})
+
+    first.setDraft('c1', 'clear me')
+    first.setDraft('c1', '')
+    expect(remounted.draft('c1')).toBe('')
+  })
+
   it('passes model-facing drafts, history, deltas, and completions through unchanged', async () => {
     const transport = api()
     const store = createGlobalChatStore(transport)

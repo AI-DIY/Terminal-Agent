@@ -1,21 +1,31 @@
 import { expect, test } from '@playwright/test'
 import { _electron as electron } from '@playwright/test'
 import { once } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import {
+  closeE2eResources,
+  createSsoE2eDirectories,
+  removeSsoE2eDirectories,
+  ssoE2eEnvironment,
+  throwCleanupFailures,
+  type E2ePrimaryFailure,
+  type SsoE2eDirectories,
+} from './sso-e2e-environment'
 
 const removedImportButton = ['导入', '密钥'].join('')
 const removedVlmReference = ['LLM 密钥', '引用'].join('')
 
 test('opens real settings with ordered panels, host memory controls, and terminal return', async () => {
-  const userDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-settings-e2e-'))
+  const directories = await createSsoE2eDirectories('terminal-agent-settings-e2e-')
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
-  let hasPrimaryFailure = false
+  let primaryFailure: E2ePrimaryFailure | undefined
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, join(process.cwd(), 'out/main/main.js')] })
+    app = await electron.launch({
+      args: [`--user-data-dir=${directories.userDataDir}`, join(process.cwd(), 'out/main/main.js')],
+      env: ssoE2eEnvironment(directories.ssoHomeDir),
+    })
     const page = await app.firstWindow()
     await ensureLegacyWorkbench(page)
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
@@ -98,23 +108,26 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await expect(page.getByLabel('接口地址')).toHaveValue(draftEndpoint)
     await expect(page.getByLabel('上下文长度')).toHaveValue('32768')
   } catch (error) {
-    hasPrimaryFailure = true
+    primaryFailure = { error }
     throw error
   } finally {
     const cleanupFailures = await closeE2eResources(
       async () => { await app?.close() },
-      async () => { await rm(userDataDir, { recursive: true, force: true }) },
+      async () => { await removeSsoE2eDirectories(directories) },
     )
-    throwCleanupFailures(hasPrimaryFailure, cleanupFailures)
+    throwCleanupFailures(primaryFailure, cleanupFailures)
   }
 })
 
 test('left-aligns LLM and VLM model profile rows', async () => {
-  const userDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-model-alignment-e2e-'))
+  const directories = await createSsoE2eDirectories('terminal-agent-model-alignment-e2e-')
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
-  let hasPrimaryFailure = false
+  let primaryFailure: E2ePrimaryFailure | undefined
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, join(process.cwd(), 'out/main/main.js')] })
+    app = await electron.launch({
+      args: [`--user-data-dir=${directories.userDataDir}`, join(process.cwd(), 'out/main/main.js')],
+      env: ssoE2eEnvironment(directories.ssoHomeDir),
+    })
     const page = await app.firstWindow()
     await ensureLegacyWorkbench(page)
     await page.evaluate(async () => {
@@ -147,28 +160,31 @@ test('left-aligns LLM and VLM model profile rows', async () => {
       expect(Math.max(...leftEdges) - Math.min(...leftEdges)).toBeLessThanOrEqual(1)
     }
   } catch (error) {
-    hasPrimaryFailure = true
+    primaryFailure = { error }
     throw error
   } finally {
     const cleanupFailures = await closeE2eResources(
       async () => { await app?.close() },
-      async () => { await rm(userDataDir, { recursive: true, force: true }) },
+      async () => { await removeSsoE2eDirectories(directories) },
     )
-    throwCleanupFailures(hasPrimaryFailure, cleanupFailures)
+    throwCleanupFailures(primaryFailure, cleanupFailures)
   }
 })
 
 test('runs the direct model key lifecycle through real Electron without exposing or retaining cleared keys', async () => {
   let testModel: Awaited<ReturnType<typeof startKeyedModelServer>> | undefined
-  let userDataDir: string | undefined
+  let directories: SsoE2eDirectories | undefined
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
-  let hasPrimaryFailure = false
+  let primaryFailure: E2ePrimaryFailure | undefined
   try {
     const startedTestModel = await startKeyedModelServer()
     testModel = startedTestModel
-    const temporaryUserDataDir = await mkdtemp(join(tmpdir(), 'terminal-agent-model-key-editor-e2e-'))
-    userDataDir = temporaryUserDataDir
-    app = await electron.launch({ args: [`--user-data-dir=${temporaryUserDataDir}`, join(process.cwd(), 'out/main/main.js')] })
+    const temporaryDirectories = await createSsoE2eDirectories('terminal-agent-model-key-editor-e2e-')
+    directories = temporaryDirectories
+    app = await electron.launch({
+      args: [`--user-data-dir=${temporaryDirectories.userDataDir}`, join(process.cwd(), 'out/main/main.js')],
+      env: ssoE2eEnvironment(temporaryDirectories.ssoHomeDir),
+    })
     const page = await app.firstWindow()
     await ensureLegacyWorkbench(page)
     await page.getByRole('button', { name: '设置', exact: true }).click()
@@ -264,32 +280,17 @@ test('runs the direct model key lifecycle through real Electron without exposing
     await expect(page.getByRole('status')).toContainText('An API key is required for this model provider')
     expect(startedTestModel.requestCount).toBe(requestCountAfterClear)
   } catch (error) {
-    hasPrimaryFailure = true
+    primaryFailure = { error }
     throw error
   } finally {
     const cleanupFailures = await closeE2eResources(
       async () => { await app?.close() },
       async () => { if (testModel) await closeServer(testModel.server) },
-      async () => { if (userDataDir) await rm(userDataDir, { recursive: true, force: true }) },
+      async () => { if (directories) await removeSsoE2eDirectories(directories) },
     )
-    throwCleanupFailures(hasPrimaryFailure, cleanupFailures)
+    throwCleanupFailures(primaryFailure, cleanupFailures)
   }
 })
-
-async function closeE2eResources(...close: Array<() => Promise<void>>): Promise<unknown[]> {
-  const failures: unknown[] = []
-  for (const resource of close) {
-    try { await resource() }
-    catch (error) { failures.push(error) }
-  }
-  return failures
-}
-
-function throwCleanupFailures(hasPrimaryFailure: boolean, failures: unknown[]): void {
-  if (hasPrimaryFailure || failures.length === 0) return
-  if (failures.length === 1) throw failures[0]
-  throw new AggregateError(failures, 'E2E resource cleanup failed')
-}
 
 function closeServer(server: { close(callback: (error?: Error) => void): void }): Promise<void> {
   return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))

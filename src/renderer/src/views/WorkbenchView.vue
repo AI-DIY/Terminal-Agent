@@ -25,8 +25,9 @@ import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosur
 import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 import { getUserPreferencesStore } from '../stores/user-preferences'
 import { getSsoStore } from '../stores/sso'
+import { consumeWorkbenchNavigationHandoff } from '../stores/workbench-navigation-handoff'
 
-const emit = defineEmits<{ showSettings: []; showSkills: [] }>()
+const emit = defineEmits<{ showSettings: [selectedChatId: string | null]; showSkills: [selectedChatId: string | null] }>()
 const store = createSessionsStore()
 const sessions = ref<SessionView[]>([])
 const activeSessionId = ref<string | null>(null)
@@ -51,6 +52,7 @@ const shellHistory = createShellHistoryStore(window.terminalAgent.shellHistory)
 const layoutPreferences = getLayoutPreferencesStore()
 const userPreferences = getUserPreferencesStore()
 const sso = getSsoStore()
+const navigationHandoff = consumeWorkbenchNavigationHandoff()
 const welcomeName = computed(() => {
   const identity = sso.identity.value
   return identity ? identity.name + '（' + identity.employeeId + '）' : userPreferences.state.displayName || '朋友'
@@ -61,7 +63,7 @@ const conversationSessionBusy = ref(false)
 const conversationSessions = ref<ChatConversationSessionSummary[]>([])
 
 function openSkills(): void {
-  if (skillsAvailable.value) emit('showSkills')
+  if (skillsAvailable.value) emit('showSkills', chatStore.state.selectedId)
 }
 // Internal AI conversations retain the task id (and therefore SSH ownership).
 // Use the mutation result to update the task-keyed panel directly rather than
@@ -938,7 +940,17 @@ async function openNodeInspector(): Promise<void> {
 async function initializeWorkbench(): Promise<void> {
   try {
     const failures = await initializeWorkbenchTask({
-      load: () => chatStore.load(),
+      load: async () => {
+        await chatStore.load()
+        const selectedChatId = navigationHandoff?.selectedChatId
+        if (selectedChatId && chatStore.state.chats.some(chat => chat.id === selectedChatId)) {
+          await selectChat(selectedChatId, false)
+        }
+      },
+      shouldCreate: () => {
+        const selectedChatId = navigationHandoff?.selectedChatId
+        return !selectedChatId || !chatStore.state.chats.some(chat => chat.id === selectedChatId)
+      },
       restore: async () => {
         const selected = chatStore.state.selected
         if (selected) restoreAssociatedShellView(selected)
@@ -1079,7 +1091,7 @@ onBeforeUnmount(() => {
       <p v-if="connectionError" class="connection-error" role="alert">{{ connectionError }}</p>
       <p v-if="diagnosticError" class="diagnostic-error" role="alert">{{ diagnosticError }}</p>
       <button type="button" class="header-button" :aria-label="skillsAvailable ? '技能' : '技能（未登录状态不能使用技能）'" :title="skillsAvailable ? '技能' : '未登录状态不能使用技能'" :disabled="!skillsAvailable" @click="openSkills"><Sparkles :size="14" aria-hidden="true" /><span>技能</span></button>
-      <button type="button" class="header-button" aria-label="设置" title="设置" @click="emit('showSettings')"><Settings :size="14" aria-hidden="true" /><span>设置</span></button>
+      <button type="button" class="header-button" aria-label="设置" title="设置" @click="emit('showSettings', chatStore.state.selectedId)"><Settings :size="14" aria-hidden="true" /><span>设置</span></button>
       <button type="button" class="header-button" aria-label="DevTools" title="DevTools" @click="openRendererDevTools"><Code2 :size="14" aria-hidden="true" /><span>DevTools</span></button>
       <button type="button" class="header-button" aria-label="Node Inspector" title="Node Inspector" @click="openNodeInspector"><Bug :size="14" aria-hidden="true" /><span>Node Inspector</span></button>
       <button type="button" class="header-button upgrade-button" aria-label="升级" title="检查并安装升级" @click="openUpgrade"><span>升级</span></button>

@@ -174,6 +174,24 @@ describe('model profile store', () => {
     expect(draft).not.toHaveProperty('apiKeyPlaceholder')
   })
 
+  it('retains a non-secret editor draft across settings remounts', () => {
+    const api = createApi()
+    const store = createModelProfilesStore(api)
+    const draft = {
+      ...createProfileDraft(undefined, 'llm'),
+      name: '未保存连接',
+      provider: 'openai' as const,
+      model: 'preserved-draft-model',
+      endpoint: 'http://127.0.0.1:18080/v1/chat/completions',
+      contextLimit: 32_768,
+    }
+
+    store.replaceEditorDraft('llm', draft, null)
+
+    expect(store.editorDraftFor('llm')).toEqual({ editingId: null, form: draft })
+    expect(JSON.stringify(store.state)).not.toMatch(/apiKey|secret|token/i)
+  })
+
   it('only attaches a trimmed temporary key when converting a draft to input', () => {
     const input = profileDraftInput(createProfileDraft(profile({ hasApiKey: true })), '  temporary-secret  ')
 

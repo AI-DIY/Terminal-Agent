@@ -20,4 +20,13 @@ describe('renderer auth gate', () => {
     expect(login).toContain('<SsoSettings')
     expect(login).toContain('返回登录页')
   })
+
+  it('records authenticated workbench navigation as a one-shot handoff', () => {
+    const app = readFileSync(new URL('../../../src/renderer/src/App.vue', import.meta.url), 'utf8')
+
+    expect(app).toContain('setWorkbenchNavigationHandoff(selectedChatId)')
+    expect(app).toContain("if (rootSurface.value !== 'workbench') return")
+    expect(app).toContain('watch(rootSurface, surface => {')
+    expect(app).toContain('clearWorkbenchNavigationHandoff()')
+  })
 })

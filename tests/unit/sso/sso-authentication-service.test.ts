@@ -6,7 +6,7 @@ import type { SsoConfiguration, SsoIdentity } from '../../../src/shared/sso-cont
 const electron = vi.hoisted(() => ({ windows: [] as Array<{ options: Record<string, unknown>; close(): void }> }))
 vi.mock('electron', () => ({
   BrowserWindow: class {
-    readonly webContents = { debugger: { attach() {}, detach() {}, send: async () => undefined, on() {}, removeListener() {} }, on() {}, removeListener() {} }
+    readonly webContents = { debugger: { attach() {}, detach() {}, sendCommand: async () => undefined, on() {}, removeListener() {} }, on() {}, removeListener() {} }
     destroyed = false
     constructor(readonly options: Record<string, unknown>) { electron.windows.push(this) }
     loadURL = vi.fn(async () => undefined)
@@ -27,13 +27,13 @@ const config: SsoConfiguration = {
 }
 
 class FakeWindow extends EventEmitter {
-  readonly debugger = { attach() {}, detach() {}, send: async () => undefined, on() {}, removeListener() {} }
+  readonly debugger = { attach() {}, detach() {}, sendCommand: async () => undefined, on() {}, removeListener() {} }
   readonly webContents = {
     debugger: this.debugger,
     on: vi.fn((event: string, listener: (...args: unknown[]) => void) => this.on(`webContents:${event}`, listener)),
     removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => this.removeListener(`webContents:${event}`, listener)),
   }
-  readonly loadURL = vi.fn(async () => undefined)
+  readonly loadURL = vi.fn(async (_url: string) => undefined)
   readonly close = vi.fn(() => this.emit('closed'))
   readonly isDestroyed = vi.fn(() => false)
 }
@@ -168,15 +168,79 @@ describe('SsoAuthenticationService', () => {
     expect(capture.notifyNavigation).toHaveBeenCalledTimes(2)
   })
 
-  it('loads the login page only after capture startup and readiness', async () => {
+  it('primes the authentication window locally before capture startup and the configured login page', async () => {
     const { service, capture, window } = createService()
     const order: string[] = []
+    let releaseBlankNavigation!: () => void
+    const blankNavigation = new Promise<void>(resolve => { releaseBlankNavigation = resolve })
     capture.start.mockImplementation(() => { order.push('start'); return capture.result })
     capture.ready.mockImplementation(async () => { order.push('ready') })
-    window.loadURL.mockImplementation(async () => { order.push('loadURL') })
+    window.loadURL.mockImplementation(async (url: string) => {
+      order.push(`loadURL:${url}`)
+      if (url === 'about:blank') await blankNavigation
+    })
     await service.initialize()
-    await service.retry()
-    expect(order).toEqual(['start', 'ready', 'loadURL'])
+    const retrying = service.retry()
+    await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledWith('about:blank'))
+    expect(order).toEqual(['loadURL:about:blank'])
+    expect(capture.start).not.toHaveBeenCalled()
+    expect(capture.ready).not.toHaveBeenCalled()
+
+    releaseBlankNavigation()
+    await retrying
+
+    expect(order).toEqual([
+      'loadURL:about:blank',
+      'start',
+      'ready',
+      `loadURL:${config.loginPageUrl}`,
+    ])
+  })
+
+  it('does not start capture or load the remote login page after cancellation during local priming', async () => {
+    const { service, capture, window } = createService()
+    let releaseBlankNavigation!: () => void
+    const blankNavigation = new Promise<void>(resolve => { releaseBlankNavigation = resolve })
+    window.loadURL.mockImplementation(async (url: string) => {
+      if (url === 'about:blank') await blankNavigation
+    })
+    await service.initialize()
+    const retrying = service.retry()
+    await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledWith('about:blank'))
+
+    const saving = service.saveConfiguration({ ...config, enabled: false })
+    await vi.waitFor(() => expect(capture.dispose).toHaveBeenCalledOnce())
+    releaseBlankNavigation()
+    await Promise.all([retrying, saving])
+
+    expect(capture.start).not.toHaveBeenCalled()
+    expect(window.loadURL).not.toHaveBeenCalledWith(config.loginPageUrl)
+    expect(window.close).toHaveBeenCalledOnce()
+    expect(service.getState()).toEqual({ state: 'login-disabled' })
+  })
+
+  it('does not start capture or load the remote login page when the primed window closes', async () => {
+    const { service, capture, window } = createService()
+    let releaseBlankNavigation!: () => void
+    const blankNavigation = new Promise<void>(resolve => { releaseBlankNavigation = resolve })
+    window.loadURL.mockImplementation(async (url: string) => {
+      if (url === 'about:blank') await blankNavigation
+    })
+    await service.initialize()
+    const retrying = service.retry()
+    await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledWith('about:blank'))
+
+    window.isDestroyed.mockReturnValue(true)
+    window.emit('closed')
+    releaseBlankNavigation()
+    await retrying
+    await vi.waitFor(() => expect(service.getState()).toEqual({
+      state: 'error',
+      errorMessage: 'SSO sign-in window closed',
+    }))
+
+    expect(capture.start).not.toHaveBeenCalled()
+    expect(window.loadURL).not.toHaveBeenCalledWith(config.loginPageUrl)
   })
 
   it('ignores a stale capture completion after saving a new configuration', async () => {
