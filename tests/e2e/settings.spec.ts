@@ -15,7 +15,6 @@ import {
 } from './sso-e2e-environment'
 
 const removedImportButton = ['导入', '密钥'].join('')
-const removedVlmReference = ['LLM 密钥', '引用'].join('')
 
 test('opens real settings with ordered panels, host memory controls, and terminal return', async () => {
   const directories = await createSsoE2eDirectories('terminal-agent-settings-e2e-')
@@ -32,12 +31,12 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await page.getByRole('button', { name: '设置', exact: true }).click()
 
     const panels = page.getByRole('navigation', { name: '设置面板' }).getByRole('button')
-    await expect(panels).toHaveCount(7)
-    await expect(panels).toHaveText(['模型选择', '大语言模型配置', '视觉语言模型配置', '安全围栏', '本地主机记忆', '外观', '单点登录'])
+    await expect(panels).toHaveCount(5)
+    await expect(panels).toHaveText(['大语言模型配置', '安全围栏', '本地主机记忆', '外观', '单点登录'])
     await expect(panels.nth(0)).toHaveAttribute('aria-current', 'page')
     await expect(panels.nth(1)).not.toHaveAttribute('aria-current', 'page')
 
-    await panels.nth(4).click()
+    await panels.nth(2).click()
     await expect(page.getByRole('heading', { name: '本地主机记忆', exact: true })).toBeVisible()
     await expect(page.getByLabel('启用本地主机记忆')).toBeVisible()
     for (const label of [
@@ -63,7 +62,7 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await expect(processCommand).toHaveClass(/disabled/)
     await expect(processCommand.getByText('当前不执行', { exact: true })).toBeVisible()
 
-    await panels.nth(1).click()
+    await panels.nth(0).click()
     const apiKeyInput = page.getByLabel('API Key', { exact: true })
     await expect(apiKeyInput).toBeEditable()
     await expect(apiKeyInput).toHaveAttribute('type', 'password')
@@ -76,13 +75,9 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await expect(page.locator('.profile-editor').locator('select')).toHaveCount(1)
     await expect(page.getByRole('button', { name: removedImportButton, exact: true })).toHaveCount(0)
 
-    await panels.nth(2).click()
-    await expect(page.getByLabel('API Key', { exact: true })).toBeEditable()
-    await expect(page.locator('.profile-editor').getByRole('button')).toHaveCount(4)
-    await expect(page.locator('.profile-editor').locator('select')).toHaveCount(1)
-    await expect(page.getByText(removedVlmReference, { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '视觉语言模型配置', exact: true })).toHaveCount(0)
 
-    await panels.nth(1).click()
+    await panels.nth(0).click()
     const draftName = '保留的未保存模型草稿'
     const draftEndpoint = 'http://127.0.0.1:18080/v1/chat/completions'
     await page.getByLabel('连接名称').fill(draftName)
@@ -134,15 +129,11 @@ test('left-aligns LLM and VLM model profile rows', async () => {
       await window.terminalAgent.settings.models.save({
         name: '左对齐文本模型', kind: 'llm', provider: 'ollama', model: 'llm-left', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 1_024,
       })
-      await window.terminalAgent.settings.models.save({
-        name: '左对齐视觉模型', kind: 'vlm', provider: 'ollama', model: 'vlm-left', endpoint: 'http://127.0.0.1:11434/api/chat', maxImages: 1,
-      })
     })
     await page.getByRole('button', { name: '设置', exact: true }).click()
 
     for (const [panelName, profileName] of [
       ['大语言模型配置', '左对齐文本模型'],
-      ['视觉语言模型配置', '左对齐视觉模型'],
     ]) {
       await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: panelName, exact: true }).click()
       const profile = page.locator('.profile-item').filter({ hasText: profileName })

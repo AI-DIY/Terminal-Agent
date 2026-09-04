@@ -1162,9 +1162,10 @@ onBeforeUnmount(() => {
         :context-sessions="currentChatSessions"
         :conversation-sessions="conversationSessions"
         :session-busy="conversationSessionBusy"
-        :skills-available="skillsAvailable"
-        @collapse="collapse"
-        @new-session="createConversationSession"
+         :skills-available="skillsAvailable"
+         @collapse="collapse"
+         @new-connection="createConnection"
+         @new-session="createConversationSession"
         @switch-session="switchConversationSession"
       />
     </template>

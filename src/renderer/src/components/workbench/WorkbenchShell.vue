@@ -92,9 +92,9 @@ onBeforeUnmount(widthSaver.flush)
     <section class="workspace" :inert="modalOpen || undefined" :aria-hidden="modalOpen ? 'true' : undefined">
       <div class="side-region left-region">
         <div v-show="!layout.state.leftCollapsed" class="side-content"><slot name="sidebar" :collapse="() => toggleSidebar('left')" /></div>
-        <button v-show="layout.state.leftCollapsed" type="button" class="restore-button" aria-label="展开任务历史区" title="展开任务历史区" @click="toggleSidebar('left')"><PanelLeftOpen :size="16" aria-hidden="true" /><span>任务历史区</span></button>
+        <button v-show="layout.state.leftCollapsed" type="button" class="restore-button" aria-label="展开任务空间" title="展开任务空间" @click="toggleSidebar('left')"><PanelLeftOpen :size="16" aria-hidden="true" /><span>任务空间</span></button>
       </div>
-      <div class="separator" role="separator" aria-label="调整任务历史区宽度" aria-orientation="vertical" aria-valuemin="210" aria-valuemax="360" :aria-valuenow="layout.state.leftWidth" tabindex="0" @pointerdown="startResize('left', $event)" @keydown="resizeWithKeyboard('left', $event)" />
+      <div class="separator" role="separator" aria-label="调整任务空间宽度" aria-orientation="vertical" aria-valuemin="210" aria-valuemax="360" :aria-valuenow="layout.state.leftWidth" tabindex="0" @pointerdown="startResize('left', $event)" @keydown="resizeWithKeyboard('left', $event)" />
       <section class="shell-region">
         <slot name="shell" />
       </section>
@@ -128,6 +128,10 @@ onBeforeUnmount(widthSaver.flush)
   font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 .workbench-shell.theme-graphite {
+  color-scheme: dark;
+  box-shadow: none;
+}
+.workbench-shell.theme-noble-purple {
   color-scheme: dark;
   box-shadow: none;
 }

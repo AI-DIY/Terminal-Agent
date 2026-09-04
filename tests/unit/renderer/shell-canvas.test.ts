@@ -42,7 +42,7 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
 
-    expect(canvas).toContain('历史 SSH 连接')
+    expect(canvas).toContain('历史 SSH 会话')
     expect(canvas).toContain('class="history-session-tab"')
     expect(canvas).toContain('draggable="true"')
     expect(canvas).toContain('@drop="dropHistory(host.id, $event)"')
@@ -63,7 +63,8 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
   it('labels history without presenting it as the active SSH workspace', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
 
-    expect(canvas).toContain('SSH 历史连接')
+    expect(canvas).toContain('SSH工作区')
+    expect(canvas).toContain('历史 SSH 连接')
     expect(canvas).toContain('{{ historyHostCount }} 台主机')
     expect(canvas).toContain('当前任务没有在线 SSH')
     expect(canvas).toContain('v-if="isLive" class="shell-title"')
@@ -114,7 +115,7 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
 
   it('vertically centers the closed-Shell history title and summary in their toolbar', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
-    const titleRule = /\.history-toolbar-title\s*\{([^}]*)\}/.exec(canvas)?.[1] ?? ''
+    const titleRule = /\.history-shell-heading\s*\{([^}]*)\}/.exec(canvas)?.[1] ?? ''
 
     expect(titleRule).toContain('align-items: center;')
     expect(titleRule).not.toContain('align-items: baseline;')
@@ -166,7 +167,7 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(canvas).toContain('minmax(0, 1fr)')
     expect(canvas).toContain('min-height: 0')
     expect(canvas).toContain(':font-size="layout.state.fontSize"')
-    expect(canvas).toContain('SHELL_FONT_SIZE_PRESETS')
+    expect(canvas).toContain('SHELL_FONT_SIZE_OPTIONS')
     expect(canvas).toContain('overflow-x: auto; overflow-y: hidden;')
     expect(canvas).toContain('SSH 窗口布局设置')
     expect(canvas).not.toContain('Maximize2')

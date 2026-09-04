@@ -26,7 +26,7 @@ describe('SSO renderer behavior', () => {
     expect(shouldRetryOnMount('login-required')).toBe(true)
     expect(shouldRetryOnMount('authenticating')).toBe(false)
     expect(loginStatusCopy('login-required')).toBe('正在打开登录页')
-    expect(loginStatusCopy('authenticating')).toBe('等待平台加载用户信息')
+    expect(loginStatusCopy('authenticating')).toBe('正在安全获取用户信息')
     expect(loginErrorCopy('SSO sign-in window closed')).toBe('登录窗口已关闭')
     expect(loginErrorCopy('backend details '.repeat(40)).length).toBeLessThanOrEqual(247)
   })

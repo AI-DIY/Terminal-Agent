@@ -41,6 +41,8 @@ export type UpdaterServiceOptions = {
   tempDirectory: string
   owner?: string
   repository?: string
+  /** Optional Nuts update feed root (for example http://ta.ai-diy.me/update/win32). */
+  feedUrl?: string
   platform?: NodeJS.Platform
   architecture?: string
   fetch?: UpdaterFetch
@@ -49,8 +51,10 @@ export type UpdaterServiceOptions = {
   maxRedirects?: number
   requestTimeoutMs?: number
   downloadTimeoutMs?: number
-  /** Require a cryptographic digest from GitHub metadata before installing. */
+  /** Require a cryptographic digest from release metadata before installing. */
   requireIntegrity?: boolean
+  /** Number of HTTP range workers used for sufficiently large assets. */
+  downloadConcurrency?: number
   launchInstaller?: InstallerLauncher
   relaunch?: () => void
   exit?: (code: number) => void
@@ -77,6 +81,23 @@ type GithubReleaseAsset = {
   content_type?: unknown
 }
 
+type NutsReleasePayload = {
+  url?: unknown
+  html_url?: unknown
+  name?: unknown
+  version?: unknown
+  tag_name?: unknown
+  notes?: unknown
+  body?: unknown
+  pub_date?: unknown
+  published_at?: unknown
+  size?: unknown
+  file_size?: unknown
+  sha256?: unknown
+  sha512?: unknown
+  digest?: unknown
+}
+
 type Semver = {
   major: number
   minor: number
@@ -97,7 +118,13 @@ type UpdaterRequestResult = {
 const DEFAULT_OWNER = 'AI-DIY'
 const DEFAULT_REPOSITORY = 'Terminal-Agent'
 const DEFAULT_API_BASE = 'https://api.github.com'
+/** Production update feed.  The main process passes this explicitly so the
+ * generic service remains backwards compatible with GitHub integrations and
+ * existing embedders/tests that do not opt into Nuts. */
+export const DEFAULT_NUTS_FEED_URL = 'http://ta.ai-diy.me/update/win32'
 const USER_AGENT = 'Terminal-Agent-Updater/1.0'
+const DEFAULT_DOWNLOAD_CONCURRENCY = 4
+const RANGE_DOWNLOAD_THRESHOLD = 1 * 1024 * 1024
 const installerNamePattern = /^Terminal-Agent-Setup-([0-9A-Za-z][0-9A-Za-z._-]*)\.exe$/i
 const safeRepositoryPartPattern = /^[A-Za-z0-9_.-]{1,100}$/
 const sha256Pattern = /^[a-f\d]{64}$/i
@@ -126,10 +153,11 @@ export class UpdaterError extends Error {
 }
 
 /**
- * A deliberately small updater implementation.  It talks only to the fixed
- * GitHub repository, caps every response, follows a bounded set of redirects,
- * streams the installer to disk, and verifies the digest advertised by the
- * release before making it executable.
+ * A deliberately small updater implementation. It can consume the fixed
+ * GitHub release API for legacy callers or a bounded Nuts feed for production
+ * builds, caps every response, follows a bounded set of redirects, streams
+ * the installer to disk, and verifies any digest advertised by the release
+ * before making it executable.
  */
 export class UpdaterService {
   private readonly currentVersion: string
@@ -137,6 +165,10 @@ export class UpdaterService {
   private readonly tempDirectory: string
   private readonly owner: string
   private readonly repository: string
+  private readonly feedUrl: string | undefined
+  private readonly feedOrigin: string | undefined
+  private readonly feedPath: string | undefined
+  private readonly downloadConcurrency: number
   private readonly platform: NodeJS.Platform
   private readonly architecture: string
   private readonly fetcher: UpdaterFetch
@@ -179,6 +211,10 @@ export class UpdaterService {
     this.tempDirectory = resolve(options.tempDirectory)
     this.owner = validateRepositoryPart(options.owner ?? DEFAULT_OWNER, '仓库所有者')
     this.repository = validateRepositoryPart(options.repository ?? DEFAULT_REPOSITORY, '仓库名称')
+    const parsedFeed = options.feedUrl === undefined ? undefined : parseFeedUrl(options.feedUrl)
+    this.feedUrl = parsedFeed?.root
+    this.feedOrigin = parsedFeed?.origin
+    this.feedPath = parsedFeed?.path
     this.platform = options.platform ?? process.platform
     this.architecture = options.architecture ?? process.arch
     this.fetcher = options.fetch ?? defaultFetcher
@@ -188,9 +224,12 @@ export class UpdaterService {
     this.requestTimeoutMs = boundedPositiveInteger(options.requestTimeoutMs ?? updaterLimits.requestTimeoutMs, 1, 10 * 60_000, '请求超时')
     this.downloadTimeoutMs = boundedPositiveInteger(options.downloadTimeoutMs ?? updaterLimits.downloadTimeoutMs, 1, 60 * 60_000, '下载超时')
     // GitHub's release API exposes a SHA-256 digest for uploaded assets.  Do
-    // not permit an unsigned installer by default; callers must opt out
-    // explicitly for development fixtures.
-    this.requireIntegrity = options.requireIntegrity ?? true
+    // not permit an unsigned installer by default; Nuts feeds in the wild do
+    // not consistently publish a digest, so retain the transport/path trust
+    // checks and allow those releases unless the caller explicitly requires a
+    // digest.
+    this.requireIntegrity = options.requireIntegrity ?? (this.feedUrl ? false : true)
+    this.downloadConcurrency = boundedPositiveInteger(options.downloadConcurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY, 1, 16, '下载并发数')
     this.launchInstaller = options.launchInstaller ?? (filePath => defaultInstallerLauncher(filePath, this.platform))
     this.relaunch = options.relaunch
     this.exit = options.exit
@@ -365,14 +404,28 @@ export class UpdaterService {
         return result
       }
 
-      request = await this.request(`${DEFAULT_API_BASE}/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repository)}/releases/latest`, {
+      const metadataUrl = this.feedUrl
+        ? `${this.feedUrl}/${encodeURIComponent(this.currentVersion)}`
+        : `${DEFAULT_API_BASE}/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repository)}/releases/latest`
+      request = await this.request(metadataUrl, {
         maxBytes: this.maxMetadataBytes,
         timeoutMs: this.requestTimeoutMs,
       })
       this.assertActive()
-      const payload = parseJsonObject(await readResponseText(request.response, this.maxMetadataBytes, request.request.controller.signal), this.maxMetadataBytes)
+      // Nuts follows the Squirrel update convention: a 204 response means
+      // that the current version is up to date and intentionally has no body.
+      if (request.response.status === 204) {
+        this.release = null
+        this.downloaded = null
+        this.installerPath = undefined
+        await this.removeUpdateDirectory()
+        this.setState({ phase: 'up-to-date', release: null, downloaded: null, error: null })
+        this.emitProgress({ phase: 'check', percent: 100 })
+        return { currentVersion: this.currentVersion, updateAvailable: false, release: null }
+      }
+      const payload = parseJsonObject(await readResponseText(request.response, this.maxMetadataBytes, request.request.controller.signal), this.maxMetadataBytes, this.feedUrl ? '更新服务' : 'GitHub')
       this.assertActive()
-      const release = this.parseRelease(payload)
+      const release = this.feedUrl ? this.parseNutsRelease(payload as NutsReleasePayload) : this.parseRelease(payload)
       const updateAvailable = release !== null
       this.release = release
       this.downloaded = null
@@ -410,7 +463,7 @@ export class UpdaterService {
     if (this.downloaded && this.installerPath) return this.downloaded
 
     this.setState({ phase: 'downloading', error: null })
-    this.emitProgress({ phase: 'download', percent: 0, transferredBytes: 0, totalBytes: release.size, version: release.version })
+    this.emitProgress({ phase: 'download', percent: 0, transferredBytes: 0, totalBytes: release.size > 0 ? release.size : undefined, version: release.version })
     let directory: string | undefined
     let path: string | undefined
     let fileHandle: Awaited<ReturnType<typeof open>> | undefined
@@ -421,7 +474,9 @@ export class UpdaterService {
         timeoutMs: this.downloadTimeoutMs,
       })
       this.assertActive()
-      const response = request.response
+      const initialRequest = request
+      const response = initialRequest.response
+      assertInstallerResponseName(response, release.installerName)
       const contentLength = parseContentLength(response.headers.get('content-length'))
       if (contentLength !== undefined && contentLength > this.maxInstallerBytes) {
         throw new UpdaterError('更新安装包超过允许的大小上限。', 'PAYLOAD_TOO_LARGE')
@@ -432,28 +487,75 @@ export class UpdaterService {
       assertContainedPath(path, directory)
       fileHandle = await open(path, 'wx', 0o600)
 
-      const sha256 = createHash('sha256')
-      const sha512 = createHash('sha512')
       let transferred = 0
-      for await (const chunk of responseChunks(response, request.request.controller.signal)) {
-        this.assertActive()
-        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-        transferred += bytes.byteLength
-        if (transferred > this.maxInstallerBytes) throw new UpdaterError('更新安装包超过允许的大小上限。', 'PAYLOAD_TOO_LARGE')
-        sha256.update(bytes)
-        sha512.update(bytes)
-        await writeAll(fileHandle, bytes)
-        const total = release.size > 0 ? release.size : contentLength
-        const percent = total ? Math.min(99, (transferred / total) * 100) : 0
-        this.emitProgress({ phase: 'download', percent, transferredBytes: transferred, totalBytes: total, version: release.version })
+      const rangeTotal = contentLength ?? (release.size > 0 ? release.size : undefined)
+      const useRanges = Boolean(rangeTotal && rangeTotal >= RANGE_DOWNLOAD_THRESHOLD && this.downloadConcurrency > 1)
+      if (useRanges && rangeTotal) {
+        try {
+          await fileHandle.truncate(rangeTotal)
+          transferred = await this.downloadWithRanges(release.installerUrl, rangeTotal, fileHandle, release)
+          // The initial full response was only a size probe. Close it after
+          // range workers succeed; otherwise its unread body could retain a
+          // connection in Chromium's session pool.
+          this.abortRequest(initialRequest.request)
+          request = undefined
+        }
+        catch (error) {
+          if (!(error instanceof RangeUnsupportedError)) {
+            this.abortRequest(initialRequest.request)
+            request = undefined
+            throw error
+          }
+          await fileHandle.truncate(0)
+          // Reuse the probe response when the server returned a normal 200;
+          // this avoids downloading the same large payload twice merely
+          // because Range is unsupported. A non-200 probe is re-requested.
+          let fallbackResponse = initialRequest.response
+          let fallbackRequest = initialRequest
+          if (fallbackResponse.status !== 200) {
+            this.abortRequest(initialRequest.request)
+            fallbackRequest = await this.request(release.installerUrl, {
+              maxBytes: this.maxInstallerBytes,
+              timeoutMs: this.downloadTimeoutMs,
+            })
+            request = fallbackRequest
+            fallbackResponse = fallbackRequest.response
+          }
+          const fallbackLength = parseContentLength(fallbackResponse.headers.get('content-length'))
+          transferred = 0
+          for await (const chunk of responseChunks(fallbackResponse, fallbackRequest.request.controller.signal)) {
+            this.assertActive()
+            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+            transferred += bytes.byteLength
+            if (transferred > this.maxInstallerBytes) throw new UpdaterError('更新安装包超过允许的大小上限。', 'PAYLOAD_TOO_LARGE')
+            await writeAll(fileHandle, bytes)
+            const total = release.size > 0 ? release.size : fallbackLength
+            const percent = total ? Math.min(99, (transferred / total) * 100) : 0
+            this.emitProgress({ phase: 'download', percent, transferredBytes: transferred, totalBytes: total && total > 0 ? total : undefined, version: release.version })
+          }
+        }
+      }
+      else {
+        for await (const chunk of responseChunks(response, initialRequest.request.controller.signal)) {
+          this.assertActive()
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+          transferred += bytes.byteLength
+          if (transferred > this.maxInstallerBytes) throw new UpdaterError('更新安装包超过允许的大小上限。', 'PAYLOAD_TOO_LARGE')
+          await writeAll(fileHandle, bytes)
+          const total = release.size > 0 ? release.size : contentLength
+          const percent = total ? Math.min(99, (transferred / total) * 100) : 0
+          this.emitProgress({ phase: 'download', percent, transferredBytes: transferred, totalBytes: total && total > 0 ? total : undefined, version: release.version })
+        }
       }
       await fileHandle.close()
       fileHandle = undefined
       if (transferred <= 0) throw new UpdaterError('更新安装包为空。', 'EMPTY_PAYLOAD')
       if (release.size > 0 && transferred !== release.size) throw new UpdaterError('更新安装包大小校验失败。', 'SIZE_MISMATCH')
+      if (release.size <= 0 && contentLength !== undefined && contentLength > 0 && transferred !== contentLength) {
+        throw new UpdaterError('更新安装包大小校验失败。', 'SIZE_MISMATCH')
+      }
 
-      const calculatedSha256 = sha256.digest('hex')
-      const calculatedSha512 = sha512.digest('hex')
+      const { sha256: calculatedSha256, sha512: calculatedSha512 } = await hashFile(path)
       this.assertActive()
       if (release.sha256 && calculatedSha256.toLowerCase() !== release.sha256.toLowerCase()) throw new UpdaterError('更新安装包完整性校验失败。', 'DIGEST_MISMATCH')
       if (release.sha512 && calculatedSha512.toLowerCase() !== release.sha512.toLowerCase()) throw new UpdaterError('更新安装包完整性校验失败。', 'DIGEST_MISMATCH')
@@ -482,6 +584,101 @@ export class UpdaterService {
     }
     finally {
       if (typeof request !== 'undefined') this.releaseRequest(request.request)
+    }
+  }
+
+  private abortRequest(request: ActiveRequest): void {
+    clearTimeout(request.timeout)
+    this.activeRequests.delete(request)
+    try { request.controller.abort(new UpdaterError('更新请求已切换下载方式。', 'RANGE_RETRY')) } catch { /* already aborted */ }
+  }
+
+  /** Download a large asset using bounded HTTP byte-range workers. */
+  private async downloadWithRanges(
+    url: string,
+    total: number,
+    fileHandle: Awaited<ReturnType<typeof open>>,
+    release: UpdateRelease,
+  ): Promise<number> {
+    // Keep segments reasonably small for memory usage, while ensuring a
+    // couple of workers are useful even in test/dev feeds with 1–5 MiB
+    // payloads.
+    const chunkSize = Math.min(4 * 1024 * 1024, Math.max(1 * 1024 * 1024, Math.ceil(total / (this.downloadConcurrency * 2))))
+    const ranges: Array<{ start: number; end: number }> = []
+    for (let start = 0; start < total; start += chunkSize) ranges.push({ start, end: Math.min(total - 1, start + chunkSize - 1) })
+    if (ranges.length === 0) throw new RangeUnsupportedError()
+    let transferred = 0
+    const first = await this.fetchRange(url, ranges[0], total)
+    await writeAt(fileHandle, first.start, first.bytes)
+    transferred += first.bytes.byteLength
+    this.emitProgress({ phase: 'download', percent: Math.min(99, (transferred / total) * 100), transferredBytes: transferred, totalBytes: total, version: release.version })
+
+    let cursor = 1
+    const workerCount = Math.min(this.downloadConcurrency, Math.max(1, ranges.length - 1))
+    const worker = async (): Promise<void> => {
+      while (true) {
+        this.assertActive()
+        const index = cursor
+        cursor += 1
+        if (index >= ranges.length) return
+        const range = ranges[index]
+        const result = await this.fetchRange(url, range, total)
+        await writeAt(fileHandle, result.start, result.bytes)
+        transferred += result.bytes.byteLength
+        this.emitProgress({ phase: 'download', percent: Math.min(99, (transferred / total) * 100), transferredBytes: transferred, totalBytes: total, version: release.version })
+      }
+    }
+    // Wait for every worker to settle before falling back. This prevents a
+    // late range response from racing the sequential rewrite of the file.
+    const workerResults = await Promise.allSettled(Array.from({ length: workerCount }, () => worker()))
+    const failed = workerResults.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failed) throw failed.reason
+    if (transferred !== total) throw new UpdaterError('更新安装包大小校验失败。', 'SIZE_MISMATCH')
+    return transferred
+  }
+
+  private async fetchRange(url: string, range: { start: number; end: number }, total: number): Promise<{ start: number; bytes: Buffer }> {
+    const length = range.end - range.start + 1
+    let request: UpdaterRequestResult | undefined
+    try {
+      try {
+        // Use the complete asset limit here, not the segment length: a server
+        // that ignores Range commonly responds 200 with the full payload. We
+        // need to inspect that status and trigger the sequential fallback
+        // instead of misclassifying it as an oversized response.
+        request = await this.request(url, { maxBytes: Math.min(total, this.maxInstallerBytes), timeoutMs: this.downloadTimeoutMs }, { Range: `bytes=${range.start}-${range.end}` })
+      }
+      catch (error) {
+        // 416 is the conventional response when a server does not honor the
+        // requested range (or has a stale length); let the caller retry once
+        // with the proven sequential transfer path.
+        if (error instanceof UpdaterError && /(?:\(416\)|（416）)/.test(error.message)) throw new RangeUnsupportedError()
+        throw error
+      }
+      this.assertActive()
+      if (request.response.status !== 206) {
+        this.abortRequest(request.request)
+        throw new RangeUnsupportedError()
+      }
+      const contentRange = request.response.headers.get('content-range')
+      const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(contentRange?.trim() ?? '')
+      if (!match || Number(match[1]) !== range.start || Number(match[2]) !== range.end || (match[3] !== '*' && Number(match[3]) !== total)) {
+        this.abortRequest(request.request)
+        throw new RangeUnsupportedError()
+      }
+      let bytes: Buffer
+      try {
+        bytes = await readResponseBytes(request.response, length, request.request.controller.signal)
+      }
+      catch (error) {
+        if (error instanceof UpdaterError && error.code === 'PAYLOAD_TOO_LARGE') throw new RangeUnsupportedError()
+        throw error
+      }
+      if (bytes.byteLength !== length) throw new RangeUnsupportedError()
+      return { start: range.start, bytes }
+    }
+    finally {
+      if (request) this.releaseRequest(request.request)
     }
   }
 
@@ -521,6 +718,62 @@ export class UpdaterService {
       size: installer.size,
       sha256: installer.sha256,
       sha512: installer.sha512,
+      notes,
+    }
+  }
+
+  /** Parse the compact JSON response emitted by Nuts (HTTP 200). */
+  private parseNutsRelease(payload: NutsReleasePayload): UpdateRelease | null {
+    if (!isRecord(payload)) throw new UpdaterError('更新服务返回的版本信息格式无效。', 'INVALID_METADATA')
+    const rawVersionValue = boundedString(payload.version ?? payload.tag_name ?? payload.name, 128)
+    const rawVersion = rawVersionValue && (/^v?\d+\.\d+\.\d+/.test(rawVersionValue) ? rawVersionValue : rawVersionValue.match(/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?/)?.[0] ?? null)
+    if (!rawVersion) throw new UpdaterError('更新服务返回的版本号无效。', 'INVALID_METADATA')
+    let version: string
+    try { version = normalizeVersion(rawVersion) }
+    catch { throw new UpdaterError('更新服务返回的版本号无效。', 'INVALID_METADATA') }
+    const semver = parseSemver(version)
+    if (!semver) throw new UpdaterError('更新服务返回的版本号无效。', 'INVALID_METADATA')
+    if (compareSemver(semver, this.currentSemver) <= 0) return null
+
+    const rawUrl = boundedString(payload.url, 4_096)
+    if (!rawUrl) throw new UpdaterError('更新服务未提供安装包地址。', 'MISSING_INSTALLER')
+    const installerUrl = normalizeNutsInstallerUrl(rawUrl, version, this.feedOrigin, this.feedPath)
+    if (!installerUrl) throw new UpdaterError('更新服务安装包地址不受信任或格式无效。', 'UNTRUSTED_URL')
+
+    const size = parsePayloadSize(payload.size ?? payload.file_size, this.maxInstallerBytes)
+    const digestCandidates: unknown[] = [
+      payload.digest,
+      typeof payload.sha256 === 'string' ? `sha256:${payload.sha256}` : undefined,
+      typeof payload.sha512 === 'string' ? `sha512:${payload.sha512}` : undefined,
+    ]
+    let digest = { sha256: null as string | null, sha512: null as string | null }
+    for (const candidate of digestCandidates) {
+      const parsed = parseDigest(candidate)
+      if (parsed.sha256 || parsed.sha512) { digest = parsed; break }
+    }
+    const publishedAt = boundedString(payload.pub_date ?? payload.published_at, 128)
+    const releaseDate = publishedAt && !Number.isNaN(Date.parse(publishedAt)) ? new Date(publishedAt).toISOString() : null
+    const name = boundedString(payload.name, 256) ?? `Terminal-Agent ${version}`
+    const notesValue = payload.notes ?? payload.body
+    const notes = typeof notesValue === 'string' ? truncateUtf8(notesValue, updaterLimits.maxReleaseNotesBytes) : ''
+    const installerName = nutsInstallerNameFromUrl(installerUrl, version) ?? `Terminal-Agent-Setup-${version}.exe`
+    const suppliedHtmlUrl = boundedString(payload.html_url, 2_048)
+    const htmlUrl = suppliedHtmlUrl && isAllowedNutsUrl(suppliedHtmlUrl, this.feedOrigin, this.feedPath, 'any')
+      ? suppliedHtmlUrl
+      : this.feedUrl ? `${this.feedUrl}/${encodeURIComponent(version)}` : installerUrl
+    return {
+      version,
+      tagName: `v${version}`,
+      name,
+      releaseDate,
+      // Use the versioned feed endpoint as the release reference; it is
+      // deterministic and remains within the configured trust boundary.
+      htmlUrl,
+      installerName,
+      installerUrl,
+      size,
+      sha256: digest.sha256,
+      sha512: digest.sha512,
       notes,
     }
   }
@@ -565,23 +818,28 @@ export class UpdaterService {
     return { name, url, size, sha256: digest.sha256, sha512: digest.sha512 }
   }
 
-  private async request(url: string, limits: { maxBytes: number; timeoutMs: number }): Promise<UpdaterRequestResult> {
+  private async request(url: string, limits: { maxBytes: number; timeoutMs: number }, extraHeaders: Record<string, string> = {}): Promise<UpdaterRequestResult> {
     let currentUrl = url
     for (let redirect = 0; redirect <= this.maxRedirects; redirect += 1) {
       const initialKind = currentUrl.includes('/releases/latest') ? 'api' : 'asset'
-      if (!isAllowedGithubUrl(currentUrl, this.owner, this.repository, redirect === 0 ? initialKind : 'any')) throw new UpdaterError('更新地址不受信任。', 'UNTRUSTED_URL')
+      const allowed = this.feedUrl
+        ? isAllowedNutsUrl(currentUrl, this.feedOrigin, this.feedPath, redirect === 0 && currentUrl === url && isNutsMetadataUrl(currentUrl, this.feedPath) ? 'metadata' : 'any')
+        : isAllowedGithubUrl(currentUrl, this.owner, this.repository, redirect === 0 ? initialKind : 'any')
+      if (!allowed) throw new UpdaterError('更新地址不受信任。', 'UNTRUSTED_URL')
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(new UpdaterError('更新请求超时。', 'TIMEOUT')), limits.timeoutMs)
       const request: ActiveRequest = { controller, timeout }
       this.activeRequests.add(request)
       let handedOff = false
       try {
+        const isMetadataRequest = this.feedUrl ? isNutsMetadataUrl(currentUrl, this.feedPath) : currentUrl.includes('/releases/latest')
         const response = await this.fetcher(currentUrl, {
           method: 'GET',
           headers: {
-            Accept: currentUrl.includes('/releases/latest') ? 'application/vnd.github+json' : 'application/octet-stream',
+            Accept: isMetadataRequest ? (this.feedUrl ? 'application/json' : 'application/vnd.github+json') : 'application/octet-stream',
             'User-Agent': USER_AGENT,
-            'X-GitHub-Api-Version': '2022-11-28',
+            ...(this.feedUrl ? {} : { 'X-GitHub-Api-Version': '2022-11-28' }),
+            ...extraHeaders,
           },
           redirect: 'manual',
           signal: controller.signal,
@@ -594,14 +852,17 @@ export class UpdaterService {
           const location = response.headers.get('location')
           if (!location || redirect === this.maxRedirects) throw new UpdaterError('更新下载重定向次数过多。', 'TOO_MANY_REDIRECTS')
           const nextUrl = new URL(location, currentUrl).toString()
-          if (!isAllowedGithubUrl(nextUrl, this.owner, this.repository, 'any')) throw new UpdaterError('更新下载重定向到不受信任的地址。', 'UNTRUSTED_REDIRECT')
+          const redirectAllowed = this.feedUrl
+            ? isAllowedNutsUrl(nextUrl, this.feedOrigin, this.feedPath, 'any')
+            : isAllowedGithubUrl(nextUrl, this.owner, this.repository, 'any')
+          if (!redirectAllowed) throw new UpdaterError('更新下载重定向到不受信任的地址。', 'UNTRUSTED_REDIRECT')
           currentUrl = nextUrl
           continue
         }
         if (response.status < 200 || response.status >= 300) {
           if (response.status === 404) throw new UpdaterError('暂未找到可用版本。', 'NOT_FOUND')
-          if (response.status === 403) throw new UpdaterError('GitHub 请求受限，请稍后重试。', 'RATE_LIMITED')
-          throw new UpdaterError(`GitHub 请求失败（${response.status}）。`, 'HTTP_ERROR')
+          if (response.status === 403) throw new UpdaterError(this.feedUrl ? '更新服务请求受限，请稍后重试。' : 'GitHub 请求受限，请稍后重试。', 'RATE_LIMITED')
+          throw new UpdaterError(`${this.feedUrl ? '更新服务' : 'GitHub'} 请求失败（${response.status}）。`, 'HTTP_ERROR')
         }
         const contentLength = parseContentLength(response.headers.get('content-length'))
         if (contentLength !== undefined && contentLength > limits.maxBytes) throw new UpdaterError('更新响应超过允许的大小上限。', 'PAYLOAD_TOO_LARGE')
@@ -612,7 +873,7 @@ export class UpdaterService {
         if (error instanceof UpdaterError) throw error
         if (controller.signal.aborted) throwIfRequestAborted(controller.signal)
         if (isAbortError(error)) throw new UpdaterError('更新请求超时。', 'TIMEOUT')
-        throw new UpdaterError('无法连接 GitHub 更新服务。', 'NETWORK_ERROR')
+        throw new UpdaterError(`无法连接${this.feedUrl ? '更新' : 'GitHub'}服务。`, 'NETWORK_ERROR')
       }
       finally {
         if (!handedOff) {
@@ -731,6 +992,113 @@ function parseDigest(value: unknown): { sha256: string | null; sha512: string | 
   return { sha256: null, sha512: null }
 }
 
+/** Internal signal used to trigger a safe sequential-download fallback. */
+class RangeUnsupportedError extends Error {
+  constructor() {
+    super('服务器不支持分段下载')
+    this.name = 'RangeUnsupportedError'
+  }
+}
+
+function parsePayloadSize(value: unknown, maximum: number): number {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value.trim()) : 0
+  return Number.isSafeInteger(number) && number >= 0 && number <= maximum ? number : 0
+}
+
+type ParsedFeedUrl = { root: string; origin: string; path: string }
+
+function parseFeedUrl(value: string): ParsedFeedUrl {
+  let url: URL
+  try { url = new URL(value) }
+  catch { throw new UpdaterError('更新服务地址无效。', 'INVALID_FEED_URL') }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port || url.search || url.hash) {
+    throw new UpdaterError('更新服务地址无效。', 'INVALID_FEED_URL')
+  }
+  const path = url.pathname.replace(/\/+$/, '')
+  if (!path || path === '/') throw new UpdaterError('更新服务地址无效。', 'INVALID_FEED_URL')
+  url.pathname = path
+  return { root: url.toString().replace(/\/$/, ''), origin: url.origin.toLowerCase(), path }
+}
+
+/**
+ * Nuts deployments may return a ZIP URL by default even when the app needs
+ * an NSIS executable. Prefer an explicit `filetype=exe` variant and reject
+ * arbitrary hosts/paths. The feed's download endpoint is allowed to live
+ * below the same origin; a direct .exe URL is accepted as-is.
+ */
+function normalizeNutsInstallerUrl(value: string, version: string, origin: string | undefined, feedPath: string | undefined): string | null {
+  let url: URL
+  try { url = new URL(value, origin ? `${origin}/` : undefined) } catch { return null }
+  if (!origin || url.origin.toLowerCase() !== origin || url.username || url.password || url.port) return null
+  const path = url.pathname
+  try {
+    const decodedSegments = path.split('/').map(segment => decodeURIComponent(segment))
+    if (decodedSegments.some(segment => segment === '.' || segment === '..')) return null
+  }
+  catch { return null }
+  const lowerPath = path.toLowerCase()
+  const isDownloadPath = /\/download\/(?:version\/)?[^/]+/i.test(path)
+  if (!isDownloadPath && !(feedPath && path.startsWith(`${feedPath}/`))) return null
+  const filetype = url.searchParams.get('filetype')?.toLowerCase()
+  const looksExe = lowerPath.endsWith('.exe') || filetype === 'exe'
+  if (filetype === 'zip' || (!looksExe && filetype === null)) {
+    // Nuts commonly advertises `?filetype=zip`; switch to the executable
+    // asset while retaining all other query parameters.
+    if (filetype === 'zip' || filetype === null) url.searchParams.set('filetype', 'exe')
+  }
+  if (url.searchParams.get('filetype')?.toLowerCase() !== 'exe' && !lowerPath.endsWith('.exe')) return null
+  // If the endpoint embeds a version, ensure it is the release being parsed.
+  const versionMatch = /(?:^|\/)(?:v)?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\/|$)/i.exec(path)
+  if (versionMatch) {
+    try { if (normalizeVersion(versionMatch[1]) !== version) return null } catch { return null }
+  }
+  return url.toString()
+}
+
+function nutsInstallerNameFromUrl(value: string, version: string): string | null {
+  try {
+    const lastSegment = new URL(value).pathname.split('/').filter(Boolean).at(-1)
+    if (!lastSegment) return null
+    const name = decodeURIComponent(lastSegment)
+    const match = installerNamePattern.exec(name)
+    if (!match || normalizeVersion(match[1]) !== version) return null
+    return name
+  }
+  catch { return null }
+}
+
+function isAllowedNutsUrl(value: string, origin: string | undefined, feedPath: string | undefined, kind: 'metadata' | 'any'): boolean {
+  if (!origin || !feedPath) return false
+  let url: URL
+  try { url = new URL(value) } catch { return false }
+  if (url.origin.toLowerCase() !== origin || url.username || url.password || url.port || url.hash) return false
+  const path = url.pathname.replace(/\/+$/, '')
+  try {
+    if (path.split('/').some(segment => ['.', '..'].includes(decodeURIComponent(segment)))) return false
+  }
+  catch { return false }
+  if (kind === 'metadata') {
+    // Metadata must be exactly `${feedRoot}/<version>`; this prevents a
+    // caller-controlled feed URL from being used as an open proxy.
+    let suffix = path.startsWith(`${feedPath}/`) ? path.slice(feedPath.length + 1) : ''
+    try { suffix = decodeURIComponent(suffix) } catch { return false }
+    return !url.search && Boolean(suffix) && suffix.split('/').length === 1 && /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(suffix)
+  }
+  // Nuts download endpoints are conventionally under /download. Also allow
+  // a direct executable beneath the configured feed path for self-hosted feeds.
+  return path.startsWith('/download/') || path === feedPath || path.startsWith(`${feedPath}/`)
+}
+
+function isNutsMetadataUrl(value: string, feedPath: string | undefined): boolean {
+  if (!feedPath) return false
+  try {
+    const path = new URL(value).pathname.replace(/\/+$/, '')
+    const suffix = path.startsWith(`${feedPath}/`) ? decodeURIComponent(path.slice(feedPath.length + 1)) : ''
+    return Boolean(suffix && suffix.split('/').length === 1 && /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(suffix))
+  }
+  catch { return false }
+}
+
 function isAllowedGithubUrl(value: string, owner: string, repository: string, kind: 'api' | 'release' | 'asset' | 'any'): boolean {
   let url: URL
   try { url = new URL(value) } catch { return false }
@@ -809,11 +1177,26 @@ function parseContentLength(value: string | null | undefined): number | undefine
   return Number.isSafeInteger(number) && number >= 0 ? number : undefined
 }
 
-function parseJsonObject(text: string, maxBytes: number): GithubReleasePayload {
-  if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new UpdaterError('GitHub 元数据超过允许的大小上限。', 'PAYLOAD_TOO_LARGE')
+function assertInstallerResponseName(response: UpdaterHttpResponse, expectedName: string): void {
+  let disposition: string | null | undefined
+  try { disposition = response.headers.get('content-disposition') } catch { return }
+  if (!disposition) return
+  const match = /(?:^|;)\s*filename\*?\s*=\s*(?:UTF-8'')?(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i.exec(disposition)
+  if (!match) return
+  let fileName = (match[1] ?? match[2] ?? match[3] ?? '').trim()
+  try { fileName = decodeURIComponent(fileName) } catch { /* keep raw value */ }
+  // A Nuts endpoint can legally redirect to a different asset. Never launch
+  // a payload named putty.exe (or any unrelated executable) as our installer.
+  if (fileName.toLowerCase() !== expectedName.toLowerCase()) {
+    throw new UpdaterError('更新服务返回的安装包文件名无效。', 'MISSING_INSTALLER')
+  }
+}
+
+function parseJsonObject(text: string, maxBytes: number, source = 'GitHub'): GithubReleasePayload {
+  if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new UpdaterError(`${source} 元数据超过允许的大小上限。`, 'PAYLOAD_TOO_LARGE')
   let value: unknown
-  try { value = JSON.parse(text) } catch { throw new UpdaterError('GitHub 返回的版本信息无法解析。', 'INVALID_METADATA') }
-  if (!isRecord(value)) throw new UpdaterError('GitHub 返回的版本信息格式无效。', 'INVALID_METADATA')
+  try { value = JSON.parse(text) } catch { throw new UpdaterError(`${source} 返回的版本信息无法解析。`, 'INVALID_METADATA') }
+  if (!isRecord(value)) throw new UpdaterError(`${source} 返回的版本信息格式无效。`, 'INVALID_METADATA')
   return value as GithubReleasePayload
 }
 
@@ -1053,6 +1436,48 @@ async function writeAll(fileHandle: Awaited<ReturnType<typeof open>>, bytes: Uin
     if (!Number.isSafeInteger(result.bytesWritten) || result.bytesWritten <= 0) throw new UpdaterError('无法写入更新安装包。', 'PAYLOAD_WRITE_FAILED')
     offset += result.bytesWritten
   }
+}
+
+async function writeAt(fileHandle: Awaited<ReturnType<typeof open>>, position: number, bytes: Uint8Array): Promise<void> {
+  let offset = 0
+  while (offset < bytes.byteLength) {
+    const result = await fileHandle.write(bytes, offset, bytes.byteLength - offset, position + offset)
+    if (!Number.isSafeInteger(result.bytesWritten) || result.bytesWritten <= 0) throw new UpdaterError('无法写入更新安装包。', 'PAYLOAD_WRITE_FAILED')
+    offset += result.bytesWritten
+  }
+}
+
+async function readResponseBytes(response: UpdaterHttpResponse, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of responseChunks(response, signal)) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    total += bytes.byteLength
+    if (total > maxBytes) throw new UpdaterError('更新响应超过允许的大小上限。', 'PAYLOAD_TOO_LARGE')
+    chunks.push(bytes)
+  }
+  return Buffer.concat(chunks)
+}
+
+async function hashFile(filePath: string | undefined): Promise<{ sha256: string; sha512: string }> {
+  if (!filePath) throw new UpdaterError('更新安装包路径无效。', 'INVALID_PATH')
+  const fileHandle = await open(filePath, 'r')
+  try {
+    const sha256 = createHash('sha256')
+    const sha512 = createHash('sha512')
+    const buffer = Buffer.allocUnsafe(64 * 1024)
+    let position = 0
+    while (true) {
+      const result = await fileHandle.read(buffer, 0, buffer.byteLength, position)
+      if (result.bytesRead <= 0) break
+      const bytes = buffer.subarray(0, result.bytesRead)
+      sha256.update(bytes)
+      sha512.update(bytes)
+      position += result.bytesRead
+    }
+    return { sha256: sha256.digest('hex'), sha512: sha512.digest('hex') }
+  }
+  finally { await fileHandle.close().catch(() => undefined) }
 }
 
 function assertContainedPath(filePath: string, directory: string | undefined): void {

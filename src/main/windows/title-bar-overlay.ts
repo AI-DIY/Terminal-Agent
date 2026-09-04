@@ -5,7 +5,11 @@ export const TITLE_BAR_OVERLAY_HEIGHT = 48
 
 export function titleBarOverlayForTheme(input: WorkbenchTheme): TitleBarOverlay {
   const theme = workbenchThemeSchema.parse(input)
-  return theme === 'graphite'
-    ? { color: '#25292e', symbolColor: '#f0f3f6', height: TITLE_BAR_OVERLAY_HEIGHT }
-    : { color: '#f0f3f6', symbolColor: '#1d242c', height: TITLE_BAR_OVERLAY_HEIGHT }
+  if (theme === 'graphite') {
+    return { color: '#25292e', symbolColor: '#f0f3f6', height: TITLE_BAR_OVERLAY_HEIGHT }
+  }
+  if (theme === 'noble-purple') {
+    return { color: '#302044', symbolColor: '#f7f0ff', height: TITLE_BAR_OVERLAY_HEIGHT }
+  }
+  return { color: '#f0f3f6', symbolColor: '#1d242c', height: TITLE_BAR_OVERLAY_HEIGHT }
 }

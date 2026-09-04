@@ -6,8 +6,8 @@ import TerminalPane from '../TerminalPane.vue'
 import { sessionDisplayLabel, sessionDisplayParts, sessionHasDuplicateHost, sessionLabel, type SessionView } from '../../stores/sessions'
 import {
   getLayoutPreferencesStore,
-  SHELL_FONT_SIZE_PRESETS,
-  SHELL_ROW_HEIGHT_PRESETS,
+  SHELL_FONT_SIZE_OPTIONS,
+  SHELL_ROW_HEIGHT_OPTIONS,
   shellGridStyle,
 } from '../../stores/layout-preferences'
 
@@ -257,6 +257,7 @@ watch(
 <template>
   <section class="shell-canvas" :class="{ empty: isLive && currentSessions.length === 0 && historyHosts.length === 0 }">
     <header v-show="currentSessions.length > 0 || !isLive || historyHosts.length > 0" class="shell-toolbar-content">
+      <div class="workspace-toolbar-title"><strong>SSH工作区</strong></div>
       <SessionTabs
         v-if="isLive && currentSessions.length"
         :sessions="orderedCurrentSessions"
@@ -265,7 +266,6 @@ watch(
         @close="closeSession"
         @reorder="emit('reorder', $event)"
       />
-       <div v-else class="history-toolbar-title"><strong>SSH 历史连接</strong><span>{{ historyHostCount }} 台主机 · {{ historyRecordCount }} 条记录</span></div>
       <div class="hostbar-tools">
         <div v-if="isLive" class="shell-title">
           <strong>SSH</strong>
@@ -294,12 +294,12 @@ watch(
       </label>
       <label>SSH 字体大小
         <select :value="layout.state.fontSize" @change="updateLayout('fontSize', $event)">
-          <option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option>
+           <option v-for="preset in SHELL_FONT_SIZE_OPTIONS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option>
         </select>
       </label>
       <label>单行高度（占工作区）
         <select :value="layout.state.rowHeightPercent" @change="updateLayout('rowHeightPercent', $event)">
-          <option v-for="preset in SHELL_ROW_HEIGHT_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option>
+           <option v-for="preset in SHELL_ROW_HEIGHT_OPTIONS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option>
         </select>
       </label>
       <span>{{ layoutSummary }}</span>
@@ -387,7 +387,7 @@ watch(
 .shell-canvas.empty { grid-template-rows: minmax(0, 1fr); }
 .shell-canvas.empty .canvas-content { grid-row: 1; }
 .shell-toolbar-content { position: relative; display: flex; align-items: stretch; min-width: 0; height: 42px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--panel); }
-.history-toolbar-title { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 7px; padding: 0 11px; }.history-toolbar-title strong { color: var(--text-strong); font-size: 11px; }.history-toolbar-title span { color: var(--muted); font-size: 9px; }
+.workspace-toolbar-title { display: flex; flex: 0 0 auto; align-items: center; min-width: 92px; padding: 0 11px; border-right: 1px solid var(--line-soft); }.workspace-toolbar-title strong { color: var(--text-strong); font-size: 11px; white-space: nowrap; }
 .hostbar-tools { position: sticky; z-index: 3; right: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 6px; min-width: max-content; margin-left: auto; padding: 0 8px; border-left: 1px solid var(--line-soft); background: var(--panel); box-shadow: -8px 0 12px var(--panel); }
 .shell-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; }
 .shell-title strong { color: var(--text-strong); font-size: 10px; white-space: nowrap; }
@@ -427,7 +427,7 @@ watch(
 .history-context-menu button { min-height: 29px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 11px; text-align: left; }.history-context-menu button:hover,.history-context-menu button:focus-visible { background: var(--surface-soft); outline: 1px solid var(--accent); }.history-context-menu button:disabled { color: var(--muted); cursor: not-allowed; }
 .empty-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .history-shell-toolbar { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: 32px; padding: 3px 8px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 86%, var(--surface)); }
-.history-shell-heading { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }.history-shell-heading strong { color: var(--text-strong); font-size: 9px; }.history-shell-heading span { color: var(--muted); font-size: 8px; }
+.history-shell-heading { display: flex; align-items: center; gap: 5px; white-space: nowrap; }.history-shell-heading strong { color: var(--text-strong); font-size: 9px; }.history-shell-heading span { color: var(--muted); font-size: 8px; }
 .history-session-tabs { display: flex; min-width: 0; min-height: 0; height: 25px; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }
 .history-session-tabs:hover,.history-session-tabs:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }
 .history-session-tabs::-webkit-scrollbar { width: 0; height: 5px; }.history-session-tabs::-webkit-scrollbar-track { background: transparent; }.history-session-tabs::-webkit-scrollbar-thumb { border: 1px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }.history-session-tabs:hover::-webkit-scrollbar-thumb,.history-session-tabs:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }

@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { AtomicJsonStore, type AtomicJsonStoreOptions } from '../persistence/atomic-json-store'
-import { modelEndpointSchema, modelProfileKindSchema, modelProviderSchema, modelRoutingSchema } from '../../shared/validation'
+import { createDefaultSsoConfiguration, ssoConfigurationSchema } from '../../shared/sso-contracts'
+import { modelApiKeySchema, modelEndpointSchema, modelProfileKindSchema, modelProviderSchema, modelRoutingSchema } from '../../shared/validation'
+import { withUserConfigPathLock } from './user-config-lock'
 
 const persistedModelProfileFields = {
   id: z.string().trim().min(1).max(128),
@@ -11,6 +13,10 @@ const persistedModelProfileFields = {
   endpoint: modelEndpointSchema,
   contextLimit: z.number().int().min(1_024).max(1_000_000).optional(),
   maxImages: z.number().int().min(1).max(128).optional(),
+  // New user-config storage keeps credentials in the same file as the model
+  // profile.  The field remains optional so the legacy encrypted-secret
+  // repository format and all existing fixtures remain valid.
+  apiKey: modelApiKeySchema.optional(),
 }
 
 function validatePersistedModelProfile(
@@ -117,6 +123,7 @@ export const modelProfileDocumentSchema = z.object({
   ...modelProfileDocumentFields,
   migrations: z.object({
     legacyModelSettings: z.literal(1).optional(),
+    legacyModelProfiles: z.literal(1).optional(),
     legacyModelProfileId: z.string().trim().min(1).max(128).optional(),
     apiKeyReferences: z.array(migrationReferenceSchema).max(256).optional(),
   }).strict(),
@@ -128,12 +135,36 @@ const version1ModelProfileDocumentSchema = z.object({
   ...modelProfileDocumentFields,
   migrations: z.object({
     legacyModelSettings: z.literal(1).optional(),
+    legacyModelProfiles: z.literal(1).optional(),
     legacyModelProfileId: z.string().trim().min(1).max(128).optional(),
   }).strict(),
 }).strict().superRefine(validateVersion1ModelProfileDocument)
 
 export type ModelProfileDocument = z.infer<typeof modelProfileDocumentSchema>
-export type ModelProfileRepositoryOptions = Pick<AtomicJsonStoreOptions, 'fileSystem' | 'createId' | 'now'>
+export type ModelProfileRepositoryOptions = Pick<AtomicJsonStoreOptions, 'fileSystem' | 'createId' | 'now'> & {
+  /** Store the model document under the `models` section of `.ta/user-config`. */
+  userConfig?: boolean
+}
+
+/**
+ * The SSO and model settings intentionally share one user-facing file.  Keep
+ * the model payload versioned independently so future SSO migrations do not
+ * invalidate existing model profiles.
+ */
+const userConfigDocumentSchema = z.object({
+  version: z.literal(1),
+  sso: ssoConfigurationSchema.optional(),
+  models: modelProfileDocumentSchema.optional(),
+}).passthrough()
+type UserConfigDocument = z.infer<typeof userConfigDocumentSchema>
+
+function emptyUserConfigDocument(): UserConfigDocument {
+  return {
+    version: 1,
+    sso: createDefaultSsoConfiguration(),
+    models: emptyModelProfileDocument(),
+  }
+}
 
 export interface ModelProfileRepositoryPort {
   load(): Promise<ModelProfileDocument>
@@ -142,26 +173,96 @@ export interface ModelProfileRepositoryPort {
 }
 
 export class ModelProfileRepository implements ModelProfileRepositoryPort {
-  private readonly store: AtomicJsonStore<ModelProfileDocument>
+  private readonly store: AtomicJsonStore<ModelProfileDocument> | undefined
+  private readonly userConfigStore: AtomicJsonStore<UserConfigDocument> | undefined
+  private readonly path: string
 
   constructor(path: string, options: ModelProfileRepositoryOptions = {}) {
-    this.store = new AtomicJsonStore(path, modelProfileDocumentSchema, emptyModelProfileDocument, {
-      ...options,
-      migrate: migrateModelProfileDocument,
-    })
+    this.path = path
+    if (options.userConfig) {
+      this.userConfigStore = new AtomicJsonStore(path, userConfigDocumentSchema, emptyUserConfigDocument, {
+        ...options,
+        migrate: migrateUserConfigDocument,
+      })
+    } else {
+      this.store = new AtomicJsonStore(path, modelProfileDocumentSchema, emptyModelProfileDocument, {
+        ...options,
+        migrate: migrateModelProfileDocument,
+      })
+    }
   }
 
   load(): Promise<ModelProfileDocument> {
-    return this.store.load()
+    if (!this.userConfigStore) return this.store!.load()
+    return withUserConfigPathLock(this.path, async () => {
+      const document = await this.userConfigStore!.load()
+      return document.models ?? emptyModelProfileDocument()
+    })
   }
 
   async save(document: ModelProfileDocument): Promise<void> {
-    await this.store.update(() => modelProfileDocumentSchema.parse(document))
+    if (!this.userConfigStore) {
+      await this.store!.update(() => modelProfileDocumentSchema.parse(document))
+      return
+    }
+    await withUserConfigPathLock(this.path, async () => {
+      await this.userConfigStore!.update(current => ({
+        ...current,
+        models: modelProfileDocumentSchema.parse(document),
+      }))
+    })
   }
 
   update(change: (document: ModelProfileDocument) => ModelProfileDocument | Promise<ModelProfileDocument>): Promise<ModelProfileDocument> {
-    return this.store.update(change)
+    if (!this.userConfigStore) return this.store!.update(change)
+    return withUserConfigPathLock(this.path, async () => {
+      const updated = await this.userConfigStore!.update(async current => ({
+        ...current,
+        models: modelProfileDocumentSchema.parse(await change(current.models ?? emptyModelProfileDocument())),
+      }))
+      return updated.models ?? emptyModelProfileDocument()
+    })
   }
+}
+
+function migrateUserConfigDocument(persisted: unknown): { value: unknown; changed: boolean } {
+  if (!isRecord(persisted)) return { value: persisted, changed: false }
+
+  // A previous development build may have written a standalone model-profile
+  // document at this path.  Accept both historical document versions here:
+  // version 1 must first be converted so its API-key reference metadata stays
+  // valid under the current model schema.  Do not reinterpret a real
+  // user-config document that happens to contain an unexpected `profiles`
+  // property; that remains invalid rather than risking an SSO overwrite.
+  if (isStandaloneModelProfileDocument(persisted)) {
+    const migrated = migrateModelProfileDocument(persisted)
+    return {
+      value: {
+        ...emptyUserConfigDocument(),
+        models: migrated.value,
+      },
+      changed: true,
+    }
+  }
+
+  if (persisted.version === 1 && ('sso' in persisted || 'models' in persisted)) {
+    const currentModels = persisted.models
+    if (currentModels === undefined) {
+      return { value: { ...persisted, models: emptyModelProfileDocument() }, changed: true }
+    }
+    const migrated = migrateModelProfileDocument(currentModels)
+    if (migrated.changed) return { value: { ...persisted, models: migrated.value }, changed: true }
+    return { value: persisted, changed: false }
+  }
+
+  return { value: persisted, changed: false }
+}
+
+function isStandaloneModelProfileDocument(persisted: Record<string, unknown>): boolean {
+  return (persisted.version === 1 || persisted.version === 2)
+    && 'profiles' in persisted
+    && !('sso' in persisted)
+    && !('models' in persisted)
 }
 
 export function emptyModelProfileDocument(): ModelProfileDocument {

@@ -83,6 +83,12 @@ async function finalizeWindowsReleaseArtifacts({
   const bridgePath = releaseAssetPath(releaseDirectory, 'putty.exe')
   const quickInstallSourcePath = resolve(projectRoot, 'quick-install.cmd')
   const quickInstallPath = releaseAssetPath(releaseDirectory, 'quick-install.cmd')
+  const namedQuickInstallSourcePath = resolve(projectRoot, '快速安装脚本.cmd')
+  const namedQuickInstallPath = releaseAssetPath(releaseDirectory, '快速安装脚本.cmd')
+  const quickGuideMarkdownSourcePath = resolve(projectRoot, '快速安装手册.md')
+  const quickGuideMarkdownPath = releaseAssetPath(releaseDirectory, '快速安装手册.md')
+  const quickGuidePdfSourcePath = resolve(projectRoot, '快速安装手册.pdf')
+  const quickGuidePdfPath = releaseAssetPath(releaseDirectory, '快速安装手册.pdf')
   const latestYmlPath = releaseAssetPath(releaseDirectory, 'latest.yml')
   const installer = await requireNonEmptyFile(installerPath, 'Windows installer')
   await requireNonEmptyFile(blockmapPath, 'installer blockmap')
@@ -95,10 +101,24 @@ async function finalizeWindowsReleaseArtifacts({
 
   // Keep the one-click quick installer beside the release PDF, bridge and
   // setup package.  A release without this file would reintroduce the manual
-  // quick-start flow, so fail the packaging step instead of silently omitting it.
+  // quick-install flow, so fail the packaging step instead of silently omitting it.
   await requireNonEmptyFile(quickInstallSourcePath, 'quick installer')
   await copyFile(quickInstallSourcePath, quickInstallPath)
   await requireNonEmptyFile(quickInstallPath, 'release quick installer')
+
+  // These named assets are optional for the historical finalizer unit tests,
+  // but are copied whenever present so a normal v3.2 release has a complete
+  // standalone ZIP beside the installer.  The ZIP packager performs the final
+  // required-file check and fails closed if a production guide is missing.
+  if (await statIfFile(namedQuickInstallSourcePath)) {
+    await copyFile(namedQuickInstallSourcePath, namedQuickInstallPath)
+  }
+  if (await statIfFile(quickGuideMarkdownSourcePath)) {
+    await copyFile(quickGuideMarkdownSourcePath, quickGuideMarkdownPath)
+  }
+  if (await statIfFile(quickGuidePdfSourcePath)) {
+    await copyFile(quickGuidePdfSourcePath, quickGuidePdfPath)
+  }
 
   const publishedAt = releaseDate ?? installer.mtime
   if (!(publishedAt instanceof Date) || Number.isNaN(publishedAt.valueOf())) {
@@ -114,6 +134,16 @@ async function finalizeWindowsReleaseArtifacts({
   }), 'utf8')
 
   return { bridgePath, installerPath, latestYmlPath, sha512 }
+}
+
+async function statIfFile(path) {
+  try {
+    const details = await stat(path)
+    return details.isFile() && details.size > 0
+  }
+  catch {
+    return false
+  }
 }
 
 if (require.main === module) {

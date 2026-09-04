@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import type { ShellFontSize, ShellRowHeightPercent, WorkbenchLayoutPatch, WorkbenchTheme } from '../../../../shared/contracts'
-import { getLayoutPreferencesStore, SHELL_FONT_SIZE_PRESETS, SHELL_ROW_HEIGHT_PRESETS } from '../../stores/layout-preferences'
+import { getLayoutPreferencesStore, SHELL_FONT_SIZE_OPTIONS, SHELL_ROW_HEIGHT_OPTIONS } from '../../stores/layout-preferences'
 
 const layout = getLayoutPreferencesStore()
 const message = ref('')
@@ -47,6 +47,7 @@ function selectedNumber(event: Event): number {
       <div class="theme-options" role="group" aria-label="工作台主题">
         <button type="button" :class="{ selected: layout.state.theme === 'pearl' }" :aria-pressed="layout.state.theme === 'pearl'" @click="saveTheme('pearl')"><span class="theme-swatch pearl" aria-hidden="true"><i /><i /></span><span><strong>珍珠白</strong><small>接近 IDEA Light 的冷白层次</small></span></button>
         <button type="button" :class="{ selected: layout.state.theme === 'graphite' }" :aria-pressed="layout.state.theme === 'graphite'" @click="saveTheme('graphite')"><span class="theme-swatch graphite" aria-hidden="true"><i /><i /></span><span><strong>石墨黑</strong><small>接近 IDEA Darcula 的深灰层次</small></span></button>
+        <button type="button" :class="{ selected: layout.state.theme === 'noble-purple' }" :aria-pressed="layout.state.theme === 'noble-purple'" @click="saveTheme('noble-purple')"><span class="theme-swatch noble-purple" aria-hidden="true"><i /><i /></span><span><strong>高贵紫</strong><small>雍容华贵的深紫层次，适合长时间协作</small></span></button>
       </div>
     </section>
 
@@ -54,8 +55,8 @@ function selectedNumber(event: Event): number {
       <div class="section-copy"><h3 id="layout-title">SSH 工作区布局</h3><p>所有 SSH 连接都会保留在工作区中；以下设置与工作台“SSH 窗口布局”菜单共用同一份偏好。</p></div>
       <div class="layout-fields">
         <label><span>每行数量</span><select :value="layout.state.columns" @change="saveLayout({ columns: selectedNumber($event) as 1|2|3|4 })"><option v-for="value in [1,2,3,4]" :key="value" :value="value">{{ value }} 个</option></select></label>
-        <label><span>SSH 字体大小</span><select :value="layout.state.fontSize" @change="saveLayout({ fontSize: selectedNumber($event) as ShellFontSize })"><option v-for="preset in SHELL_FONT_SIZE_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option></select></label>
-        <label><span>单行高度（占工作区）</span><select :value="layout.state.rowHeightPercent" @change="saveLayout({ rowHeightPercent: selectedNumber($event) as ShellRowHeightPercent })"><option v-for="preset in SHELL_ROW_HEIGHT_PRESETS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option></select></label>
+        <label><span>SSH 字体大小</span><select :value="layout.state.fontSize" @change="saveLayout({ fontSize: selectedNumber($event) as ShellFontSize })"><option v-for="preset in SHELL_FONT_SIZE_OPTIONS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}px</option></select></label>
+        <label><span>单行高度（占工作区）</span><select :value="layout.state.rowHeightPercent" @change="saveLayout({ rowHeightPercent: selectedNumber($event) as ShellRowHeightPercent })"><option v-for="preset in SHELL_ROW_HEIGHT_OPTIONS" :key="preset.value" :value="preset.value">{{ preset.label }} · {{ preset.value }}%</option></select></label>
       </div>
       <div class="layout-preview" aria-label="当前 SSH 布局摘要"><strong>全部 SSH 连接</strong><span>{{ layout.state.columns }} 列 · {{ layout.state.fontSize }}px · 单行 {{ layout.state.rowHeightPercent }}%</span></div>
     </section>
@@ -77,6 +78,7 @@ function selectedNumber(event: Event): number {
 .theme-options button { display: grid; gap: 11px; min-width: 0; min-height: 174px; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); text-align: left; }.theme-options button:hover { border-color: var(--focus); }.theme-options button.selected { border-color: var(--accent); background: var(--selected); box-shadow: inset 0 0 0 1px var(--accent-soft); }
 .theme-options button > span:last-child { display: grid; align-content: start; gap: 4px; min-width: 0; }.theme-options strong { color: var(--text-strong); font-size: 12px; }.theme-options small { color: var(--muted); font-size: 10px; }
 .theme-swatch { position: relative; display: grid; grid-template-columns: 24% 1fr; width: 100%; height: 92px; overflow: hidden; border: 1px solid #d6dce4; border-radius: 5px; background: #f7f9fb; }.theme-swatch::before { content: ""; position: absolute; z-index: 2; top: 0; right: 0; left: 0; height: 14px; border-bottom: 1px solid #dce2e9; background: #eef2f6; }.theme-swatch::after { content: ""; position: absolute; z-index: 3; top: 30px; right: 18%; bottom: 13px; left: 30%; border: 1px solid #d5dce5; border-radius: 3px; background: #fff; box-shadow: inset 0 12px 0 #f2f5f8; }.theme-swatch i:first-child { border-right: 1px solid #dce2e9; background: #f0f3f6; }.theme-swatch i:last-child { background: #fff; }.theme-swatch.graphite { border-color: #414a54; background: #1d2228; }.theme-swatch.graphite::before { border-color: #3a424c; background: #242a31; }.theme-swatch.graphite::after { border-color: #414a54; background: #151a20; box-shadow: inset 0 12px 0 #252b32; }.theme-swatch.graphite i:first-child { border-color: #353d46; background: #171b20; }.theme-swatch.graphite i:last-child { background: #20252b; }
+.theme-swatch.noble-purple { border-color: #7152a7; background: #251a3a; }.theme-swatch.noble-purple::before { border-color: #5d438c; background: #39265a; }.theme-swatch.noble-purple::after { border-color: #7656ae; background: #1c142b; box-shadow: inset 0 12px 0 #302044; }.theme-swatch.noble-purple i:first-child { border-color: #5b3d88; background: #211630; }.theme-swatch.noble-purple i:last-child { background: #2b1d43; }
 .layout-band { align-items: start; }.layout-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .layout-fields label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 10px; }.layout-fields select { width: 100%; min-height: 34px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 5px; outline: 0; background: var(--surface); color: var(--text); }.layout-fields select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .layout-preview { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--surface); }.layout-preview strong { color: var(--text-strong); font-size: 11px; }.layout-preview span { color: var(--muted); font-size: 10px; }

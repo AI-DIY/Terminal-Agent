@@ -62,7 +62,7 @@ import { createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../share
 import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
 import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'
 import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'
-import { UpdaterService } from './updater/updater-service'
+import { DEFAULT_NUTS_FEED_URL, UpdaterService } from './updater/updater-service'
 import { createElectronSessionUpdaterFetcher } from './updater/electron-session-fetcher'
 import { registerUpdaterHandlers } from './updater/register-updater-handlers'
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -80,7 +80,12 @@ import { registerSsoHandlers } from './sso/register-sso-handlers'
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
 let diagnostics: DiagnosticsController | undefined
-const ssoConfig = new SsoConfigService(getSsoConfigPath(resolveSsoConfigHomeDirectory(app.getPath('home'), process.env, app.isPackaged)))
+// SSO and model settings intentionally share the user-scoped `.ta/user-config`
+// document.  Keeping one resolved path here prevents the two repositories from
+// accidentally writing separate copies when packaged and development homes
+// differ.
+const userConfigPath = getSsoConfigPath(resolveSsoConfigHomeDirectory(app.getPath('home'), process.env, app.isPackaged))
+const ssoConfig = new SsoConfigService(userConfigPath)
 const ssoAuth = new SsoAuthenticationService(ssoConfig)
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
 const keyMaterials = new KeyMaterialStore()
@@ -107,10 +112,14 @@ const candidateConfirmations = new CandidateConfirmationService(confirmations)
 sessions.onClosed(event => candidateConfirmations.closeSession(event.sessionId))
 const regexRules = new RegexRuleSettingsService(new FileRegexRuleRepository(join(app.getPath('userData'), 'regex-fence-rules.json')))
 const legacyModelSettings = new JsonSettingsRepository()
+const legacyModelProfiles = new ModelProfileRepository(join(app.getPath('userData'), 'model-profiles.json'))
 const modelProfiles = new ModelProfileService(
-  new ModelProfileRepository(join(app.getPath('userData'), 'model-profiles.json')),
+  new ModelProfileRepository(userConfigPath, { userConfig: true }),
   secretStore,
-  { legacySettings: legacyModelSettings },
+  // API keys are deliberately stored as plain JSON in the user-config file as
+  // requested by the product configuration.  The encrypted secret store is
+  // retained solely as a one-time migration/legacy fallback.
+  { legacySettings: legacyModelSettings, legacyProfiles: legacyModelProfiles, plaintextApiKeys: true },
 )
 const modelSettings = new ModelSettingsService(modelProfiles)
 const chatCompletions = new ModelProviderRouter()
@@ -192,14 +201,12 @@ const chatRuntime = new ChatRuntime({
     return {
       messages: context,
       hasImages: snapshot.chat.messages.some(message => Array.isArray(message.content)),
-      // Host identity is the canonical hostname. Connection titles and
-      // per-Shell display labels are presentation metadata, not distinct
-      // targets for the model.
-      // Keep every online host in the execution allow-list even when the
-      // user chooses to append no Shell output.  Selection controls recent
-      // connection context; it must not make an otherwise online target look
-      // offline to the planner.
-      availableHostnames: uniqueModelHostnames(allOnlineShells.map(shell => shell.hostname)),
+      // Host identity is the canonical hostname. When the renderer supplied
+      // an explicit selection, restrict the planner's allow-list to those
+      // selected hosts so a reviewed plan cannot silently execute elsewhere.
+      // Legacy callers that omit the option retain the historical all-online
+      // projection.
+      availableHostnames: uniqueModelHostnames((options.sshContextSessionIds === undefined ? allOnlineShells : availableShells).map(shell => shell.hostname)),
       availableShells,
       // Selection is intentional, so alternate connections with the same
       // hostname must remain available to the model instead of being
@@ -232,6 +239,9 @@ const applicationVersion = readApplicationVersion()
 const updater = new UpdaterService({
   currentVersion: applicationVersion,
   tempDirectory: join(app.getPath('temp'), 'terminal-agent-updates'),
+  // Nuts update service used by production Windows builds.
+  feedUrl: DEFAULT_NUTS_FEED_URL,
+  downloadConcurrency: 4,
   // Node's fetch ignores Chromium's proxy resolver.  Use the same default
   // session as the app window so update traffic honours Windows/PAC/VPN proxy
   // policy without hard-coding a proxy address.
@@ -302,6 +312,14 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
     }
   })
   const rendererWindow = mainWindow
+  // The renderer must be visible while SSO is authenticating so its local
+  // progress animation can stay in the foreground.  The remote platform page
+  // itself is loaded in a hidden, short-lived authentication window.
+  const showRendererAfterLoad = (): void => {
+    rendererWindow.webContents.removeListener?.('did-finish-load', showRendererAfterLoad)
+    if (!rendererWindow.isDestroyed()) rendererWindow.show()
+  }
+  rendererWindow.webContents.on('did-finish-load', showRendererAfterLoad)
   const windowDiagnostics = new DiagnosticsController(rendererWindow.webContents)
   diagnostics = windowDiagnostics
   unregisterDiagnosticsHandlers = registerDiagnosticsHandlers(windowDiagnostics, rendererWindow.webContents)

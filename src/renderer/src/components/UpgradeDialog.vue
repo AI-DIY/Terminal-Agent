@@ -112,7 +112,7 @@ function close(): void {
 }
 
 function progressLabel(): string {
-  if (isChecking.value) return '正在检查 GitHub 最新版本…'
+  if (isChecking.value) return '正在检查更新服务最新版本…'
   if (isDownloading.value) return `正在下载更新… ${progressPercent.value}%`
   if (isInstalling.value) return `正在启动安装… ${progressPercent.value}%`
   if (phase.value === 'installed') return '安装程序已启动'
@@ -148,10 +148,10 @@ onBeforeUnmount(() => { stopProgress?.(); stopStatus?.(); stopError?.() })
         <section v-if="release" class="release-card">
           <div class="release-card-head"><div><strong>{{ release.name }}</strong><span>版本 v{{ release.version }} · Windows x64</span></div><CheckCircle2 :size="18" aria-hidden="true" /></div>
           <p v-if="release.notes" class="release-notes">{{ release.notes }}</p>
-          <p class="release-source">来源：GitHub Releases</p>
+          <p class="release-source">来源：Nuts 更新服务</p>
         </section>
         <p v-if="message" class="upgrade-message" :class="{ error: phase === 'error' }" role="status">{{ message }}</p>
-        <p v-if="!release && !busy && phase !== 'error'" class="upgrade-hint">点击“检查更新”获取 GitHub 最新 release。</p>
+        <p v-if="!release && !busy && phase !== 'error'" class="upgrade-hint">点击“检查更新”获取更新服务中的最新版本。</p>
       </div>
       <footer class="upgrade-actions">
         <button type="button" class="secondary-action" :disabled="busy" @click="check"><RefreshCw :size="13" :class="{ spin: isChecking }" aria-hidden="true" />{{ isChecking ? '检查中…' : '检查更新' }}</button>

@@ -10,14 +10,27 @@ export const WORKBENCH_LEFT_WIDTH_MAX = 360
 export const WORKBENCH_RIGHT_WIDTH_MIN = 340
 export const WORKBENCH_RIGHT_WIDTH_MAX = 520
 
-export const workbenchThemeSchema = z.enum(['pearl', 'graphite'])
+// Keep the theme identifiers deliberately small and stable: they are persisted
+// in the user's workbench preferences and mirrored to the document root.
+// `noble-purple` is the high-contrast purple theme requested for v3.2 while
+// retaining the existing pearl/graphite values for backwards compatibility.
+export const workbenchThemeSchema = z.enum(['pearl', 'graphite', 'noble-purple'])
 export type WorkbenchTheme = z.infer<typeof workbenchThemeSchema>
 
-export const shellRowHeightPercentSchema = z.union([z.literal(48), z.literal(64), z.literal(80), z.literal(100)])
+// The original four presets remain valid for existing preference files.  The
+// additional compact/airy values give the appearance controls two steps in
+// either direction without requiring a separate "maximize" mode.
+export const shellRowHeightPercentSchema = z.union([
+  z.literal(32), z.literal(40), z.literal(48), z.literal(64), z.literal(80),
+  z.literal(100), z.literal(120), z.literal(140),
+])
 export type ShellRowHeightPercent = z.infer<typeof shellRowHeightPercentSchema>
 
 // Keep the prior 13px terminal type size as the largest/default option.
-export const shellFontSizeSchema = z.union([z.literal(11), z.literal(12), z.literal(13)])
+export const shellFontSizeSchema = z.union([
+  z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13),
+  z.literal(14), z.literal(15),
+])
 export type ShellFontSize = z.infer<typeof shellFontSizeSchema>
 
 export const workbenchLayoutSchema = z.object({

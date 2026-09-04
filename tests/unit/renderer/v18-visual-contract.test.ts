@@ -12,7 +12,7 @@ describe('V18 production visual contract', () => {
     const sessionTabs = rendererSource('components/SessionTabs.vue')
     const chat = rendererSource('components/chat/GlobalChatPanel.vue')
 
-    expect(sidebar).toContain('任务历史区')
+    expect(sidebar).toContain('任务空间')
     expect(sidebar).toContain('任务与 SSH 记录')
     expect(sidebar).toContain('新建任务')
     expect(shellCanvas).toContain('新建 SSH 连接')
@@ -26,7 +26,8 @@ describe('V18 production visual contract', () => {
     expect(chat).not.toContain('添加图片')
     expect(chat).not.toContain('重试')
     expect(chat).not.toContain('@change="editStep')
-    expect(chat).toContain('saveStep(')
+    expect(chat).toContain('editStep(')
+    expect(chat).toContain('textarea class="plan-edit-input"')
     expect(chat).toContain('step.fence.ruleName')
     expect(chat).toContain('step.fence.ruleId')
     expect(chat).toContain('安全围栏')

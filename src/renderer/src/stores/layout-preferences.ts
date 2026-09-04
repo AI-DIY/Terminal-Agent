@@ -30,10 +30,32 @@ export const SHELL_ROW_HEIGHT_PRESETS: ReadonlyArray<{ label: string; value: She
   { label: '占满', value: 100 },
 ]
 
+/**
+ * Full appearance menu options.  Keep SHELL_ROW_HEIGHT_PRESETS above as the
+ * legacy four-item export consumed by older integrations, while using this
+ * expanded list for the v3.2 settings and in-workspace menus.
+ */
+export const SHELL_ROW_HEIGHT_OPTIONS: ReadonlyArray<{ label: string; value: ShellRowHeightPercent }> = [
+  { label: '超紧凑', value: 32 },
+  { label: '紧凑', value: 40 },
+  ...SHELL_ROW_HEIGHT_PRESETS,
+  { label: '超宽松', value: 120 },
+  { label: '超大', value: 140 },
+]
+
 export const SHELL_FONT_SIZE_PRESETS: ReadonlyArray<{ label: string; value: ShellFontSize }> = [
   { label: '小', value: 11 },
   { label: '标准', value: 12 },
   { label: '大', value: 13 },
+]
+
+/** Two additional sizes on each side of the original 11/12/13px range. */
+export const SHELL_FONT_SIZE_OPTIONS: ReadonlyArray<{ label: string; value: ShellFontSize }> = [
+  { label: '特小', value: 9 },
+  { label: '较小', value: 10 },
+  ...SHELL_FONT_SIZE_PRESETS,
+  { label: '较大', value: 14 },
+  { label: '特大', value: 15 },
 ]
 
 export function shellGridStyle(columns: number, rowHeightPercent: ShellRowHeightPercent): Record<string, string> {

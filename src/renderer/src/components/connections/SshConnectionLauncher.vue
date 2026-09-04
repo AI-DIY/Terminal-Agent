@@ -1,16 +1,14 @@
 <script setup lang="ts">
 import { CheckCircle2, SquareTerminal, X } from '@lucide/vue'
-import { computed, nextTick, ref, type ComponentPublicInstance, watch } from 'vue'
+import { computed, nextTick, ref, type ComponentPublicInstance } from 'vue'
 import type { BastionCatalogSnapshot, BastionHostSummary, BastionLaunchRequest, SavedDirectSessionInput } from '../../../../shared/contracts'
 import type { DirectSessionSummary } from '../../../../main/ssh/direct-session-repository'
-import BastionCmdbForm from './BastionCmdbForm.vue'
 import BastionHostForm from './BastionHostForm.vue'
 import DirectSshForm, { type DirectSshConnectRequest, type DirectSshSharedFields, type PrivateKeySelection } from './DirectSshForm.vue'
 import { nextConnectionEntryState } from './connection-entry-state'
 
 const modes = [
-  { id: 'cmdb', label: '堡垒机 CMDB 唤起' },
-  { id: 'bastionHost', label: '堡垒机主机唤起' },
+  { id: 'bastionHost', label: '堡垒机SSH连接' },
   { id: 'password', label: '主机用户名 + 密码连接' },
   { id: 'privateKey', label: '主机私钥连接' },
 ] as const
@@ -34,21 +32,16 @@ const emit = defineEmits<{
   close: []
 }>()
 
-const visibleModes = computed(() => props.appearance === 'embedded' ? modes.filter(item => item.id !== 'cmdb') : modes)
-const initialMode = props.editingProfile?.authKind ?? (props.appearance === 'embedded' ? 'bastionHost' : 'cmdb')
-const mode = ref<SshConnectionLauncherMode>(props.appearance === 'embedded' && initialMode === 'cmdb' ? 'bastionHost' : initialMode)
+// Both entry points intentionally share the same three user-facing connection
+// modes.  The legacy CMDB implementation remains available to the main-process
+// contract for backward compatibility, but it is no longer exposed as a tab.
+const visibleModes = computed(() => modes)
+const initialMode = props.editingProfile?.authKind ?? 'bastionHost'
+const mode = ref<SshConnectionLauncherMode>(initialMode)
 const fields = ref<DirectSshSharedFields>({ host: '', port: 22, username: '' })
 const target = ref('')
-const mcpEnabled = ref(false)
-const mcpSaved = ref(false)
-const systemId = ref('')
-const hostId = ref('')
 const tabRefs = ref<HTMLButtonElement[]>([])
 const activeLabel = computed(() => modes.find(item => item.id === mode.value)?.label ?? '')
-
-watch(() => props.appearance, appearance => {
-  if (appearance === 'embedded' && mode.value === 'cmdb') mode.value = 'bastionHost'
-})
 
 function setTabRef(element: Element | ComponentPublicInstance | null): void {
   if (element instanceof HTMLButtonElement && !tabRefs.value.includes(element)) tabRefs.value.push(element)
@@ -92,9 +85,6 @@ function updateFields(next: DirectSshSharedFields): void {
   fields.value = next
 }
 
-function saveMcpConfig(): void {
-  mcpSaved.value = true
-}
 </script>
 
 <template>
@@ -126,17 +116,15 @@ function saveMcpConfig(): void {
       >{{ item.label }}</button>
     </div>
     <div class="mode-panel" role="tabpanel" :id="`ssh-panel-${mode}`">
-      <BastionCmdbForm v-if="mode === 'cmdb'" v-model:system-id="systemId" v-model:host-id="hostId" :catalog="catalog" :hosts="hosts" :open-host-ids="openHostIds" :loading="loading" :error="error" @system-change="emit('systemChange', $event)" @launch="launch" />
-      <BastionHostForm v-else-if="mode === 'bastionHost'" :initial-target="target" :loading="loading" :error="error" @target-change="target = $event" @launch="launch" />
+      <template v-if="mode === 'bastionHost'">
+        <BastionHostForm :initial-target="target" :loading="loading" :error="error" @target-change="target = $event" @launch="launch" />
+        <section class="connection-notices" aria-label="堡垒机连接须知">
+          <p><strong>【配置须知】</strong>堡垒机“会话配置”的“会话访问方式”必须使用“使用全局设置(putty)”。</p>
+          <p><strong>【使用须知】</strong>使用集团堡垒机正常指定主机 SSH 连接即可。</p>
+        </section>
+      </template>
       <DirectSshForm v-else :key="mode" :mode="mode" :editing-profile="editingProfile" :initial-fields="fields" @fields-change="updateFields" @connect="directConnect" @save-profile="emit('saveProfile', $event)" @select-private-key="emit('selectPrivateKey', $event)" />
     </div>
-    <section v-if="appearance === 'embedded'" class="mcp-config" aria-label="堡垒机浏览器 MCP 配置">
-      <header><div><strong>堡垒机浏览器 MCP 配置</strong><span>模拟 UI · 不会连接外部服务</span></div><span class="mcp-badge">{{ mcpEnabled ? '已启用' : '未启用' }}</span></header>
-      <label class="mcp-toggle"><input v-model="mcpEnabled" type="checkbox"><span>启用浏览器 MCP（模拟）</span></label>
-      <label>服务地址<input value="http://127.0.0.1:8931/mcp" autocomplete="off" @input="mcpSaved = false"></label>
-      <button type="button" class="mcp-save" @click="saveMcpConfig">保存模拟配置</button>
-      <p v-if="mcpSaved" class="mcp-saved" role="status">模拟配置已保存，仅用于界面预览。</p>
-    </section>
   </section>
 </template>
 
@@ -153,10 +141,10 @@ h2 { margin-top: 5px; color: var(--text-strong); font-size: 18px; font-weight: 7
 .mode-description,.launcher-copy { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; }.launcher-copy { max-width: 410px; }
 .plugin-status { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin: 12px 0 0; color: var(--green); font-size: 10px; font-weight: 650; }
 .close-button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--muted); }.close-button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
-.mode-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; margin-top: 16px; padding: 3px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface-soft); }
+.mode-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; margin-top: 16px; padding: 3px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface-soft); }
 .mode-tabs button { min-height: 30px; padding: 5px 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 650; text-align: center; }
-.mode-tabs button:hover { color: var(--text-strong); }.mode-tabs button.active { border-color: var(--line); background: var(--surface); color: var(--accent); box-shadow: 0 1px 2px rgb(35 44 55 / 12%); }.appearance-embedded .mode-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }.appearance-embedded .mode-tabs .bastion-host-tab { grid-column: 1 / -1; font-weight: 800; }
+.mode-tabs button:hover { color: var(--text-strong); }.mode-tabs button.active { border-color: var(--line); background: var(--surface); color: var(--accent); box-shadow: 0 1px 2px rgb(35 44 55 / 12%); }.appearance-embedded .mode-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }.appearance-embedded .mode-tabs .bastion-host-tab { font-weight: 800; }
 .mode-panel { margin-top: 12px; text-align: left; }
-.mcp-config { display: grid; gap: 9px; margin-top: 18px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); text-align: left; }.mcp-config header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }.mcp-config header div { display: grid; gap: 3px; }.mcp-config header strong { color: var(--text-strong); font-size: 11px; }.mcp-config header span { color: var(--muted); font-size: 9px; }.mcp-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--amber-line); border-radius: 4px; background: var(--amber-soft); color: var(--amber) !important; font-size: 9px !important; font-weight: 700; }.mcp-config label { display: grid; gap: 5px; color: var(--text-strong); font-size: 10px; font-weight: 650; }.mcp-config input[type='text'],.mcp-config label > input:not([type]) { min-height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 10px; }.mcp-toggle { display: flex !important; grid-template-columns: none; align-items: center; gap: 7px; }.mcp-toggle input { width: 14px; height: 14px; margin: 0; }.mcp-save { min-height: 30px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text-strong); font-size: 10px; font-weight: 650; }.mcp-save:hover { border-color: var(--focus); background: var(--hover); }.mcp-saved { margin: 0; color: var(--green); font-size: 9px; }
+.connection-notices { display: grid; gap: 7px; margin-top: 14px; padding: 10px 11px; border-left: 3px solid var(--accent); border-radius: 4px; background: var(--surface-soft); color: var(--muted); font-size: 10px; line-height: 1.55; }.connection-notices p { margin: 0; }.connection-notices strong { margin-right: 4px; color: var(--text-strong); font-weight: 700; }
 @media (max-width: 520px) { .mode-tabs { grid-template-columns: 1fr; } .appearance-dialog { padding: 17px; } }
 </style>

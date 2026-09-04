@@ -26,6 +26,10 @@ export type SsoSaveIntent = z.infer<typeof ssoSaveIntentSchema>
 export const ssoDocumentSchema = z.object({
   version: z.literal(1),
   sso: ssoConfigurationSchema,
+  // Model profiles are co-located in the user-config file.  SSO consumers
+  // intentionally treat this section as opaque; the main-process model
+  // repository validates and updates it with its own schema.
+  models: z.unknown().optional(),
 }).strict()
 export type SsoDocument = z.infer<typeof ssoDocumentSchema>
 

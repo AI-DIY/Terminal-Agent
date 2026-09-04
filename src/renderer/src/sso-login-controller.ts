@@ -18,7 +18,7 @@ export function shouldRetryOnMount(state: SsoAuthState): boolean {
 
 export function loginStatusCopy(state: SsoAuthState): string {
   if (state === 'login-required') return '正在打开登录页'
-  if (state === 'authenticating') return '等待平台加载用户信息'
+  if (state === 'authenticating') return '正在安全获取用户信息'
   return ''
 }
 

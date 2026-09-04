@@ -5,7 +5,7 @@ title Terminal-Agent Quick Install
 rem ============================================================================
 rem Terminal-Agent quick installer (Windows)
 rem
-rem The release quick-start.pdf describes five actions.  This script automates
+rem The release 快速安装手册.pdf describes the standalone ZIP flow.  This script automates
 rem the four actions that have a stable machine interface:
 rem   * read HKCR\accessclient\shell\open\command;
 rem   * preserve AccessClient\putty.exe as putty.exe.bak;
@@ -220,10 +220,10 @@ set "TA_REQUIRED_LABEL=Release"
 call :require_directory
 if errorlevel 1 goto failed
 
-if exist "%TA_RELEASE_DIR%\quick-start.pdf" (
-  echo [信息] 已找到 quick-start.pdf，将自动执行其中的文件/注册表步骤。
+if exist "%TA_RELEASE_DIR%\快速安装手册.pdf" (
+  echo [信息] 已找到 快速安装手册.pdf，将自动执行其中的文件/注册表步骤。
 ) else (
-  echo [提示] 未找到 quick-start.pdf；继续执行同等的自动化流程。
+  echo [提示] 未找到 快速安装手册.pdf；继续执行同等的自动化流程。
 )
 
 rem Resolve and validate every release asset before touching AccessClient.
@@ -298,12 +298,12 @@ if "%TA_AUTO_LAUNCH%"=="1" call :launch_runtime
 echo.
 echo [完成] Terminal-Agent 已安装，putty.exe 中继程序已映射到 AccessClient。
 echo.
-echo 还需在 AccessClient 堡垒机界面手动完成 PDF 第 5 步：
+echo 还需在 AccessClient 堡垒机界面手动完成快速安装手册中的配置步骤：
 echo   在“会话配置”中选择“全局 putty”，然后按原流程唤起 SSH。
 echo   这是厂商 UI 设置，脚本不会修改未知的 AccessClient 配置文件。
 echo.
 call :print_backup_path
-if "%TA_OPEN_GUIDE%"=="1" if exist "%TA_RELEASE_DIR%\quick-start.pdf" start "" "%TA_RELEASE_DIR%\quick-start.pdf"
+if "%TA_OPEN_GUIDE%"=="1" if exist "%TA_RELEASE_DIR%\快速安装手册.pdf" start "" "%TA_RELEASE_DIR%\快速安装手册.pdf"
 if "%TA_NO_PAUSE%"=="0" pause
 call :cleanup_download
 popd >nul 2>&1
@@ -401,7 +401,7 @@ exit /b 0
 
 :find_accessclient_dir
 set "TA_ACCESS_EXE="
-rem This is the exact query printed in quick-start.pdf.
+rem This is the exact query printed in 快速安装手册.pdf.
 reg query "HKCR\accessclient\shell\open\command" /ve >nul 2>&1
 if errorlevel 1 (
   set "TA_ERROR=[错误] 未找到 HKCR\accessclient 注册信息。请先安装 AccessClient，或使用 /AccessClientDir 指定目录。"
@@ -702,7 +702,7 @@ echo Terminal-Agent quick-install.cmd
 echo.
 echo 用法：quick-install.cmd [选项]
 echo.
-echo 默认从脚本所在目录或 release 目录寻找 quick-start.pdf、putty.exe 和安装包，
+echo 默认从脚本所在目录或 release 目录寻找 快速安装手册.pdf、putty.exe 和安装包，
 echo 自动查询 HKCR\accessclient、备份原 putty.exe、复制中继程序，最后启动安装向导。
 echo.
 echo 选项：
@@ -710,7 +710,7 @@ echo   /NoDownload                  仅使用本地资产，不访问 GitHub
 echo   /Download                    忽略本地资产并重新下载最新版资产
 echo   /NoLaunch                    安装完成后不自动启动 Terminal-Agent
 echo   /Silent                      以 NSIS 静默参数 /S 启动安装包
-echo   /OpenGuide                   成功后打开 quick-start.pdf
+echo   /OpenGuide                   成功后打开 快速安装手册.pdf
 echo   /NoPause                     完成或失败后不暂停窗口
 echo   /ReleaseDir ^<目录^>           指定 release 资产目录
 echo   /Installer ^<文件^>            指定 Terminal-Agent-Setup-*.exe

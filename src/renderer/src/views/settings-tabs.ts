@@ -8,3 +8,12 @@ export const SETTINGS_TABS = [
   { id: 'sso', label: '单点登录', status: 'ready' },
 ] as const
 export type SettingsTabId = typeof SETTINGS_TABS[number]['id']
+
+/**
+ * v3.2 presents one active LLM configuration as the only model settings
+ * surface.  Keep SETTINGS_TABS exported with its historical shape for plugin
+ * compatibility, but do not expose the removed routing/VLM panels in the
+ * settings navigation.
+ */
+export const SETTINGS_NAV_TABS = SETTINGS_TABS.filter(item => item.id !== 'routing' && item.id !== 'vlm')
+export type SettingsNavTabId = typeof SETTINGS_NAV_TABS[number]['id']

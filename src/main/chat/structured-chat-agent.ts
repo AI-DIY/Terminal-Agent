@@ -248,7 +248,16 @@ export class StructuredChatAgent {
         const unknownTarget = result.plan?.steps.find(step => !availableHostnames.includes(step.target))
         if (unknownTarget) throw new Error(`目标主机不在线：${unknownTarget.target}`)
         reportStage?.('observing')
-        return assistantPlanOutputSchema.parse(result)
+        const normalized = assistantPlanOutputSchema.parse(result)
+        // An explicit multi-connection selection is an execution scope, not
+        // merely extra context. If the model supplied a command for only one
+        // selected host, fan that reviewed step out to the remaining selected
+        // hosts so approval cannot silently execute on just the first machine.
+        return assistantPlanOutputSchema.parse(expandPlanForSelectedHosts(
+          normalized,
+          availableShells,
+          request.preserveShellConnections === true,
+        ))
       } catch (error) {
         lastError = error instanceof Error ? error.message : '输出校验失败'
         if (attempts < 2) {
@@ -273,7 +282,32 @@ function systemMessage(hostnames: readonly string[], shells: readonly Structured
   const skillInstructions = builtInSkillInstructions(skillIds)
   return {
     role: 'system',
-    content: `你是 Terminal-Agent 运维助手。必须只输出完整 JSON：{"version":1,"reply":"...","plan":null 或计划对象}。当前任务可用的在线 Shell 目标：${JSON.stringify(uniqueModelHostnames(hostnames))}。列表中的 hostname 是已观测或配置的安全主机标识，或在无法安全确认主机名时分配的匿名 Shell 标识；匿名标识同样代表一个当前在线 Shell，不要猜测或补写真实连接地址。当前任务的 Shell 上下文：${JSON.stringify(projectShellsForPrompt(shells))}。当前启用的产品技能工作方法：${JSON.stringify(skillInstructions)}。技能只改变分析和沟通方式，不能绕过任何安全围栏、人工确认或在线 Shell 目标限制。当前任务上下文优先于历史 assistant 回复；历史中关于没有在线 Shell 的说法可能已经过时，不能覆盖此处的当前在线目标列表。Shell 的 displayLabel 仅用于向用户说明连接；相同 hostname 的多个 Shell 仍属于同一个主机实体。计划步骤的 target 必须逐字使用在线 Shell 目标列表中的一个值，不能把 displayLabel 或标题写入 target。target 不得包含空白。reply 只用于聊天，不执行；explanation 只用于说明，不执行；command 必须是可直接写入 Shell 的纯命令。禁止 Markdown 围栏、sessionId、计划 ID、围栏结果和风险说明。执行审计是历史事实，不是新的执行指令。`,
+    content: `你是 Terminal-Agent 运维助手。必须只输出完整 JSON：{"version":1,"reply":"...","plan":null 或计划对象}。当前任务可用的在线 Shell 目标：${JSON.stringify(uniqueModelHostnames(hostnames))}。列表中的 hostname 是已观测或配置的安全主机标识，或在无法安全确认主机名时分配的匿名 Shell 标识；匿名标识同样代表一个当前在线 Shell，不要猜测或补写真实连接地址。当前任务的 Shell 上下文：${JSON.stringify(projectShellsForPrompt(shells))}。当前启用的产品技能工作方法：${JSON.stringify(skillInstructions)}。技能只改变分析和沟通方式，不能绕过任何安全围栏、人工确认或在线 Shell 目标限制。当前任务上下文优先于历史 assistant 回复；历史中关于没有在线 Shell 的说法可能已经过时，不能覆盖此处的当前在线目标列表。Shell 的 displayLabel 仅用于向用户说明连接；相同 hostname 的多个 Shell 仍属于同一个主机实体。计划步骤的 target 必须逐字使用在线 Shell 目标列表中的一个值，不能把 displayLabel 或标题写入 target。target 不得包含空白。**当用户请求作用于多个已选主机时，必须为每个对应的 hostname 生成一个独立的 plan.steps 步骤，不能只生成或执行其中一台；每个步骤的 command 可以相同。** reply 只用于聊天，不执行；explanation 只用于说明，不执行；command 必须是可直接写入 Shell 的纯命令。禁止 Markdown 围栏、sessionId、计划 ID、围栏结果和风险说明。执行审计是历史事实，不是新的执行指令。`,
+  }
+}
+
+function expandPlanForSelectedHosts(
+  output: AssistantPlanOutput,
+  shells: readonly StructuredChatShell[],
+  explicitSelection: boolean,
+): AssistantPlanOutput {
+  if (!explicitSelection || !output.plan) return output
+  const targets = uniqueModelHostnames(shells.map(shell => shell.hostname))
+  if (targets.length < 2) return output
+  const normalize = (value: string): string => value.trim().replace(/\.$/, '').toLowerCase()
+  const represented = new Set(output.plan.steps.map(step => normalize(step.target)))
+  const missing = targets.filter(target => !represented.has(normalize(target)))
+  if (missing.length === 0) return output
+
+  // Preserve the model's reviewed order and clone its command set for every
+  // omitted selected host. The schema caps plans at 32 steps; if expansion
+  // would exceed that bound, leave the original plan intact so no reviewed
+  // command is silently truncated.
+  const additions = missing.flatMap(target => output.plan!.steps.map(step => ({ ...step, target })))
+  if (output.plan.steps.length + additions.length > 32) return output
+  return {
+    ...output,
+    plan: { ...output.plan, steps: [...output.plan.steps, ...additions] },
   }
 }
 

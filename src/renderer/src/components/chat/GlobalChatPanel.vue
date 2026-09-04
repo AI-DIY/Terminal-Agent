@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bot, Check, ChevronDown, ChevronUp, CircleAlert, History, MessageSquarePlus, PanelRightClose, Send, Square, Trash2, UserRound, X } from '@lucide/vue'
+import { Bot, Check, ChevronDown, ChevronUp, CircleAlert, History, MessageSquarePlus, PanelRightClose, Plus, Send, Square, UserRound, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { ChatConversationSessionSummary, ChatProgressStage, ChatWorkspace } from '../../../../shared/contracts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../stores/global-chat'
@@ -35,6 +35,7 @@ const props = withDefaults(defineProps<{
 })
 const emit = defineEmits<{
   collapse: []
+  newConnection: []
   newSession: []
   switchSession: [chatId: string]
 }>()
@@ -368,7 +369,7 @@ function planTargetLabel(target: string): string {
   return planTargetLabelForShells(target, shells)
 }
 function stepDraftKey(messageId: string, stepId: string): string { return `${messageId}:${stepId}` }
-function setStepDraft(messageId: string, stepId: string, event: Event): void { stepDrafts[stepDraftKey(messageId, stepId)] = (event.target as HTMLInputElement).value }
+function setStepDraft(messageId: string, stepId: string, event: Event): void { stepDrafts[stepDraftKey(messageId, stepId)] = (event.target as HTMLTextAreaElement).value }
 function stepDraftValue(messageId: string, stepId: string, step: { finalCommand?: string; originalCommand: string }): string {
   return stepDrafts[stepDraftKey(messageId, stepId)] ?? stepCommand(step)
 }
@@ -377,24 +378,16 @@ function reportActionError(actionChatId: string, error: unknown, fallback: strin
   if (actionChatId !== chatId.value) return
   announceAssertiveError(actionErrors[actionChatId])
 }
-async function saveStep(messageId: string, stepId: string, fallbackCommand: string): Promise<void> {
-  if (props.sessionBusy) return
-  const key = stepDraftKey(messageId, stepId)
-  const command = (stepDrafts[key] ?? fallbackCommand).trim()
-  if (command) stepDrafts[key] = command
-  await editStep(messageId, stepId, command)
-}
 async function editStep(messageId: string, stepId: string, command: string): Promise<void> {
   const actionChatId = chatId.value
   if (!actionChatId || !command.trim() || props.sessionBusy) return
   actionErrors[actionChatId] = ''
-  try { await store.editPlanStep(actionChatId, messageId, stepId, command.trim()) } catch (error) { reportActionError(actionChatId, error, '计划更新失败') }
-}
-async function removeStep(messageId: string, stepId: string): Promise<void> {
-  const actionChatId = chatId.value
-  if (!actionChatId || props.sessionBusy) return
-  actionErrors[actionChatId] = ''
-  try { await store.removePlanStep(actionChatId, messageId, stepId) } catch (error) { reportActionError(actionChatId, error, '计划更新失败') }
+  try {
+    await store.editPlanStep(actionChatId, messageId, stepId, command.trim())
+  } catch (error) {
+    reportActionError(actionChatId, error, '计划更新失败')
+    throw error
+  }
 }
 async function cancelPlan(messageId: string): Promise<void> {
   const actionChatId = chatId.value
@@ -406,7 +399,25 @@ async function executePlan(messageId: string): Promise<void> {
   const actionChatId = chatId.value
   if (!actionChatId || props.sessionBusy) return
   actionErrors[actionChatId] = ''
-  try { await store.executePlan(actionChatId, messageId) } catch (error) { reportActionError(actionChatId, error, '计划执行失败') }
+  try {
+    // The per-step save/delete controls were intentionally removed from the
+    // compact review card.  Persist the current textarea values immediately
+    // before execution so the command sent by the main process is always the
+    // command the user can see and edit in the input area.
+    const message = messages.value.find(item => item.id === messageId)
+    const plan = message?.executionPlan
+    if (plan?.status === 'pending_review') {
+      for (const step of plan.steps) {
+        const key = stepDraftKey(messageId, step.id)
+        const command = (stepDrafts[key] ?? stepCommand(step)).trim()
+        if (!command) throw new Error('执行命令不能为空')
+        if (command !== stepCommand(step)) await editStep(messageId, step.id, command)
+      }
+    }
+    await store.executePlan(actionChatId, messageId)
+  } catch (error) {
+    reportActionError(actionChatId, error, '计划执行失败')
+  }
 }
 onMounted(() => {
   followMessages.value = true
@@ -424,6 +435,7 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
       <span class="ai-avatar" aria-hidden="true">AI</span>
       <div class="ai-head-copy"><h3>AI工作区</h3><span>当前任务的全局协作助手</span></div>
       <div class="ai-head-actions">
+        <button type="button" class="session-action new-connection" :disabled="sessionBusy" aria-label="新建 SSH 连接" title="新建 SSH 连接" @click="emit('newConnection')"><Plus :size="13" aria-hidden="true" /><span>新建 SSH 连接</span></button>
         <button type="button" class="session-action new-session" :disabled="!canCreateConversationSession" aria-label="新建会话" title="新建会话：备份当前聊天内容后开始新的会话" @click="requestNewConversationSession"><MessageSquarePlus :size="13" aria-hidden="true" /><span>新建会话</span></button>
         <label class="session-switch"><History :size="13" aria-hidden="true" /><span class="visually-hidden-label">切换会话</span><select v-model="selectedConversationSessionId" :disabled="!canSwitchConversationSession" aria-label="切换会话" title="切换会话" @change="requestConversationSessionSwitch"><option value="">切换会话</option><option v-for="session in conversationSessions" :key="session.id" :value="session.id">{{ session.label }}</option></select></label>
         <button type="button" class="collapse-button" aria-label="收起 AI工作区" title="收起 AI工作区" @click="emit('collapse')"><span>收起</span><PanelRightClose :size="14" aria-hidden="true" /></button>
@@ -435,7 +447,6 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
           <div class="context-progress" role="progressbar" aria-label="上下文使用比例" :aria-valuenow="contextPercent" aria-valuemin="0" aria-valuemax="100"><span :style="{ width: `${contextPercent}%` }" /></div>
           <div class="context-meter-foot"><span>根据当前聊天文本和模型上限估算</span></div>
           <div class="context-settings">
-            <button type="button" class="secondary-action" :disabled="compacting || !chatId || sessionBusy" @click="compactContext">{{ compacting ? '正在压缩…' : '立即压缩' }}</button>
             <label class="ssh-context-setting"><span>SSH 上下文追加行数</span><input type="number" min="0" step="1" :value="sshContextLines" aria-label="SSH 上下文追加的上下文行数" @change="updateSshContextLines"></label>
             <section class="context-host-setting" aria-label="选择主机追加上下文">
               <div class="context-host-setting-head"><span>选择主机追加上下文</span><b>{{ selectedContextCount }} / {{ contextSessionRows.length }}</b></div>
@@ -466,13 +477,8 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
                <div class="plan-step-head"><strong>{{ planTargetLabel(step.target) }}</strong><span>{{ step.sendState }}</span></div>
                <p>{{ step.explanation }}</p>
                <div v-if="step.fence" class="plan-risk"><CircleAlert :size="12" aria-hidden="true" /><span>安全围栏：{{ step.fence.ruleName }}（{{ step.fence.ruleId }}）</span></div>
-               <label class="plan-command"><span>原始命令</span><code>{{ step.originalCommand }}</code></label>
-               <label v-if="step.finalCommand" class="plan-command"><span>确认命令</span><code>{{ step.finalCommand }}</code></label>
-                <div v-if="message.executionPlan.status === 'pending_review'" class="plan-step-actions">
-                  <input class="plan-edit-input" :disabled="sessionBusy" :value="stepDraftValue(message.id, step.id, step)" :aria-label="`编辑 ${planTargetLabel(step.target)} 命令`" @input="setStepDraft(message.id, step.id, $event)">
-                  <button type="button" class="icon-button" :disabled="sessionBusy" :aria-label="`保存 ${planTargetLabel(step.target)} 命令`" title="保存命令" @click="saveStep(message.id, step.id, stepCommand(step))"><Check :size="13" aria-hidden="true" /></button>
-                 <button type="button" class="icon-button" :disabled="sessionBusy" :aria-label="`删除 ${planTargetLabel(step.target)} 步骤`" title="删除步骤" @click="removeStep(message.id, step.id)"><Trash2 :size="13" aria-hidden="true" /></button>
-              </div>
+               <label v-if="message.executionPlan.status === 'pending_review'" class="plan-command plan-command-editor"><span>执行命令（可编辑）</span><textarea class="plan-edit-input" rows="2" :disabled="sessionBusy" :value="stepDraftValue(message.id, step.id, step)" :aria-label="`编辑 ${planTargetLabel(step.target)} 命令`" @input="setStepDraft(message.id, step.id, $event)" /></label>
+               <label v-else class="plan-command"><span>执行命令</span><code>{{ stepCommand(step) }}</code></label>
             </div>
             <footer v-if="message.executionPlan.status === 'pending_review'" class="plan-actions">
                <button type="button" class="secondary-action" :disabled="sessionBusy" @click="cancelPlan(message.id)"><X :size="13" aria-hidden="true" />取消计划</button>
@@ -522,6 +528,8 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 .message { display: grid; grid-template-columns: 29px minmax(0, 1fr); align-items: start; gap: 8px; min-width: 0; padding: 8px 0; }.message-avatar { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); }.message.assistant .message-avatar { border-color: var(--text-strong); background: var(--text-strong); color: var(--surface); }.message-content { position: relative; min-width: 0; max-width: 100%; padding: 10px 11px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow-wrap: anywhere; }.message.assistant .message-content::before { position: absolute; top: 10px; bottom: 10px; left: -1px; width: 2px; border-radius: 0 2px 2px 0; background: var(--accent); content: ""; }.message.user { grid-template-columns: minmax(0, 1fr) 29px; padding-left: 38px; }.message.user .message-avatar { grid-column: 2; grid-row: 1; background: var(--panel); color: var(--text-strong); }.message.user .message-content { grid-column: 1; grid-row: 1; background: var(--surface-soft); }.message-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }.message-meta strong { color: var(--text-strong); font-size: 10px; }.message.assistant .message-meta strong { color: var(--accent); }.message-meta span { margin-left: auto; }.message p { margin: 0; color: var(--text); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }.message.audit .message-content { border-color: var(--amber-line); background: var(--amber-soft); }.message.audit .message-avatar { color: var(--amber); }
 .execution-plan { display: grid; gap: 8px; margin-top: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }.plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); }.plan-head > div { display: grid; gap: 3px; min-width: 0; }.plan-head strong { color: var(--text-strong); font-size: 11px; overflow-wrap: anywhere; }.plan-head span { color: var(--muted); font-size: 9px; }.plan-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent) !important; font-weight: 650; }.plan-step { display: grid; gap: 5px; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }.plan-step:last-of-type { border-bottom: 0; }.plan-step-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; }.plan-step-head strong { color: var(--text-strong); font-size: 10px; }.plan-step-head span { color: var(--muted); font-size: 9px; }.plan-step p { color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-risk { display: flex; align-items: flex-start; gap: 5px; color: var(--amber); font-size: 9px; line-height: 1.45; }.plan-risk svg { flex: 0 0 auto; margin-top: 1px; }.plan-command { display: grid; gap: 3px; min-width: 0; }.plan-command span { color: var(--faint); font-size: 8px; }.plan-command code { display: block; min-width: 0; overflow: auto; padding: 5px 6px; border: 1px solid var(--line-soft); background: var(--surface-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-step-actions,.plan-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }.plan-step-actions { margin-top: 2px; }.plan-edit-input { min-width: 0; flex: 1; height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; }.icon-button,.secondary-action,.primary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; white-space: nowrap; }.icon-button { width: 27px; padding: 0; }.icon-button:hover,.secondary-action:hover { border-color: var(--focus); color: var(--text-strong); }.primary-action { border-color: var(--accent); background: var(--accent); color: #fff; }.plan-actions { justify-content: flex-end; padding-top: 2px; }.plan-edit-input:disabled,.icon-button:disabled,.plan-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .empty { display: grid; justify-items: center; gap: 6px; padding: 34px 18px; color: var(--muted); text-align: center; }.empty strong { color: var(--text-strong); font-size: 12px; }.empty span { max-width: 270px; font-size: 10px; line-height: 1.55; }
+.plan-command-editor { gap: 4px; }
+.plan-command-editor .plan-edit-input { display: block; width: 100%; min-width: 0; min-height: 44px; height: auto; padding: 7px; resize: vertical; font: 9px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .error { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0 37px; padding: 9px 10px; border-left: 2px solid var(--red); background: var(--surface); color: var(--red); font-size: 10px; line-height: 1.5; }.error span { min-width: 0; flex: 1; overflow-wrap: anywhere; }.error button { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); }
 .composer { min-width: 0; padding: 10px; border-top: 1px solid var(--line); background: var(--surface); }.composer-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }.composer:focus-within .composer-shell { border-color: var(--focus); box-shadow: 0 0 0 2px var(--accent-soft); }.composer textarea { display: block; width: 100%; height: 64px; resize: none; padding: 10px 11px 7px; border: 0; background: transparent; color: var(--text-strong); font-size: 11px; line-height: 1.5; }.composer textarea::placeholder { color: var(--faint); }.composer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-height: 39px; padding: 6px 7px 7px 10px; border-top: 1px solid var(--line-soft); }.composer-foot button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 29px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; font-weight: 650; }.composer-foot button:disabled { cursor: not-allowed; opacity: .55; }.composer-foot .send-button { border-color: var(--accent); background: var(--accent); color: #fff; }.composer-foot .line-break-button:hover { border-color: var(--focus); color: var(--text-strong); }.composer-foot .cancel-button:hover { border-color: var(--red); color: var(--red); }
 @media (max-width: 1180px) { .collapse-button span { display: none; }.collapse-button { width: 30px; padding: 0; }.ai-head-copy span { display: none; } }

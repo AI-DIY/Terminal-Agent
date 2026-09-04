@@ -106,10 +106,38 @@ watch(rootSurface, surface => {
   --terminal-text: #d8dade;
   color-scheme: dark;
 }
+:root[data-theme="noble-purple"] {
+  --chrome: #302044;
+  --panel: #271a39;
+  --surface: #1d132d;
+  --surface-soft: #241735;
+  --hover: #3a2751;
+  --selected: #432d61;
+  --text-strong: #f7f0ff;
+  --text: #e4d9f1;
+  --muted: #b9a9ca;
+  --faint: #9582aa;
+  --line: #4d3865;
+  --line-soft: #39284f;
+  --accent: #c092ff;
+  --accent-soft: #3c2857;
+  --focus: #d0aaff;
+  --green: #83d5b1;
+  --green-soft: #1d3a31;
+  --amber: #edc875;
+  --amber-soft: #453620;
+  --amber-line: #735a2e;
+  --red: #ff9da8;
+  --terminal: #160e22;
+  --terminal-head: #241735;
+  --terminal-text: #eee7f7;
+  color-scheme: dark;
+}
 *, *::before, *::after { box-sizing: border-box; letter-spacing: 0; }
 html, body, #app { width: 100%; min-width: 0; height: 100%; margin: 0; overflow: hidden; }
 body { background: #e7ebf0; color: var(--text); }
 :root[data-theme="graphite"] body { background: #121416; }
+:root[data-theme="noble-purple"] body { background: #120b1b; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .58; }

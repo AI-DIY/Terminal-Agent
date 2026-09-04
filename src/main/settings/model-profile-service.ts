@@ -14,21 +14,31 @@ import type { SecretStore } from './secret-store'
 import { validateModelApiKey } from './model-api-key-validation'
 import type { ModelProfileDocument, ModelProfileRepositoryPort, PersistedModelProfile } from './model-profile-repository'
 
-export type ProtectedModelProfile = PersistedModelProfile & { apiKey: string | null }
+export type ProtectedModelProfile = Omit<PersistedModelProfile, 'apiKey'> & { apiKey: string | null }
 export type RoutedModelSettings = ModelSettingsInput & { provider: PersistedModelProfile['provider']; profileId: string }
 
 type LegacyModelSettingsSource = {
   load(): Promise<PersistedModelSettings | null>
 }
 
+type LegacyModelProfilesSource = {
+  load(): Promise<ModelProfileDocument>
+}
+
 type ModelProfileServiceOptions = {
   createId?: () => string
   legacySettings?: LegacyModelSettingsSource
+  /** Optional pre-3.2 profile repository to migrate into user-config. */
+  legacyProfiles?: LegacyModelProfilesSource
+  /** Persist API keys directly in the user-config model document. */
+  plaintextApiKeys?: boolean
 }
 
 export class ModelProfileService {
   private readonly createId: () => string
   private readonly legacySettings: LegacyModelSettingsSource | undefined
+  private readonly legacyProfiles: LegacyModelProfilesSource | undefined
+  private readonly plaintextApiKeys: boolean
   private apiKeyReferenceMigrationChecked = false
   private migrationChecked = false
   private mutationTail: Promise<void> = Promise.resolve()
@@ -40,6 +50,8 @@ export class ModelProfileService {
   ) {
     this.createId = options.createId ?? randomUUID
     this.legacySettings = options.legacySettings
+    this.legacyProfiles = options.legacyProfiles
+    this.plaintextApiKeys = options.plaintextApiKeys === true
   }
 
   async list(kind?: ModelProfileKind): Promise<RendererModelProfile[]> {
@@ -67,6 +79,13 @@ export class ModelProfileService {
       if (current && current.kind !== parsed.kind) throw new Error('Model profile kind cannot change')
 
       const id = current?.id ?? this.createId()
+      // When the new user-config mode is enabled, an omitted key means
+      // "keep the existing credential".  This also opportunistically moves a
+      // legacy encrypted credential into the plain JSON profile on the next
+      // edit, while preserving the old secret-store behaviour for callers that
+      // do not opt in.
+      const existingApiKey = current ? await this.resolveApiKey(current) : null
+      const persistedApiKey = apiKey ?? existingApiKey
       const profile: PersistedModelProfile = {
         id,
         name: parsed.name,
@@ -76,20 +95,21 @@ export class ModelProfileService {
         endpoint: parsed.endpoint,
         ...(parsed.contextLimit === undefined ? {} : { contextLimit: parsed.contextLimit }),
         ...(parsed.maxImages === undefined ? {} : { maxImages: parsed.maxImages }),
+        ...(this.plaintextApiKeys && persistedApiKey ? { apiKey: persistedApiKey } : {}),
       }
       const next: ModelProfileDocument = {
         ...document,
         profiles: [...document.profiles.filter(candidate => candidate.id !== id), profile],
       }
-      const previousApiKey = apiKey ? await this.secrets.load(secretKey(id)) : null
-      if (apiKey) await this.secrets.save(secretKey(id), apiKey)
-      if (profile.kind === 'llm' && next.activeLlmId === null && next.autoActivateLlm !== false && await this.isValidForActivation(profile, next, apiKey)) next.activeLlmId = id
-      if (profile.kind === 'vlm' && next.activeVlmId === null && next.autoActivateVlm !== false && await this.isValidForActivation(profile, next, apiKey)) next.activeVlmId = id
+      const previousApiKey = this.plaintextApiKeys ? null : (apiKey ? await this.secrets.load(secretKey(id)) : null)
+      if (!this.plaintextApiKeys && apiKey) await this.secrets.save(secretKey(id), apiKey)
+      if (profile.kind === 'llm' && next.activeLlmId === null && next.autoActivateLlm !== false && await this.isValidForActivation(profile, next, persistedApiKey ?? undefined)) next.activeLlmId = id
+      if (profile.kind === 'vlm' && next.activeVlmId === null && next.autoActivateVlm !== false && await this.isValidForActivation(profile, next, persistedApiKey ?? undefined)) next.activeVlmId = id
 
       try {
         await this.repository.save(next)
       } catch (persistenceError) {
-        if (apiKey) {
+        if (!this.plaintextApiKeys && apiKey) {
           try {
             await this.restoreSecret(secretKey(id), previousApiKey)
           } catch (rollbackError) {
@@ -102,7 +122,11 @@ export class ModelProfileService {
         }
         throw persistenceError
       }
-      return this.toRendererProfile(profile, next, apiKey)
+      // A stale encrypted copy is no longer needed once the plain profile has
+      // been persisted. Best-effort cleanup keeps old secrets from lingering,
+      // but never turns a successful profile save into a failure.
+      if (this.plaintextApiKeys && apiKey) await this.secrets.remove(secretKey(id)).catch(() => undefined)
+      return this.toRendererProfile(profile, next, persistedApiKey)
     })
   }
 
@@ -150,6 +174,12 @@ export class ModelProfileService {
         ? { ...document, profiles: nextProfiles, activeLlmId: replacementId, ...(explicitNoRoute ? { autoActivateLlm: false } : {}) }
         : { ...document, profiles: nextProfiles, activeVlmId: replacementId, ...(explicitNoRoute ? { autoActivateVlm: false } : {}) }
       await this.repository.save(next)
+      if (this.plaintextApiKeys) {
+        // The credential is part of the removed profile in user-config mode.
+        // Clean up any pre-migration encrypted copy opportunistically.
+        await this.secrets.remove(secretKey(profile.id)).catch(() => undefined)
+        return
+      }
       try {
         await this.secrets.remove(secretKey(profile.id))
       } catch (removeError) {
@@ -205,8 +235,9 @@ export class ModelProfileService {
   async prepareForConnectionTest(input: ModelProfileInput): Promise<RoutedModelSettings> {
     const parsed = modelProfileInputSchema.parse(input)
     const apiKey = parsed.apiKey === undefined ? undefined : validateModelApiKey(parsed.apiKey)
-    return this.read(async () => {
+    return this.read(async document => {
       const id = parsed.id ?? this.createId()
+      const existing = parsed.id ? document.profiles.find(candidate => candidate.id === parsed.id) : undefined
       const profile: PersistedModelProfile = {
         id,
         name: parsed.name,
@@ -216,6 +247,7 @@ export class ModelProfileService {
         endpoint: parsed.endpoint,
         ...(parsed.contextLimit === undefined ? {} : { contextLimit: parsed.contextLimit }),
         ...(parsed.maxImages === undefined ? {} : { maxImages: parsed.maxImages }),
+        ...(this.plaintextApiKeys && existing?.apiKey ? { apiKey: existing.apiKey } : {}),
       }
       const resolvedApiKey = apiKey ?? await this.resolveApiKey(profile)
       if (profile.provider !== 'ollama' && !resolvedApiKey) throw new Error('An API key is required for this model provider')
@@ -241,25 +273,40 @@ export class ModelProfileService {
 
   private async ensureLegacyMigration(): Promise<void> {
     await this.ensureApiKeyReferenceMigration()
-    if (this.migrationChecked || !this.legacySettings) return
+    if (this.migrationChecked || (!this.legacySettings && !this.legacyProfiles)) return
     await this.mutate(async () => {
       const document = await this.repository.load()
-      if (document.migrations.legacyModelSettings === 1) {
+      const settingsMigrationDone = !this.legacySettings || document.migrations.legacyModelSettings === 1
+      const profilesMigrationDone = !this.legacyProfiles || document.migrations.legacyModelProfiles === 1
+      if (settingsMigrationDone && profilesMigrationDone) {
         await this.completeLegacyKeyMigration(document)
         this.migrationChecked = true
         return
       }
 
-      const legacy = await this.legacySettings!.load()
-      const next: ModelProfileDocument = {
-        ...document,
-        migrations: { ...document.migrations, legacyModelSettings: 1 },
+      let next: ModelProfileDocument = document
+      let importedProfileIds: string[] = []
+      if (!profilesMigrationDone) {
+        const legacyProfiles = await this.legacyProfiles!.load()
+        const imported = await this.importLegacyProfiles(next, legacyProfiles)
+        next = {
+          ...imported.document,
+          migrations: { ...imported.document.migrations, legacyModelProfiles: 1 },
+        }
+        importedProfileIds = imported.profileIds
       }
-      if (legacy) {
-        const hasLlm = document.profiles.some(profile => profile.kind === 'llm')
+
+      if (!settingsMigrationDone) {
+        const legacy = await this.legacySettings!.load()
+        next = {
+          ...next,
+          migrations: { ...next.migrations, legacyModelSettings: 1 },
+        }
+        if (legacy) {
+        const hasLlm = next.profiles.some(profile => profile.kind === 'llm')
         const id = hasLlm
-          ? document.activeLlmId ?? document.profiles.find(profile => profile.kind === 'llm')?.id
-          : this.createMigrationProfileId(document)
+          ? next.activeLlmId ?? next.profiles.find(profile => profile.kind === 'llm')?.id
+          : this.createMigrationProfileId(next)
         if (id) next.migrations = { ...next.migrations, legacyModelProfileId: id }
         if (!hasLlm && id) {
           const profile: PersistedModelProfile = {
@@ -286,10 +333,73 @@ export class ModelProfileService {
           if (next.activeLlmId === null && (validatedOldKey || profile.provider === 'ollama')) next.activeLlmId = id
         }
       }
+      }
       await this.repository.save(next)
+      await this.removeImportedProfileSecrets(importedProfileIds)
       await this.completeLegacyKeyMigration(next)
       this.migrationChecked = true
     })
+  }
+
+  private async importLegacyProfiles(
+    document: ModelProfileDocument,
+    legacy: ModelProfileDocument | null,
+  ): Promise<{ document: ModelProfileDocument; profileIds: string[] }> {
+    if (!legacy?.profiles.length) return { document, profileIds: [] }
+    const existingIds = new Set(document.profiles.map(profile => profile.id))
+    const imported: PersistedModelProfile[] = []
+    for (const legacyProfile of legacy.profiles) {
+      if (existingIds.has(legacyProfile.id)) continue
+      existingIds.add(legacyProfile.id)
+      // `apiKey` belongs only to the new plaintext user-config mode.  A
+      // profile supplied by a legacy repository can contain that field only
+      // after an interrupted/development migration; never carry it into a
+      // protected-storage document through a spread operation.
+      const profileWithoutApiKey = { ...legacyProfile }
+      delete profileWithoutApiKey.apiKey
+      // A legacy repository may have carried an embedded key (from an
+      // interrupted development migration) or may have kept it in the
+      // profile-owned SecretStore.  Read either source, but choose the
+      // destination representation below based on this service's storage
+      // mode.  In particular, non-plaintext mode must never spread the key
+      // into the persisted profile document.
+      const legacyKey = await this.resolveApiKey(legacyProfile)
+      let validatedKey: string | undefined
+      if (legacyKey) {
+        try { validatedKey = validateModelApiKey(legacyKey) } catch { /* ignore invalid legacy material */ }
+      }
+      if (!this.plaintextApiKeys && validatedKey) {
+        // Preserve the old protected-storage contract for callers that do not
+        // opt into the v3.2 plaintext user-config mode.  Do not overwrite a
+        // destination credential that may already have been created by a
+        // previous interrupted migration attempt.
+        const existingKey = await this.secrets.load(secretKey(legacyProfile.id))
+        if (!existingKey) await this.secrets.save(secretKey(legacyProfile.id), validatedKey)
+      }
+      imported.push(this.plaintextApiKeys && validatedKey
+        ? { ...profileWithoutApiKey, apiKey: validatedKey }
+        : profileWithoutApiKey)
+    }
+    if (!imported.length) return { document, profileIds: [] }
+
+    const importedIds = new Set(imported.map(profile => profile.id))
+    const next: ModelProfileDocument = {
+      ...document,
+      profiles: [...document.profiles, ...imported],
+      ...(document.activeLlmId === null && legacy.activeLlmId && importedIds.has(legacy.activeLlmId) ? { activeLlmId: legacy.activeLlmId } : {}),
+      ...(document.activeVlmId === null && legacy.activeVlmId && importedIds.has(legacy.activeVlmId) ? { activeVlmId: legacy.activeVlmId } : {}),
+      ...(document.profiles.length === 0 ? {
+        routing: legacy.routing,
+        autoActivateLlm: legacy.autoActivateLlm,
+        autoActivateVlm: legacy.autoActivateVlm,
+      } : {}),
+    }
+    return { document: next, profileIds: imported.map(profile => profile.id) }
+  }
+
+  private async removeImportedProfileSecrets(profileIds: readonly string[]): Promise<void> {
+    if (!this.plaintextApiKeys) return
+    await Promise.all(profileIds.map(id => this.secrets.remove(secretKey(id)).catch(() => undefined)))
   }
 
   private async ensureApiKeyReferenceMigration(): Promise<void> {
@@ -327,10 +437,10 @@ export class ModelProfileService {
       }
       validTargets.set(target.id, target)
 
-      const targetKey = await this.secrets.load(secretKey(target.id))
+      const targetKey = await this.resolveApiKey(target)
       let targetHasKey = Boolean(targetKey)
       if (!targetKey) {
-        const sourceKey = await this.secrets.load(secretKey(source.id))
+        const sourceKey = await this.resolveApiKey(source)
         if (sourceKey) {
           let validatedSourceKey: string | null = null
           try {
@@ -339,7 +449,14 @@ export class ModelProfileService {
             // Invalid source material is left in place, but cannot be copied.
           }
           if (validatedSourceKey) {
-            await this.secrets.save(secretKey(target.id), validatedSourceKey)
+            if (this.plaintextApiKeys) {
+              next = {
+                ...next,
+                profiles: next.profiles.map(profile => profile.id === target.id ? { ...profile, apiKey: validatedSourceKey! } : profile),
+              }
+            } else {
+              await this.secrets.save(secretKey(target.id), validatedSourceKey)
+            }
             targetHasKey = true
           }
         }
@@ -384,8 +501,17 @@ export class ModelProfileService {
     const target = targetId ? document.profiles.find(profile => profile.id === targetId && profile.kind === 'llm') : undefined
     if (!target) return
 
-    const targetKey = await this.secrets.load(secretKey(target.id))
-    if (!targetKey) await this.secrets.save(secretKey(target.id), validatedOldKey)
+    const targetKey = await this.resolveApiKey(target)
+    if (!targetKey) {
+      if (this.plaintextApiKeys) {
+        await this.repository.save({
+          ...document,
+          profiles: document.profiles.map(profile => profile.id === target.id ? { ...profile, apiKey: validatedOldKey } : profile),
+        })
+      } else {
+        await this.secrets.save(secretKey(target.id), validatedOldKey)
+      }
+    }
     await this.secrets.remove('model.apiKey')
   }
 
@@ -399,13 +525,28 @@ export class ModelProfileService {
       const isActive = profile.kind === 'llm'
         ? document.activeLlmId === profile.id
         : document.activeVlmId === profile.id
-      const next = isActive && profile.provider !== 'ollama'
+      const nextWithRoute = isActive && profile.provider !== 'ollama'
         ? profile.kind === 'llm'
           ? { ...document, activeLlmId: null, autoActivateLlm: false }
           : { ...document, activeVlmId: null, autoActivateVlm: false }
         : document
+      const next = this.plaintextApiKeys
+        ? {
+            ...nextWithRoute,
+            profiles: nextWithRoute.profiles.map(candidate => {
+              if (candidate.id !== profile.id) return candidate
+              const withoutApiKey = { ...candidate }
+              delete withoutApiKey.apiKey
+              return withoutApiKey
+            }),
+          }
+        : nextWithRoute
 
       if (next !== document) await this.repository.save(next)
+      if (this.plaintextApiKeys) {
+        await this.secrets.remove(secretKey(profile.id)).catch(() => undefined)
+        return this.toRendererProfile(profile, next, null)
+      }
       try {
         await this.secrets.remove(secretKey(profile.id))
       } catch (removeError) {
@@ -455,6 +596,7 @@ export class ModelProfileService {
   }
 
   private async resolveApiKey(profile: PersistedModelProfile): Promise<string | null> {
+    if (profile.apiKey) return profile.apiKey
     return this.secrets.load(secretKey(profile.id))
   }
 

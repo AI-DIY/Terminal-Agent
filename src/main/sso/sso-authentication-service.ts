@@ -342,7 +342,10 @@ function createDefaultAuthenticationWindow(): AuthenticationWindow {
   return new BrowserWindow({
     width: 900,
     height: 700,
-    show: true,
+    // The platform login page is a capture surface, not a second user-facing
+    // window. Keep it hidden while the renderer shows the local
+    // "登录进行中" state; this avoids exposing remote pages during SSO.
+    show: false,
     webPreferences: {
       partition,
       contextIsolation: true,

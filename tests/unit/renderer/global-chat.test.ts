@@ -158,7 +158,7 @@ describe('global chat store', () => {
     expect(panel).toContain(':aria-expanded="contextDetailsExpanded"')
     expect(panel).toContain('aria-controls="chat-context-details"')
     expect(panel).toContain('v-if="contextDetailsExpanded" id="chat-context-details"')
-    expect(panel).toContain('立即压缩')
+    expect(panel).not.toContain('立即压缩')
     expect(panel).toContain('function compactContext(): Promise<void>')
     expect(panel).toContain('store.state.compacting[chatId.value]')
   })

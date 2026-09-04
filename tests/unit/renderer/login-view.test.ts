@@ -8,6 +8,12 @@ describe('login view', () => {
 
     expect(source).toContain('sso.retry()')
     expect(source).toContain('openSettings')
+    expect(source).toContain('sso.state.state === \'authenticating\'')
+    expect(source).toContain('登录进行中')
+    expect(source).toContain('正在安全获取用户信息')
+    expect(source).toContain('class="login-spinner"')
+    expect(source).toContain('class="login-progress-dots"')
+    expect(source).toContain('aria-busy="true"')
     expect(source).not.toMatch(/<iframe|<webview|fetch\s*\(|document\.createElement\(['"]iframe['"]\)/)
   })
 
@@ -15,7 +21,7 @@ describe('login view', () => {
     expect(shouldRetryOnMount('login-required')).toBe(true)
     expect(shouldRetryOnMount('authenticating')).toBe(false)
     expect(loginStatusCopy('login-required')).toBe('正在打开登录页')
-    expect(loginStatusCopy('authenticating')).toBe('等待平台加载用户信息')
+    expect(loginStatusCopy('authenticating')).toBe('正在安全获取用户信息')
     expect(loginErrorCopy('SSO sign-in window closed')).toBe('登录窗口已关闭')
   })
 })

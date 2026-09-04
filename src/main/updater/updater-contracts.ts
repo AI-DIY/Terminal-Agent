@@ -38,7 +38,7 @@ const semverSchema = z.string()
 const sha256Schema = z.string().regex(/^[a-f\d]{64}$/i, 'Invalid SHA-256 digest')
 const sha512Schema = z.string().regex(/^[a-f\d]{128}$/i, 'Invalid SHA-512 digest')
 
-/** A release selected from the fixed Terminal-Agent GitHub repository. */
+/** A release selected from the configured GitHub or Nuts update service. */
 export const updateReleaseSchema = z.object({
   version: semverSchema,
   tagName: z.string().trim().min(1).max(128),
@@ -47,7 +47,9 @@ export const updateReleaseSchema = z.object({
   htmlUrl: z.string().url().max(2_048),
   installerName: z.string().regex(/^Terminal-Agent-Setup-[0-9A-Za-z][0-9A-Za-z._-]*\.exe$/i, 'Invalid installer name').max(256),
   installerUrl: z.string().url().max(4_096),
-  size: z.number().int().positive().max(updaterLimits.maxInstallerBytes),
+  // Nuts metadata may omit a size; zero denotes an unknown size and is
+  // replaced with the response Content-Length/actual bytes after download.
+  size: z.number().int().nonnegative().max(updaterLimits.maxInstallerBytes),
   sha256: sha256Schema.nullable(),
   sha512: sha512Schema.nullable(),
   notes: z.string().max(updaterLimits.maxReleaseNotesBytes),
