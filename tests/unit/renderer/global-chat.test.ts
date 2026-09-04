@@ -427,6 +427,12 @@ describe('global chat store', () => {
     expect(transport.compact).toHaveBeenCalledWith(expect.objectContaining({ sshContextSessionIds: ['primary', 'alternate'], skillIds: ['security-review'] }))
   })
 
+  it('never sends local skill preferences while the gate is disabled', async () => {
+    const source = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+    expect(source).toContain('skillsAvailable')
+    expect(source).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
+  })
+
   it('keeps SSH context opt-in until the user explicitly checks a host', () => {
     const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
 

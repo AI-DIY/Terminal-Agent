@@ -25,10 +25,12 @@ const props = withDefaults(defineProps<{
   contextSessions?: ContextSession[]
   conversationSessions?: ConversationSession[]
   sessionBusy?: boolean
+  skillsAvailable?: boolean
 }>(), {
   contextSessions: () => [],
   conversationSessions: () => [],
   sessionBusy: false,
+  skillsAvailable: false,
 })
 const emit = defineEmits<{
   collapse: []
@@ -274,7 +276,7 @@ function send(): void {
     if (content) {
       // A new user message always starts a fresh view at the end of the transcript.
       followMessages.value = true
-      void store.send(chatId.value, content, selectedContextSessionIds.value, enabledSkillIds.value)
+      void store.send(chatId.value, content, selectedContextSessionIds.value, props.skillsAvailable ? enabledSkillIds.value : [])
       scrollMessagesToBottom()
     }
   }
@@ -321,7 +323,7 @@ async function compactContext(): Promise<void> {
   if (!chatId.value || compacting.value || props.sessionBusy) return
   compactError.value = ''
   try {
-    await store.compact(chatId.value, selectedContextSessionIds.value, enabledSkillIds.value)
+    await store.compact(chatId.value, selectedContextSessionIds.value, props.skillsAvailable ? enabledSkillIds.value : [])
   } catch (error) {
     compactError.value = error instanceof Error ? error.message : '上下文压缩失败，请稍后再试。'
   }

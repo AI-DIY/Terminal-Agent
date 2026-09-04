@@ -3,9 +3,11 @@ import { ArrowLeft, Bot, Braces, Check, ShieldCheck, Sparkles, Terminal } from '
 import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
 import { BUILT_IN_SKILLS, type BuiltInSkillId } from '../../../shared/built-in-skills'
 import { DISPLAY_NAME_MAX_LENGTH, getUserPreferencesStore } from '../stores/user-preferences'
+import { getSsoStore } from '../stores/sso'
 
 const emit = defineEmits<{ close: [] }>()
 const preferences = getUserPreferencesStore()
+const sso = getSsoStore()
 
 type SkillDefinition = (typeof BUILT_IN_SKILLS)[number] & { icon: Component }
 
@@ -26,7 +28,7 @@ watch(() => preferences.state.displayName, value => {
   if (value !== draftDisplayName.value) draftDisplayName.value = value
 })
 
-const enabledCount = computed(() => SKILLS.filter(skill => preferences.state.skills[skill.id]).length)
+const enabledCount = computed(() => sso.skillsAvailable.value ? SKILLS.filter(skill => preferences.state.skills[skill.id]).length : 0)
 
 function saveDisplayName(): void {
   preferences.setDisplayName(draftDisplayName.value)
@@ -37,6 +39,7 @@ function saveDisplayName(): void {
 }
 
 function toggleSkill(skill: SkillDefinition): void {
+  if (!sso.skillsAvailable.value) return
   preferences.setSkillEnabled(skill.id, !preferences.state.skills[skill.id])
 }
 
@@ -80,6 +83,7 @@ onBeforeUnmount(() => {
       </section>
 
       <section class="catalog-panel" aria-labelledby="catalog-title">
+        <p v-if="!sso.skillsAvailable" class="skills-restriction" role="alert">未登录状态不能使用技能</p>
         <div class="section-heading">
           <div>
             <h2 id="catalog-title">内置技能</h2>
@@ -88,18 +92,18 @@ onBeforeUnmount(() => {
           <span class="catalog-badge">无需联网</span>
         </div>
         <div class="skill-grid">
-          <article v-for="skill in SKILLS" :key="skill.id" class="skill-card" :class="{ enabled: preferences.state.skills[skill.id] }">
+          <article v-for="skill in SKILLS" :key="skill.id" class="skill-card" :class="{ enabled: sso.skillsAvailable && preferences.state.skills[skill.id] }">
             <div class="skill-card-head">
               <span class="skill-icon"><component :is="skill.icon" :size="17" aria-hidden="true" /></span>
               <div class="skill-card-title"><h3>{{ skill.name }}</h3><span>{{ skill.source }}</span></div>
               <label class="skill-toggle">
-                <input type="checkbox" :checked="preferences.state.skills[skill.id]" :aria-label="`${preferences.state.skills[skill.id] ? '停用' : '启用'} ${skill.name}`" @change="toggleSkill(skill)">
+                <input type="checkbox" :checked="preferences.state.skills[skill.id]" :disabled="!sso.skillsAvailable" :aria-label="`${preferences.state.skills[skill.id] ? '停用' : '启用'} ${skill.name}`" @change="toggleSkill(skill)">
                 <span aria-hidden="true" class="toggle-track"><span class="toggle-thumb" /></span>
               </label>
             </div>
             <p>{{ skill.description }}</p>
             <small><Check :size="12" aria-hidden="true" />{{ skill.detail }}</small>
-            <span class="skill-status">{{ preferences.state.skills[skill.id] ? '已启用' : '已停用' }}</span>
+            <span class="skill-status">{{ sso.skillsAvailable && preferences.state.skills[skill.id] ? '已启用' : '已停用' }}</span>
           </article>
         </div>
       </section>

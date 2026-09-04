@@ -24,6 +24,7 @@ import { createShellHistoryStore } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
 import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 import { getUserPreferencesStore } from '../stores/user-preferences'
+import { getSsoStore } from '../stores/sso'
 
 const emit = defineEmits<{ showSettings: []; showSkills: [] }>()
 const store = createSessionsStore()
@@ -49,9 +50,19 @@ const chatStore = createChatWorkspacesStore(window.terminalAgent.chats)
 const shellHistory = createShellHistoryStore(window.terminalAgent.shellHistory)
 const layoutPreferences = getLayoutPreferencesStore()
 const userPreferences = getUserPreferencesStore()
+const sso = getSsoStore()
+const welcomeName = computed(() => {
+  const identity = sso.identity.value
+  return identity ? identity.name + '（' + identity.employeeId + '）' : userPreferences.state.displayName || '朋友'
+})
+const skillsAvailable = computed(() => sso.skillsAvailable.value)
 const workbenchReady = ref(false)
 const conversationSessionBusy = ref(false)
 const conversationSessions = ref<ChatConversationSessionSummary[]>([])
+
+function openSkills(): void {
+  if (skillsAvailable.value) emit('showSkills')
+}
 // Internal AI conversations retain the task id (and therefore SSH ownership).
 // Use the mutation result to update the task-keyed panel directly rather than
 // waiting for an independently delivered task-change event.
@@ -1062,12 +1073,12 @@ onBeforeUnmount(() => {
     :current-version="appVersion"
     :current-chat-title="chatStore.state.selected?.title ?? '未选择任务'"
     :current-chat-shell-count="isLiveChat ? currentChatUniqueHostCount : 0"
-    :welcome-name="userPreferences.state.displayName"
+    :welcome-name="welcomeName"
   >
     <template #app-actions>
       <p v-if="connectionError" class="connection-error" role="alert">{{ connectionError }}</p>
       <p v-if="diagnosticError" class="diagnostic-error" role="alert">{{ diagnosticError }}</p>
-      <button type="button" class="header-button" aria-label="技能" title="技能" @click="emit('showSkills')"><Sparkles :size="14" aria-hidden="true" /><span>技能</span></button>
+      <button type="button" class="header-button" :aria-label="skillsAvailable ? '技能' : '技能（未登录状态不能使用技能）'" :title="skillsAvailable ? '技能' : '未登录状态不能使用技能'" :disabled="!skillsAvailable" @click="openSkills"><Sparkles :size="14" aria-hidden="true" /><span>技能</span></button>
       <button type="button" class="header-button" aria-label="设置" title="设置" @click="emit('showSettings')"><Settings :size="14" aria-hidden="true" /><span>设置</span></button>
       <button type="button" class="header-button" aria-label="DevTools" title="DevTools" @click="openRendererDevTools"><Code2 :size="14" aria-hidden="true" /><span>DevTools</span></button>
       <button type="button" class="header-button" aria-label="Node Inspector" title="Node Inspector" @click="openNodeInspector"><Bug :size="14" aria-hidden="true" /><span>Node Inspector</span></button>
@@ -1139,6 +1150,7 @@ onBeforeUnmount(() => {
         :context-sessions="currentChatSessions"
         :conversation-sessions="conversationSessions"
         :session-busy="conversationSessionBusy"
+        :skills-available="skillsAvailable"
         @collapse="collapse"
         @new-session="createConversationSession"
         @switch-session="switchConversationSession"

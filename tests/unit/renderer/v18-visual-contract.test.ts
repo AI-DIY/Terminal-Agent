@@ -124,6 +124,17 @@ describe('V18 production visual contract', () => {
     expect(shell).toContain('.app-header-actions :deep(.header-button span) { display: none; }')
   })
 
+  it('keeps built-in skills visibly unavailable without changing the workbench frame', () => {
+    const workbench = rendererSource('views/WorkbenchView.vue')
+    const skills = rendererSource('views/SkillsView.vue')
+    const chat = rendererSource('components/chat/GlobalChatPanel.vue')
+
+    expect(workbench).toContain('未登录状态不能使用技能')
+    expect(skills).toContain('未登录状态不能使用技能')
+    expect(skills).toContain(':disabled="!sso.skillsAvailable"')
+    expect(chat).toContain('props.skillsAvailable ? enabledSkillIds.value : []')
+  })
+
   it('renders model routing as the approved V18 option cards', () => {
     const routing = rendererSource('components/settings/ModelRoutingSettings.vue')
 
