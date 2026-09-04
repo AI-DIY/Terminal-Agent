@@ -27,6 +27,7 @@ const state = vi.hoisted(() => {
   const regexLoad = vi.fn()
   const setApplicationMenu = vi.fn()
   const ensureSsoInitialized = vi.fn()
+  const isAtomicJsonStoreInvalidDataError = vi.fn()
   const initializeSsoAuth = vi.fn()
   const attachSsoRenderer = vi.fn()
   const registerSsoHandlers = vi.fn(() => vi.fn())
@@ -44,6 +45,7 @@ const state = vi.hoisted(() => {
     regexLoad.mockReset().mockResolvedValue(undefined)
     setApplicationMenu.mockReset()
     ensureSsoInitialized.mockReset().mockResolvedValue(undefined)
+    isAtomicJsonStoreInvalidDataError.mockReset().mockReturnValue(false)
     initializeSsoAuth.mockReset().mockResolvedValue({ state: 'configuration-required' })
     attachSsoRenderer.mockReset()
     registerSsoHandlers.mockReset().mockImplementation(() => vi.fn())
@@ -64,6 +66,7 @@ const state = vi.hoisted(() => {
     setApplicationMenu,
     appOn,
     ensureSsoInitialized,
+    isAtomicJsonStoreInvalidDataError,
     initializeSsoAuth,
     attachSsoRenderer,
     registerSsoHandlers,
@@ -154,6 +157,10 @@ vi.mock('../../../src/main/settings/sso-config-service', () => ({
     ensureInitialized() { return state.ensureSsoInitialized() }
   },
 }))
+vi.mock('../../../src/main/persistence/atomic-json-store', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../../src/main/persistence/atomic-json-store')>()),
+  isAtomicJsonStoreInvalidDataError: state.isAtomicJsonStoreInvalidDataError,
+}))
 vi.mock('../../../src/main/sso/sso-authentication-service', () => ({
   SsoAuthenticationService: class SsoAuthenticationService {
     initialize() { return state.initializeSsoAuth() }
@@ -241,7 +248,9 @@ describe('main chat startup ordering', () => {
   })
 
   it('still creates the local main window when SSO configuration is corrupt', async () => {
-    state.ensureSsoInitialized.mockRejectedValueOnce(new Error('AtomicJsonStore could not read valid JSON data'))
+    const corruptConfiguration = new Error('AtomicJsonStore could not read valid JSON data')
+    state.ensureSsoInitialized.mockRejectedValueOnce(corruptConfiguration)
+    state.isAtomicJsonStoreInvalidDataError.mockReturnValueOnce(true)
     await importMain()
 
     await vi.waitFor(() => expect(state.loadWorkbenchPreferences).toHaveBeenCalledOnce())
@@ -249,6 +258,7 @@ describe('main chat startup ordering', () => {
     await vi.waitFor(() => expect(state.recoverInterruptedStreams).toHaveBeenCalledOnce())
     state.recovery.resolve()
     await vi.waitFor(() => expect(state.windows).toHaveLength(1))
+    expect(state.isAtomicJsonStoreInvalidDataError).toHaveBeenCalledWith(corruptConfiguration)
     expect(state.initializeSsoAuth).toHaveBeenCalledOnce()
   })
 

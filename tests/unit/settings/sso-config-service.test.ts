@@ -94,6 +94,24 @@ describe('SsoConfigService', () => {
     expect(files.filter(file => file.endsWith('.corrupt'))).toHaveLength(1)
   })
 
+  it('does not enter recovery for a same-message initialization read failure', async () => {
+    const root = await createRoot()
+    const path = join(root, '.ta', 'user-config')
+    const failure = new Error('AtomicJsonStore could not read valid JSON data')
+    const fileSystem: AtomicJsonStoreFileSystem = {
+      mkdir,
+      readFile: async () => { throw failure },
+      openExclusive: async () => { throw new Error('openExclusive must not be called') },
+      link: async () => { throw new Error('link must not be called') },
+      rename: async () => { throw new Error('rename must not be called') },
+      rm: async () => { throw new Error('rm must not be called') },
+    }
+    const service = new SsoConfigService(path, { fileSystem })
+
+    await expect(service.ensureInitialized()).rejects.toBe(failure)
+    await expect(service.get()).rejects.toBe(failure)
+  })
+
   it('requires an explicit save to replace corrupt content after preserving its diagnostic backup', async () => {
     const root = await createRoot()
     const path = join(root, '.ta', 'user-config')

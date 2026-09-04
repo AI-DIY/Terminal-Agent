@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import {
   AtomicJsonStore,
+  isAtomicJsonStoreInvalidDataError,
   type AtomicJsonStoreFileSystem,
   type AtomicJsonStoreOptions,
 } from '../../../src/main/persistence/atomic-json-store'
@@ -179,6 +180,15 @@ describe('AtomicJsonStore', () => {
     await writeFile(invalidPersistedPath, JSON.stringify({ count: 1, labels: [], extra: true }))
 
     await expect(createStore(invalidPersistedPath).load()).rejects.toThrow('AtomicJsonStore could not read valid JSON data')
+  })
+
+  it('classifies only errors produced by invalid persisted data', async () => {
+    const path = await createStorePath('invalid-data.json')
+    await writeFile(path, '{ not valid JSON', 'utf8')
+    const error = await createStore(path, undefined, { backupCorrupt: false }).load().catch((reason: unknown) => reason)
+
+    expect(isAtomicJsonStoreInvalidDataError(error)).toBe(true)
+    expect(isAtomicJsonStoreInvalidDataError(new Error('AtomicJsonStore could not read valid JSON data'))).toBe(false)
   })
 
   it('serializes concurrent updates without losing changes', async () => {

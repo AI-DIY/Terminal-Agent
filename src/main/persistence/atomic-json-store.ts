@@ -9,6 +9,7 @@ const invalidIdMessage = 'AtomicJsonStore createId must return a UUID'
 const nonUniqueIdMessage = 'AtomicJsonStore createId must return a unique UUID'
 const uuidSchema = z.string().uuid()
 const utf8Decoder = new TextDecoder('utf-8', { fatal: true })
+const invalidDataErrors = new WeakSet<Error>()
 
 export type AtomicJsonStoreFileSystem = {
   mkdir(path: string, options: { recursive: true }): Promise<unknown>
@@ -197,7 +198,7 @@ export class AtomicJsonStore<T> {
       decoded = JSON.parse(utf8Decoder.decode(source))
     } catch (error) {
       if (this.backupCorrupt) await this.backUpCorruptFileOnce(source)
-      throw new Error(invalidDataMessage, { cause: error })
+      throw createInvalidDataError(error)
     }
 
     try {
@@ -211,7 +212,7 @@ export class AtomicJsonStore<T> {
       }
 
       if (this.backupCorrupt) await this.backUpCorruptFileOnce(source)
-      throw new Error(invalidDataMessage, { cause: error })
+      throw createInvalidDataError(error)
     }
   }
 
@@ -350,7 +351,13 @@ export class AtomicJsonStore<T> {
 }
 
 export function isAtomicJsonStoreInvalidDataError(error: unknown): boolean {
-  return error instanceof Error && error.message === invalidDataMessage
+  return error instanceof Error && invalidDataErrors.has(error)
+}
+
+function createInvalidDataError(cause: unknown): Error {
+  const error = new Error(invalidDataMessage, { cause })
+  invalidDataErrors.add(error)
+  return error
 }
 
 function coordinateCorruptBackup(
