@@ -240,6 +240,18 @@ describe('main chat startup ordering', () => {
     expect(state.windows[0]?.options.titleBarOverlay).toEqual({ color: '#25292e', symbolColor: '#f0f3f6', height: 48 })
   })
 
+  it('still creates the local main window when SSO configuration is corrupt', async () => {
+    state.ensureSsoInitialized.mockRejectedValueOnce(new Error('AtomicJsonStore could not read valid JSON data'))
+    await importMain()
+
+    await vi.waitFor(() => expect(state.loadWorkbenchPreferences).toHaveBeenCalledOnce())
+    state.initialPreferences.resolve({ theme: 'pearl' })
+    await vi.waitFor(() => expect(state.recoverInterruptedStreams).toHaveBeenCalledOnce())
+    state.recovery.resolve()
+    await vi.waitFor(() => expect(state.windows).toHaveLength(1))
+    expect(state.initializeSsoAuth).toHaveBeenCalledOnce()
+  })
+
   it('restores the main renderer even while a transient authentication window is still closing', async () => {
     await importMain()
     await startFirstWindow('pearl')

@@ -232,6 +232,21 @@ describe('SsoAuthenticationService', () => {
     await vi.waitFor(() => expect(service.getState()).toMatchObject({ state: 'authenticated', identity: { name: '张三', employeeId: 'E-1' } }))
   })
 
+  it('does not treat a matching will-navigate attempt as committed authentication evidence', async () => {
+    const { service, capture, window } = createService()
+    await service.initialize()
+    await service.retry()
+    const willNavigate = window.webContents.on.mock.calls.find(([event]) => event === 'will-navigate')?.[1] as ((details: unknown, legacyUrl?: string, isInPlace?: boolean, legacyIsMainFrame?: boolean) => void)
+    willNavigate?.({ url: 'https://platform.example/home', isMainFrame: true })
+    capture.resolveResponse({ name: 'Attempt', employeeId: 'E-ATTEMPT' })
+    await Promise.resolve()
+    expect(service.getState().state).toBe('authenticating')
+
+    const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate')?.[1] as ((event: unknown, url: string) => void)
+    navigation({}, 'https://platform.example/home')
+    await vi.waitFor(() => expect(service.getState()).toEqual({ state: 'authenticated', identity: { name: 'Attempt', employeeId: 'E-ATTEMPT' } }))
+  })
+
   it('uses the capture completion signal when response and navigation are driven directly in either order', async () => {
     const { service, capture } = createService()
     await service.initialize()

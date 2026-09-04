@@ -112,9 +112,29 @@ export class AtomicJsonStore<T> {
     return operation
   }
 
+  /** Explicitly replace the document, used only by an authorized recovery flow. */
+  replace(value: T): Promise<T> {
+    const operation = this.queue.then(async () => {
+      const next = this.schema.parse(value)
+      await this.writeAtomically(next)
+      this.corruptBackup = undefined
+      return structuredClone(next)
+    })
+
+    this.queue = operation.then(() => undefined, () => undefined)
+    return operation
+  }
+
   /** Create the target exactly once; a competing creator's document wins unchanged. */
   createIfMissing(): Promise<T> {
     const operation = this.queue.then(async () => {
+      try {
+        const current = await this.readCurrent(true)
+        return structuredClone(current.value)
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== 'ENOENT') throw error
+      }
+
       const empty = this.schema.parse(this.empty())
       await this.fileSystem.mkdir(dirname(this.path), { recursive: true })
       const serialized = JSON.stringify(empty)
@@ -157,13 +177,14 @@ export class AtomicJsonStore<T> {
     return operation
   }
 
-  private async readCurrent(): Promise<{ value: T; migrated: boolean }> {
+  private async readCurrent(requireExisting = false): Promise<{ value: T; migrated: boolean }> {
     let source: Buffer
 
     try {
       source = Buffer.from(await this.fileSystem.readFile(this.path))
     } catch (error) {
       if (isNodeError(error) && error.code === 'ENOENT') {
+        if (requireExisting) throw error
         this.corruptBackup = undefined
         return { value: this.schema.parse(this.empty()), migrated: false }
       }
@@ -326,6 +347,10 @@ export class AtomicJsonStore<T> {
     }
     return id
   }
+}
+
+export function isAtomicJsonStoreInvalidDataError(error: unknown): boolean {
+  return error instanceof Error && error.message === invalidDataMessage
 }
 
 function coordinateCorruptBackup(

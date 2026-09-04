@@ -165,14 +165,10 @@ export class SsoAuthenticationService {
     const onDidNavigateInPage = (_event: unknown, url: unknown, isMainFrame: unknown): void => {
       if (isMainFrame === true) notifyNavigation(url)
     }
-    const onWillNavigate = (details: unknown, legacyUrl: unknown, _isInPlace: unknown, legacyIsMainFrame: unknown): void => {
-      const current = navigationDetails(details)
-      if (current) {
-        if (current.isMainFrame) notifyNavigation(current.url)
-        return
-      }
-      if (legacyIsMainFrame === true) notifyNavigation(legacyUrl)
-    }
+    // `will-navigate` fires before a navigation commits and is therefore not
+    // authentication evidence. Keep the listener for lifecycle compatibility,
+    // but deliberately ignore both modern details and legacy positional args.
+    const onWillNavigate = (): void => {}
     const onDidFrameNavigate = (_event: unknown, url: unknown, _status: unknown, _statusText: unknown, isMainFrame: unknown): void => {
       if (isMainFrame === true) notifyNavigation(url)
     }
@@ -411,11 +407,4 @@ function configurationSnapshot(configService: Pick<ConfigPort, 'isComplete'>, co
   if (!configuration.enabled) return { state: 'login-disabled' }
   if (!configService.isComplete(configuration)) return { state: 'configuration-required' }
   return { state: 'login-required' }
-}
-
-function navigationDetails(value: unknown): { url: string; isMainFrame: boolean } | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const details = value as { url?: unknown; isMainFrame?: unknown }
-  if (typeof details.url !== 'string' || typeof details.isMainFrame !== 'boolean') return undefined
-  return { url: details.url, isMainFrame: details.isMainFrame }
 }

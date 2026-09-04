@@ -94,6 +94,28 @@ describe('SsoConfigService', () => {
     expect(files.filter(file => file.endsWith('.corrupt'))).toHaveLength(1)
   })
 
+  it('requires an explicit save to replace corrupt content after preserving its diagnostic backup', async () => {
+    const root = await createRoot()
+    const path = join(root, '.ta', 'user-config')
+    await mkdir(dirname(path), { recursive: true })
+    const corrupt = '{ corrupt configuration bytes'
+    await writeFile(path, corrupt, 'utf8')
+    const service = new SsoConfigService(path)
+
+    await expect(service.ensureInitialized()).rejects.toThrow('AtomicJsonStore could not read valid JSON data')
+    await expect(service.get()).resolves.toEqual(createDefaultSsoConfiguration())
+    const saved = await service.save({
+      ...createDefaultSsoConfiguration(),
+      enabled: false,
+    })
+
+    expect(saved.enabled).toBe(false)
+    await expect(readFile(path, 'utf8')).resolves.toContain('"enabled":false')
+    const backup = (await readdir(dirname(path))).find(file => file.endsWith('.corrupt'))
+    expect(backup).toBeTruthy()
+    await expect(readFile(join(dirname(path), backup!), 'utf8')).resolves.toBe(corrupt)
+  })
+
   it('does not expose a partial default while another initializer is publishing', async () => {
     const root = await createRoot()
     const path = join(root, '.ta', 'user-config')

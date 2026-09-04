@@ -8,7 +8,7 @@ import {
 } from '../../shared/sso-contracts'
 import { parseSsoFieldPath } from '../sso/sso-field-path'
 import { normalizeSsoUrl, validateSsoMatcher } from '../sso/sso-url-matcher'
-import { AtomicJsonStore } from '../persistence/atomic-json-store'
+import { AtomicJsonStore, isAtomicJsonStoreInvalidDataError } from '../persistence/atomic-json-store'
 import type { AtomicJsonStoreOptions } from '../persistence/atomic-json-store'
 
 export { createDefaultSsoConfiguration }
@@ -19,6 +19,7 @@ export function getSsoConfigPath(homeDirectory: string): string {
 
 export class SsoConfigService {
   private readonly store: AtomicJsonStore<SsoDocument>
+  private recoveryRequired = false
 
   constructor(private readonly path: string, options: Pick<AtomicJsonStoreOptions, 'fileSystem' | 'createId'> = {}) {
     this.store = new AtomicJsonStore(path, ssoDocumentSchema, () => ({
@@ -28,16 +29,25 @@ export class SsoConfigService {
   }
 
   async ensureInitialized(): Promise<SsoConfiguration> {
-    return (await this.store.createIfMissing()).sso
+    try {
+      return (await this.store.createIfMissing()).sso
+    } catch (error) {
+      if (isAtomicJsonStoreInvalidDataError(error)) this.recoveryRequired = true
+      throw error
+    }
   }
 
   async get(): Promise<SsoConfiguration> {
+    if (this.recoveryRequired) return createDefaultSsoConfiguration()
     return (await this.store.load()).sso
   }
 
   async save(input: unknown): Promise<SsoConfiguration> {
     const sso = ssoConfigurationSchema.parse(input)
-    const document = await this.store.update(() => ({ version: 1, sso }))
+    const document = this.recoveryRequired
+      ? await this.store.replace({ version: 1, sso })
+      : await this.store.update(() => ({ version: 1, sso }))
+    this.recoveryRequired = false
     return document.sso
   }
 

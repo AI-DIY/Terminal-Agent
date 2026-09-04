@@ -72,6 +72,7 @@ import { modelHostname, uniqueModelHostnames } from '../shared/model-context'
 import { normalizeChatContextSessionIds } from '../shared/chat-context-selection'
 import { normalizeBuiltInSkillIds } from '../shared/built-in-skills'
 import { SsoConfigService, getSsoConfigPath } from './settings/sso-config-service'
+import { isAtomicJsonStoreInvalidDataError } from './persistence/atomic-json-store'
 import { resolveSsoConfigHomeDirectory } from './settings/sso-config-home'
 import { SsoAuthenticationService } from './sso/sso-authentication-service'
 import { registerSsoHandlers } from './sso/register-sso-handlers'
@@ -427,7 +428,11 @@ if (isPrimaryInstance) {
       writeInstallPath: writeWindowsInstallPath,
     })
     void regexRules.load().catch(() => undefined)
-    await ssoConfig.ensureInitialized()
+    try {
+      await ssoConfig.ensureInitialized()
+    } catch (error) {
+      if (!isAtomicJsonStoreInvalidDataError(error)) throw error
+    }
     await ssoAuth.initialize()
     const initialPreferences = await workbenchPreferences.load().catch(createDefaultWorkbenchPreferences)
     await recoverChatStreamsBeforeCreatingMainWindow(

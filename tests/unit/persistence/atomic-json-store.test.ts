@@ -129,6 +129,32 @@ afterEach(async () => {
 })
 
 describe('AtomicJsonStore', () => {
+  it('returns an existing valid target without invoking any write-side adapter operation', async () => {
+    const path = await createStorePath('state.json')
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, JSON.stringify({ count: 7, labels: ['managed'] }), 'utf8')
+    const writes = {
+      mkdir: 0,
+      openExclusive: 0,
+      link: 0,
+      rename: 0,
+      rm: 0,
+    }
+    const store = createStore(path, () => ({ count: 0, labels: [] }), {
+      fileSystem: {
+        readFile: file => readFile(file),
+        mkdir: async () => { writes.mkdir++; throw new Error('mkdir must not be called') },
+        openExclusive: async () => { writes.openExclusive++; throw new Error('openExclusive must not be called') },
+        link: async () => { writes.link++; throw new Error('link must not be called') },
+        rename: async () => { writes.rename++; throw new Error('rename must not be called') },
+        rm: async () => { writes.rm++; throw new Error('rm must not be called') },
+      },
+    })
+
+    await expect(store.createIfMissing()).resolves.toEqual({ count: 7, labels: ['managed'] })
+    expect(writes).toEqual({ mkdir: 0, openExclusive: 0, link: 0, rename: 0, rm: 0 })
+  })
+
   it('returns a fresh validated default when the file is missing', async () => {
     const path = await createStorePath('state.json')
     const defaultState = { count: 0, labels: [] as string[] }
