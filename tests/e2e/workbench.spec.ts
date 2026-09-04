@@ -43,6 +43,7 @@ const test = base.extend<{
       try {
         const app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, mainEntry, ...appArguments] })
         const page = await app.firstWindow()
+        await ensureLegacyWorkbench(page)
         await expect(page.locator('.workbench-shell')).toHaveAttribute('data-workbench-ready', 'true')
         const launched = { app, userDataDir, mainEntry }
         launches.push(launched)
@@ -125,6 +126,20 @@ async function mainWindowBounds(app: ElectronApplication): Promise<{ x: number; 
   return app.evaluate(({ BrowserWindow }) => (
     BrowserWindow.getAllWindows().find(window => window.webContents.getURL().startsWith('file:'))?.getBounds()
   ))
+}
+
+async function ensureLegacyWorkbench(page: Page): Promise<void> {
+  await expect(page.locator('main')).toBeVisible()
+  const ssoTitle = page.getByRole('heading', { name: '单点登录', exact: true })
+  if (!(await ssoTitle.isVisible().catch(() => false))) {
+    const loginSettings = page.getByRole('button', { name: '打开单点登录设置', exact: true })
+    if (await loginSettings.isVisible().catch(() => false)) await loginSettings.click()
+  }
+  if (await ssoTitle.isVisible().catch(() => false)) {
+    const gate = page.getByLabel('启用单点登录门控')
+    if (await gate.isChecked()) await gate.uncheck()
+    await page.getByRole('button', { name: '保存并进入工作台', exact: true }).click()
+  }
 }
 
 async function historyScrollMetrics(history: Locator): Promise<{ clientHeight: number; scrollHeight: number; scrollTop: number }> {

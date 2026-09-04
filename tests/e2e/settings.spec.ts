@@ -17,12 +17,13 @@ test('opens real settings with ordered panels, host memory controls, and termina
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, join(process.cwd(), 'out/main/main.js')] })
     const page = await app.firstWindow()
+    await ensureLegacyWorkbench(page)
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
     await page.getByRole('button', { name: '设置', exact: true }).click()
 
     const panels = page.getByRole('navigation', { name: '设置面板' }).getByRole('button')
-    await expect(panels).toHaveCount(6)
-    await expect(panels).toHaveText(['模型选择', '大语言模型配置', '视觉语言模型配置', '安全围栏', '本地主机记忆', '外观'])
+    await expect(panels).toHaveCount(7)
+    await expect(panels).toHaveText(['模型选择', '大语言模型配置', '视觉语言模型配置', '安全围栏', '本地主机记忆', '外观', '单点登录'])
     await expect(panels.nth(0)).toHaveAttribute('aria-current', 'page')
     await expect(panels.nth(1)).not.toHaveAttribute('aria-current', 'page')
 
@@ -87,6 +88,7 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(0)
 
     await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('navigation', { name: '设置面板', exact: true }).getByRole('button', { name: '大语言模型配置', exact: true }).click()
     const apiKeyAfterReopeningSettings = page.getByLabel('API Key', { exact: true })
     await expect(apiKeyAfterReopeningSettings).toHaveValue('')
     await expect(apiKeyAfterReopeningSettings).toHaveAttribute('type', 'password')
@@ -114,6 +116,7 @@ test('left-aligns LLM and VLM model profile rows', async () => {
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userDataDir}`, join(process.cwd(), 'out/main/main.js')] })
     const page = await app.firstWindow()
+    await ensureLegacyWorkbench(page)
     await page.evaluate(async () => {
       await window.terminalAgent.settings.models.save({
         name: '左对齐文本模型', kind: 'llm', provider: 'ollama', model: 'llm-left', endpoint: 'http://127.0.0.1:11434/api/chat', contextLimit: 1_024,
@@ -167,6 +170,7 @@ test('runs the direct model key lifecycle through real Electron without exposing
     userDataDir = temporaryUserDataDir
     app = await electron.launch({ args: [`--user-data-dir=${temporaryUserDataDir}`, join(process.cwd(), 'out/main/main.js')] })
     const page = await app.firstWindow()
+    await ensureLegacyWorkbench(page)
     await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '大语言模型配置', exact: true }).click()
 
@@ -289,6 +293,21 @@ function throwCleanupFailures(hasPrimaryFailure: boolean, failures: unknown[]): 
 
 function closeServer(server: { close(callback: (error?: Error) => void): void }): Promise<void> {
   return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+}
+
+async function ensureLegacyWorkbench(page: import('@playwright/test').Page): Promise<void> {
+  await expect(page.locator('main')).toBeVisible()
+  const ssoTitle = page.getByRole('heading', { name: '单点登录', exact: true })
+  if (!(await ssoTitle.isVisible().catch(() => false))) {
+    const loginSettings = page.getByRole('button', { name: '打开单点登录设置', exact: true })
+    if (await loginSettings.isVisible().catch(() => false)) await loginSettings.click()
+  }
+  if (await ssoTitle.isVisible().catch(() => false)) {
+    const gate = page.getByLabel('启用单点登录门控')
+    if (await gate.isChecked()) await gate.uncheck()
+    await page.getByRole('button', { name: '保存并进入工作台', exact: true }).click()
+  }
+  await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
 }
 
 async function startKeyedModelServer(): Promise<{
