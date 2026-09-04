@@ -7,6 +7,7 @@ import {
   type SsoAuthSnapshot,
   type SsoConfiguration,
   type SsoIdentity,
+  type SsoSaveIntent,
 } from '../../../shared/sso-contracts'
 
 export type SsoApi = Pick<TerminalAgentApi['sso'], 'getConfig' | 'saveConfig' | 'getState' | 'retry' | 'onState'>
@@ -68,8 +69,8 @@ export function createSsoStore(api: SsoApi) {
     return initializeOperation
   }
 
-  async function saveConfig(input: SsoConfiguration): Promise<SsoConfiguration> {
-    const saved = await api.saveConfig(ssoConfigurationSchema.parse(input))
+  async function saveConfig(input: SsoConfiguration, intent: SsoSaveIntent = 'draft'): Promise<SsoConfiguration> {
+    const saved = await api.saveConfig(ssoConfigurationSchema.parse(input), intent)
     configurationRevision += 1
     applyConfiguration(saved)
     clearIdentity()

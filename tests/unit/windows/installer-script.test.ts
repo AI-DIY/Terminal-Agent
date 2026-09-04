@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { createDefaultSsoConfiguration, ssoDocumentSchema } from '../../../src/shared/sso-contracts'
 
 describe('Terminal-Agent NSIS bridge registration lifecycle', () => {
   it('removes only this installation InstallPath during uninstall and leaves a non-empty registry key intact', async () => {
@@ -24,14 +25,16 @@ describe('Terminal-Agent NSIS bridge registration lifecycle', () => {
     expect(install).toContain('.ta')
     expect(install).toContain('user-config')
     expect(install).toContain('CreateDirectory')
-    expect(install).toContain('IfFileExists')
-    expect(install).toMatch(/IfFileExists[^\r\n]*user-config/)
-    expect(install).toMatch(/FileOpen[^\r\n]*user-config[^\r\n]*\sw/)
-    expect(install).toContain('"version":1')
-    expect(install).toContain('"enabled":true')
-    expect(install).toContain('"platformUrlMatcher"')
-    expect(install).toContain('"userInfoUrlMatcher"')
-    expect(install.indexOf('IfFileExists')).toBeLessThan(install.indexOf('FileOpen'))
+    expect(install).toMatch(/GetTempFileName\s+\$2\s+"\$1"/)
+    expect(install).toMatch(/FileOpen\s+\$3\s+"\$2"\s+w/)
+    expect(install).toMatch(/MoveFileEx\(t\s+r2,\s*t\s+"\$1\\user-config",\s*i\s+0\)/)
+    expect(install).not.toMatch(/FileOpen[^\r\n]*user-config[^\r\n]*\sw/)
+
+    const payload = /FileWrite\s+\$3\s+'([^'\r\n]+)'/.exec(install)?.[1]
+    expect(payload).toBeDefined()
+    expect([...payload!].every(character => character.codePointAt(0)! <= 0x7f)).toBe(true)
+    const document = ssoDocumentSchema.parse(JSON.parse(payload!))
+    expect(document).toEqual({ version: 1, sso: createDefaultSsoConfiguration() })
 
     expect(uninstall).not.toContain('user-config')
     expect(uninstall).not.toContain('.ta')

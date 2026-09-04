@@ -1,16 +1,23 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SsoAuthenticationService } from '../../../src/main/sso/sso-authentication-service'
+import { registerSsoHandlers } from '../../../src/main/sso/register-sso-handlers'
 import type { SsoConfiguration, SsoIdentity } from '../../../src/shared/sso-contracts'
 
-const electron = vi.hoisted(() => ({ windows: [] as Array<{ options: Record<string, unknown>; close(): void }> }))
+const electron = vi.hoisted(() => ({
+  windows: [] as Array<{ options: Record<string, unknown>; close(): void }>,
+  handle: vi.fn(),
+  removeHandler: vi.fn(),
+}))
 vi.mock('electron', () => ({
+  ipcMain: { handle: electron.handle, removeHandler: electron.removeHandler },
   BrowserWindow: class {
     readonly webContents = { debugger: { attach() {}, detach() {}, sendCommand: async () => undefined, on() {}, removeListener() {} }, on() {}, removeListener() {} }
     destroyed = false
     constructor(readonly options: Record<string, unknown>) { electron.windows.push(this) }
     loadURL = vi.fn(async () => undefined)
     close() { this.destroyed = true }
+    destroy() { this.destroyed = true }
     isDestroyed() { return this.destroyed }
     on() {}
     removeListener() {}
@@ -34,8 +41,19 @@ class FakeWindow extends EventEmitter {
     removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => this.removeListener(`webContents:${event}`, listener)),
   }
   readonly loadURL = vi.fn(async (url: string) => { void url })
-  readonly close = vi.fn(() => this.emit('closed'))
-  readonly isDestroyed = vi.fn(() => false)
+  vetoClose = false
+  destroyed = false
+  readonly close = vi.fn(() => {
+    if (this.vetoClose || this.destroyed) return
+    this.destroyed = true
+    this.emit('closed')
+  })
+  readonly destroy = vi.fn(() => {
+    if (this.destroyed) return
+    this.destroyed = true
+    this.emit('closed')
+  })
+  readonly isDestroyed = vi.fn(() => this.destroyed)
 }
 
 class FakeCapture {
@@ -75,7 +93,12 @@ function createService() {
   return { service, window, capture, configPort }
 }
 
-afterEach(() => { vi.useRealTimers(); electron.windows.splice(0) })
+afterEach(() => {
+  vi.useRealTimers()
+  electron.windows.splice(0)
+  electron.handle.mockReset()
+  electron.removeHandler.mockReset()
+})
 
 describe('SsoAuthenticationService', () => {
   it('enters login-disabled when the gate is disabled even if optional fields are blank', async () => {
@@ -114,8 +137,75 @@ describe('SsoAuthenticationService', () => {
     navigation({}, 'https://platform.example/home')
     capture.resolveResponse({ name: 'Previous', employeeId: 'OLD' })
     await vi.waitFor(() => expect(service.getState().state).toBe('authenticated'))
-    await expect(service.saveConfiguration({ ...config, enabled: false })).resolves.toEqual({ state: 'login-disabled' })
+    await expect(service.saveConfiguration({ ...config, enabled: false }, 'workbench')).resolves.toEqual({ state: 'login-disabled' })
     expect(service.getState()).toEqual({ state: 'login-disabled' })
+  })
+
+  it('keeps enabled and disabled drafts fail-closed in settings without opening authentication', async () => {
+    const { service, window, configPort } = createService()
+    configPort.get.mockResolvedValueOnce({ ...config, loginPageUrl: '' })
+    configPort.isComplete.mockReturnValueOnce(false)
+    await service.initialize()
+
+    await expect(service.saveConfiguration(config, 'draft')).resolves.toEqual({ state: 'configuration-required' })
+    await expect(service.saveConfiguration({ ...config, enabled: false }, 'draft')).resolves.toEqual({ state: 'configuration-required' })
+
+    expect(window.loadURL).not.toHaveBeenCalled()
+    expect(service.getState()).toEqual({ state: 'configuration-required' })
+  })
+
+  it('starts exactly one fresh authentication attempt when continuing after an error', async () => {
+    const firstWindow = new FakeWindow()
+    const secondWindow = new FakeWindow()
+    const firstCapture = new FakeCapture()
+    const secondCapture = new FakeCapture()
+    const windows = [firstWindow, secondWindow]
+    const captures = [firstCapture, secondCapture]
+    const configPort = {
+      get: vi.fn(async () => config),
+      save: vi.fn(async (next: SsoConfiguration) => next),
+      isComplete: vi.fn(() => true),
+    }
+    const createWindow = vi.fn(() => windows.shift()!)
+    const service = new SsoAuthenticationService(configPort, {
+      createWindow,
+      createCapture: vi.fn(() => captures.shift()!),
+    })
+    await service.initialize()
+    await service.retry()
+    firstCapture.rejectResponse(new Error('Unable to continue SSO sign-in'))
+    await vi.waitFor(() => expect(service.getState().state).toBe('error'))
+
+    await expect(service.saveConfiguration(config, 'continue')).resolves.toEqual({ state: 'authenticating' })
+
+    expect(createWindow).toHaveBeenCalledTimes(2)
+    expect(secondWindow.loadURL.mock.calls).toEqual([
+      ['about:blank'],
+      [config.loginPageUrl],
+    ])
+  })
+
+  it('never enters the workbench through the wrong save intent', async () => {
+    const { service, configPort, window } = createService()
+    await service.initialize()
+    configPort.isComplete.mockReturnValue(false)
+
+    await expect(Promise.resolve().then(() => service.saveConfiguration({ ...config, loginPageUrl: '' }, 'continue'))).rejects.toThrow()
+    await expect(Promise.resolve().then(() => service.saveConfiguration(config, 'workbench'))).rejects.toThrow()
+
+    expect(service.getState().state).not.toBe('login-disabled')
+    expect(window.loadURL).not.toHaveBeenCalled()
+  })
+
+  it('does not let retry turn a disabled draft into an implicit workbench transition', async () => {
+    const { service } = createService()
+    await service.initialize()
+    await service.retry()
+    await service.saveConfiguration({ ...config, enabled: false }, 'draft')
+
+    await service.retry()
+
+    expect(service.getState()).toEqual({ state: 'configuration-required' })
   })
 
   it('authenticates when platform navigation arrives before identity', async () => {
@@ -208,7 +298,7 @@ describe('SsoAuthenticationService', () => {
     const retrying = service.retry()
     await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledWith('about:blank'))
 
-    const saving = service.saveConfiguration({ ...config, enabled: false })
+    const saving = service.saveConfiguration({ ...config, enabled: false }, 'workbench')
     await vi.waitFor(() => expect(capture.dispose).toHaveBeenCalledOnce())
     releaseBlankNavigation()
     await Promise.all([retrying, saving])
@@ -248,11 +338,11 @@ describe('SsoAuthenticationService', () => {
     await service.initialize()
     await service.retry()
     const old = capture.result
-    await service.saveConfiguration({ ...config, loginPageUrl: 'https://identity.example/new-login' })
+    await service.saveConfiguration({ ...config, loginPageUrl: 'https://identity.example/new-login' }, 'draft')
     capture.resolveResponse({ name: 'Old', employeeId: 'OLD' })
     capture.notifyNavigation('https://platform.example/home')
     await old.catch(() => undefined)
-    expect(service.getState().state).toBe('login-required')
+    expect(service.getState()).toEqual({ state: 'error', errorMessage: 'SSO sign-in cancelled' })
     expect(configPort.save).toHaveBeenCalledOnce()
   })
 
@@ -278,7 +368,7 @@ describe('SsoAuthenticationService', () => {
 
     await service.initialize()
     await service.retry()
-    const saving = service.saveConfiguration({ ...config, enabled: false })
+    const saving = service.saveConfiguration({ ...config, enabled: false }, 'workbench')
     await vi.waitFor(() => expect(configPort.save).toHaveBeenCalledOnce())
     const retrying = service.retry()
     await Promise.resolve()
@@ -301,7 +391,7 @@ describe('SsoAuthenticationService', () => {
     await service.initialize()
     const retrying = service.retry()
     await vi.waitFor(() => expect(capture.start).toHaveBeenCalledOnce())
-    const saving = service.saveConfiguration({ ...config, enabled: false })
+    const saving = service.saveConfiguration({ ...config, enabled: false }, 'workbench')
     await Promise.resolve()
     const cancellationCallsBeforeReadiness = capture.dispose.mock.calls.length
     releaseReadiness()
@@ -321,6 +411,23 @@ describe('SsoAuthenticationService', () => {
     await service.dispose()
     await service.dispose()
     expect(capture.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('force-destroys a vetoed authentication window before relinquishing ownership', async () => {
+    const { service, capture, window } = createService()
+    window.vetoClose = true
+    await service.initialize()
+    await service.retry()
+    capture.rejectResponse(new Error('Unable to continue SSO sign-in'))
+
+    await vi.waitFor(() => expect(service.getState().state).toBe('error'))
+    await vi.waitFor(() => expect(window.destroy).toHaveBeenCalledOnce())
+    expect(window.close).toHaveBeenCalledOnce()
+    expect(window.isDestroyed()).toBe(true)
+
+    await service.dispose()
+    await service.dispose()
+    expect(window.destroy).toHaveBeenCalledOnce()
   })
 
   it('turns an over-limit captured identity into a safe error and cleans up the auth session', async () => {
@@ -398,6 +505,21 @@ describe('SsoAuthenticationService', () => {
     expect(snapshot).toEqual({ state: 'authenticated', identity: { name: '安全姓名', employeeId: 'SAFE-1' } })
     expect(Object.keys(snapshot)).toEqual(['state', 'identity'])
     expect(renderer.send).toHaveBeenLastCalledWith('sso:state', snapshot)
+  })
+
+  it('publishes one renderer IPC event per state transition when wired through SSO handlers', async () => {
+    const { service, configPort } = createService()
+    const renderer = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    service.attachRenderer(renderer as never)
+    const unregister = registerSsoHandlers(configPort as never, service, renderer as never)
+    renderer.send.mockClear()
+
+    await service.initialize()
+
+    expect(renderer.send.mock.calls).toEqual([
+      ['sso:state', { state: 'login-required' }],
+    ])
+    unregister()
   })
 
   it('creates a secure non-persistent authentication window by default', async () => {

@@ -20,6 +20,9 @@ export const ssoConfigurationSchema = z.object({
 }).strict()
 export type SsoConfiguration = z.infer<typeof ssoConfigurationSchema>
 
+export const ssoSaveIntentSchema = z.enum(['draft', 'continue', 'workbench'])
+export type SsoSaveIntent = z.infer<typeof ssoSaveIntentSchema>
+
 export const ssoDocumentSchema = z.object({
   version: z.literal(1),
   sso: ssoConfigurationSchema,

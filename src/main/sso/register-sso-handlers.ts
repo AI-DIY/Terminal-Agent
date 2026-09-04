@@ -1,18 +1,18 @@
 import { ipcMain, type WebContents } from 'electron'
-import { ssoAuthSnapshotSchema, ssoConfigurationSchema } from '../../shared/sso-contracts'
+import { ssoAuthSnapshotSchema, ssoConfigurationSchema, ssoSaveIntentSchema } from '../../shared/sso-contracts'
 import type { SsoConfigService } from '../settings/sso-config-service'
 import type { SsoAuthenticationService } from './sso-authentication-service'
 
 const channels = ['sso:config:get', 'sso:config:save', 'sso:state:get', 'sso:retry'] as const
 
-export function registerSsoHandlers(config: Pick<SsoConfigService, 'get'>, auth: Pick<SsoAuthenticationService, 'getState' | 'saveConfiguration' | 'retry' | 'onState'>, trustedSender: WebContents): () => void {
+export function registerSsoHandlers(config: Pick<SsoConfigService, 'get'>, auth: Pick<SsoAuthenticationService, 'getState' | 'saveConfiguration' | 'retry'>, trustedSender: WebContents): () => void {
   ipcMain.handle('sso:config:get', event => {
     assertTrustedSender(event, trustedSender)
     return Promise.resolve(config.get()).then(value => ssoConfigurationSchema.parse(value))
   })
-  ipcMain.handle('sso:config:save', async (event, input: unknown) => {
+  ipcMain.handle('sso:config:save', async (event, input: unknown, intent: unknown) => {
     assertTrustedSender(event, trustedSender)
-    await auth.saveConfiguration(ssoConfigurationSchema.parse(input))
+    await auth.saveConfiguration(ssoConfigurationSchema.parse(input), ssoSaveIntentSchema.parse(intent ?? 'draft'))
     return ssoConfigurationSchema.parse(await config.get())
   })
   ipcMain.handle('sso:state:get', event => {
@@ -25,15 +25,10 @@ export function registerSsoHandlers(config: Pick<SsoConfigService, 'get'>, auth:
     await auth.retry()
   })
 
-  const unsubscribe = auth.onState(snapshot => {
-    const safe = ssoAuthSnapshotSchema.parse(snapshot)
-    if (!trustedSender.isDestroyed()) trustedSender.send('sso:state', safe)
-  })
   let disposed = false
   return () => {
     if (disposed) return
     disposed = true
-    unsubscribe()
     for (const channel of channels) ipcMain.removeHandler(channel)
   }
 }

@@ -80,8 +80,10 @@ import {
 import {
   ssoAuthSnapshotSchema,
   ssoConfigurationSchema,
+  ssoSaveIntentSchema,
   type SsoAuthSnapshot,
   type SsoConfiguration,
+  type SsoSaveIntent,
 } from '../shared/sso-contracts'
 
 export const terminalAgentNamespace = 'terminalAgent' as const
@@ -217,7 +219,7 @@ export type TerminalAgentApi = {
   }
   sso: {
     getConfig(): Promise<SsoConfiguration>
-    saveConfig(input: SsoConfiguration): Promise<SsoConfiguration>
+    saveConfig(input: SsoConfiguration, intent?: SsoSaveIntent): Promise<SsoConfiguration>
     getState(): Promise<SsoAuthSnapshot>
     retry(): Promise<void>
     onState(listener: (state: SsoAuthSnapshot) => void): () => void
@@ -429,8 +431,8 @@ export function createTerminalAgentApi(ipcRenderer: {
     }),
     sso: Object.freeze({
       getConfig: async () => ssoConfigurationSchema.parse(await ipcRenderer.invoke('sso:config:get')),
-      saveConfig: async (input: SsoConfiguration) => ssoConfigurationSchema.parse(
-        await ipcRenderer.invoke('sso:config:save', ssoConfigurationSchema.parse(input)),
+      saveConfig: async (input: SsoConfiguration, intent: SsoSaveIntent = 'draft') => ssoConfigurationSchema.parse(
+        await ipcRenderer.invoke('sso:config:save', ssoConfigurationSchema.parse(input), ssoSaveIntentSchema.parse(intent)),
       ),
       getState: async () => ssoAuthSnapshotSchema.parse(await ipcRenderer.invoke('sso:state:get')),
       retry: async () => { await ipcRenderer.invoke('sso:retry') },

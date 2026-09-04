@@ -4,9 +4,11 @@ import {
   ssoAuthSnapshotSchema,
   ssoConfigurationSchema,
   ssoIdentitySchema,
+  ssoSaveIntentSchema,
   type SsoAuthSnapshot,
   type SsoConfiguration,
   type SsoIdentity,
+  type SsoSaveIntent,
 } from '../../shared/sso-contracts'
 import type { SsoConfigService } from '../settings/sso-config-service'
 import { SsoResponseCapture } from './sso-response-capture'
@@ -27,9 +29,10 @@ export type AuthenticationWindow = {
   }
   loadURL(url: string): Promise<unknown> | unknown
   close(): void
-  isDestroyed?(): boolean
+  isDestroyed(): boolean
   on(event: 'closed', listener: () => void): unknown
   removeListener(event: 'closed', listener: () => void): unknown
+  destroy(): void
 }
 
 export type AuthenticationCapture = {
@@ -92,8 +95,14 @@ export class SsoAuthenticationService {
     return cloneSnapshot(this.snapshot)
   }
 
-  saveConfiguration(input: SsoConfiguration): Promise<SsoAuthSnapshot> {
+  saveConfiguration(input: SsoConfiguration, intent: SsoSaveIntent = 'draft'): Promise<SsoAuthSnapshot> {
     const configuration = ssoConfigurationSchema.parse(input)
+    const saveIntent = ssoSaveIntentSchema.parse(intent)
+    const previousSnapshot = this.getState()
+    if (saveIntent === 'workbench' && configuration.enabled) throw new Error('SSO configuration must be disabled to enter the workbench')
+    if (saveIntent === 'continue' && (!configuration.enabled || !this.configService.isComplete(configuration))) {
+      throw new Error('SSO configuration is incomplete')
+    }
     this.disposed = false
     // Reserve the next generation immediately, before persistence or queued
     // cleanup can yield, so the old capture can no longer publish identity.
@@ -103,7 +112,12 @@ export class SsoAuthenticationService {
       await cancellation
       const saved = await this.configService.save(configuration)
       this.configuration = saved
-      return this.applyConfigurationState(saved)
+      if (saveIntent === 'draft') return this.applyDraftState(previousSnapshot, saved)
+      if (saveIntent === 'workbench') {
+        return this.applyConfigurationState(saved)
+      }
+      await this.startAuthentication(saved, false)
+      return this.getState()
     })
   }
 
@@ -120,12 +134,21 @@ export class SsoAuthenticationService {
       return
     }
     if (!configuration.enabled) {
-      this.applyConfigurationState(configuration)
+      if (this.snapshot.state === 'login-required' || this.snapshot.state === 'authenticating' || this.snapshot.state === 'error') {
+        this.setSnapshot({ state: 'configuration-required' })
+      } else {
+        this.applyConfigurationState(configuration)
+      }
       return
     }
 
+    await this.startAuthentication(configuration, true)
+  }
+
+  private async startAuthentication(configuration: SsoConfiguration, publishLoginRequired: boolean): Promise<void> {
     await this.cancelCurrentSession()
-    this.setSnapshot({ state: 'login-required' })
+    this.generation++
+    if (publishLoginRequired) this.setSnapshot({ state: 'login-required' })
     const generation = ++this.generation
     this.setSnapshot({ state: 'authenticating' })
     const window = this.createWindow()
@@ -252,7 +275,7 @@ export class SsoAuthenticationService {
     return generation === this.generation
       && this.capture === capture
       && this.authWindow === window
-      && !window.isDestroyed?.()
+      && !window.isDestroyed()
   }
 
   private async cancelCurrentSession(): Promise<void> {
@@ -260,24 +283,41 @@ export class SsoAuthenticationService {
     const window = this.authWindow
     if (!capture && !window) return
     this.generation++
-    this.capture = undefined
-    this.authWindow = undefined
     this.removeNavigationListeners?.()
     this.removeNavigationListeners = undefined
     await capture?.dispose().catch(() => undefined)
-    closeWindow(window)
+    await closeWindow(window)
+    if (this.capture === capture) this.capture = undefined
+    if (this.authWindow === window) this.authWindow = undefined
   }
 
   private async finishSession(generation: number): Promise<void> {
     if (generation !== this.generation) return
     const capture = this.capture
     const window = this.authWindow
-    this.capture = undefined
-    this.authWindow = undefined
     this.removeNavigationListeners?.()
     this.removeNavigationListeners = undefined
     await capture?.dispose().catch(() => undefined)
-    closeWindow(window)
+    await closeWindow(window)
+    if (this.capture === capture) this.capture = undefined
+    if (this.authWindow === window) this.authWindow = undefined
+  }
+
+  private applyDraftState(previousSnapshot: SsoAuthSnapshot, configuration: SsoConfiguration): SsoAuthSnapshot {
+    if (previousSnapshot.state === 'login-required' || previousSnapshot.state === 'error') {
+      this.setSnapshot(previousSnapshot)
+      return this.getState()
+    }
+    if (previousSnapshot.state === 'authenticating') {
+      this.setSnapshot({ state: 'error', errorMessage: 'SSO sign-in cancelled' })
+      return this.getState()
+    }
+    if (previousSnapshot.state === 'login-disabled' && !configuration.enabled) {
+      this.setSnapshot({ state: 'login-disabled' })
+      return this.getState()
+    }
+    this.setSnapshot({ state: 'configuration-required' })
+    return this.getState()
   }
 
   private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
@@ -302,14 +342,25 @@ function createDefaultAuthenticationWindow(): AuthenticationWindow {
   }) as unknown as AuthenticationWindow
 }
 
-function closeWindow(window: AuthenticationWindow | undefined): void {
-  if (!window) return
-  try {
-    if (window.isDestroyed?.()) return
-    window.close()
-  } catch {
-    // Window teardown is best effort; capture cleanup remains authoritative.
-  }
+async function closeWindow(window: AuthenticationWindow | undefined): Promise<void> {
+  if (!window || window.isDestroyed()) return
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    const settle = (): void => {
+      if (settled) return
+      settled = true
+      window.removeListener('closed', onClosed)
+      resolve()
+    }
+    const onClosed = (): void => settle()
+    window.on('closed', onClosed)
+    try { window.close() } catch { /* fall through to forceful destruction */ }
+    if (window.isDestroyed()) { settle(); return }
+    try { window.destroy() } catch { /* verify below before releasing ownership */ }
+    if (window.isDestroyed()) { settle(); return }
+    window.removeListener('closed', onClosed)
+    reject(new Error('Unable to destroy SSO sign-in window'))
+  })
 }
 
 function cloneSnapshot(snapshot: SsoAuthSnapshot): SsoAuthSnapshot {

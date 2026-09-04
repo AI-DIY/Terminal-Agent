@@ -24,7 +24,7 @@ function deferred<T>() {
 
 function createApi(overrides: Partial<{
   getConfig(): Promise<SsoConfiguration>
-  saveConfig(input: SsoConfiguration): Promise<SsoConfiguration>
+  saveConfig(input: SsoConfiguration, action?: 'draft' | 'continue' | 'workbench'): Promise<SsoConfiguration>
   getState(): Promise<SsoAuthSnapshot>
   retry(): Promise<void>
 }> = {}) {
@@ -87,7 +87,7 @@ describe('renderer SSO store', () => {
     const store = createSsoStore(api)
 
     const initialize = store.initialize()
-    await store.saveConfig(savedConfiguration)
+    await store.saveConfig(savedConfiguration, 'draft')
     pendingConfiguration.resolve(configuration)
     await initialize
 
@@ -107,9 +107,9 @@ describe('renderer SSO store', () => {
     listener({ state: 'configuration-required', identity: authenticated.identity })
     expect(store.identity.value).toBeNull()
     listener(authenticated)
-    await store.saveConfig(savedConfiguration)
+    await store.saveConfig(savedConfiguration, 'continue')
 
-    expect(api.saveConfig).toHaveBeenCalledWith(savedConfiguration)
+    expect(api.saveConfig).toHaveBeenCalledWith(savedConfiguration, 'continue')
     expect(store.config.loginPageUrl).toBe('https://new-login.example.test')
     expect(store.identity.value).toBeNull()
   })

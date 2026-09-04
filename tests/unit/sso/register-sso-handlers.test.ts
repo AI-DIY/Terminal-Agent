@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerSsoHandlers } from '../../../src/main/sso/register-sso-handlers'
-import type { SsoConfiguration, SsoAuthSnapshot } from '../../../src/shared/sso-contracts'
+import type { SsoConfiguration } from '../../../src/shared/sso-contracts'
 
 const { handle, removeHandler } = vi.hoisted(() => ({ handle: vi.fn(), removeHandler: vi.fn() }))
 vi.mock('electron', () => ({ ipcMain: { handle, removeHandler } }))
@@ -38,28 +38,24 @@ describe('registerSsoHandlers', () => {
   })
 
   it('validates save input and sends only validated state events', async () => {
-    let listener: ((snapshot: SsoAuthSnapshot) => void) | undefined
     const auth = {
       getState: vi.fn(() => ({ state: 'login-required' as const })),
       saveConfiguration: vi.fn(async () => ({ state: 'login-required' as const })),
       retry: vi.fn(async () => undefined),
-      onState: vi.fn((next: (snapshot: SsoAuthSnapshot) => void) => { listener = next; return vi.fn() }),
+      onState: vi.fn(() => vi.fn()),
     }
     const configPort = { get: vi.fn(async () => config) }
     const trusted = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
     const dispose = registerSsoHandlers(configPort as never, auth as never, trusted as never)
     await expect(handlerFor('sso:config:save')({ sender: trusted }, { ...config, enabled: 'yes' })).rejects.toThrow()
     expect(auth.saveConfiguration).not.toHaveBeenCalled()
-    await handlerFor('sso:config:save')({ sender: trusted }, config)
-    expect(auth.saveConfiguration).toHaveBeenCalledWith(config)
-    await expect(handlerFor('sso:config:save')({ sender: trusted }, config)).resolves.toEqual(config)
+    await handlerFor('sso:config:save')({ sender: trusted }, config, 'continue')
+    expect(auth.saveConfiguration).toHaveBeenCalledWith(config, 'continue')
+    await expect(handlerFor('sso:config:save')({ sender: trusted }, config, 'invalid')).rejects.toThrow()
+    await expect(handlerFor('sso:config:save')({ sender: trusted }, config, 'draft')).resolves.toEqual(config)
     await expect(handlerFor('sso:retry')({ sender: trusted }, 'unexpected')).rejects.toThrow()
     await handlerFor('sso:retry')({ sender: trusted })
     expect(auth.retry).toHaveBeenCalledOnce()
-    listener?.({ state: 'authenticated', identity: { name: 'Li', employeeId: 'E-2' } })
-    expect(trusted.send).toHaveBeenCalledWith('sso:state', { state: 'authenticated', identity: { name: 'Li', employeeId: 'E-2' } })
-    expect(() => listener?.({ state: 'authenticated', identity: { name: 'Li', employeeId: 'E-2' }, cookie: 'secret' } as never)).toThrow()
-    expect(trusted.send).toHaveBeenCalledTimes(1)
     dispose()
   })
 
@@ -75,14 +71,15 @@ describe('registerSsoHandlers', () => {
     dispose()
   })
 
-  it('removes every handler and subscription exactly once', () => {
+  it('removes every handler exactly once without installing a second state publisher', () => {
     const unsubscribe = vi.fn()
     const auth = { getState: vi.fn(() => ({ state: 'login-required' as const })), onState: vi.fn(() => unsubscribe) }
     const configPort = { get: vi.fn(async () => config) }
     const trusted = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
     const dispose = registerSsoHandlers(configPort as never, auth as never, trusted as never)
     dispose(); dispose()
-    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(auth.onState).not.toHaveBeenCalled()
+    expect(unsubscribe).not.toHaveBeenCalled()
     expect(removeHandler).toHaveBeenCalledTimes(4)
   })
 })

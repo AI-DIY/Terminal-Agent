@@ -61,6 +61,75 @@ test('shows the forced SSO configuration screen on a fresh isolated home before 
   }
 })
 
+test('keeps draft saves in forced settings and enters the workbench only through the disabled action', async () => {
+  const fixture = await startSsoFixture()
+  const launch = await launchFreshElectron()
+  let primaryFailure: E2ePrimaryFailure | undefined
+  try {
+    const page = await launch.app.firstWindow()
+    await configureCompleteSsoDraft(page, fixture, 'exact', '保存草稿')
+    await expect(page.getByRole('heading', { name: '单点登录', exact: true })).toBeVisible()
+    expect(launch.app.windows()).toHaveLength(1)
+    await expect.poll(async () => await page.evaluate(() => window.terminalAgent.sso.getState())).toEqual({ state: 'configuration-required' })
+
+    await page.getByLabel('启用单点登录门控').uncheck()
+    await page.getByRole('button', { name: '保存草稿', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '单点登录', exact: true })).toBeVisible()
+    await expect(page.locator('.workbench-shell')).toHaveCount(0)
+    await page.getByRole('button', { name: '保存并进入工作台', exact: true }).click()
+    await expect(page.locator('.workbench-shell')).toHaveAttribute('data-workbench-ready', 'true')
+  } catch (error) {
+    primaryFailure = { error }
+    throw error
+  } finally {
+    const cleanupFailures = await closeE2eResources(
+      async () => { await launch.app.close() },
+      async () => { await removeSsoE2eDirectories(launch.directories) },
+      async () => { await closeServer(fixture.server) },
+    )
+    throwCleanupFailures(primaryFailure, cleanupFailures)
+  }
+})
+
+test('save-and-continue from embedded login settings starts exactly one fresh authentication attempt', async () => {
+  const fixture = await startSsoFixture()
+  const launch = await launchFreshElectron()
+  let primaryFailure: E2ePrimaryFailure | undefined
+  try {
+    const page = await launch.app.firstWindow()
+    const firstWindow = launch.app.waitForEvent('window')
+    await configureCompleteSsoDraft(page, fixture, 'exact', '保存并继续')
+    const firstAuthenticationWindow = await firstWindow
+    await firstAuthenticationWindow.close()
+    await expect(page.getByText('登录窗口已关闭', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '打开单点登录设置', exact: true }).click()
+
+    const freshWindow = launch.app.waitForEvent('window', { timeout: 5_000 })
+    await page.getByRole('button', { name: '保存并继续', exact: true }).click()
+    const freshAuthenticationWindow = await freshWindow
+    await expect.poll(() => launch.app.windows().length).toBe(2)
+    await freshAuthenticationWindow.close()
+    await expect(page.getByText('登录窗口已关闭', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '打开单点登录设置', exact: true }).click()
+    await page.getByLabel('启用单点登录门控').uncheck()
+    await page.getByRole('button', { name: '保存草稿', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '单点登录', exact: true })).toBeVisible()
+    await expect(page.locator('.workbench-shell')).toHaveCount(0)
+    await page.getByRole('button', { name: '保存并进入工作台', exact: true }).click()
+    await expect(page.locator('.workbench-shell')).toHaveAttribute('data-workbench-ready', 'true')
+  } catch (error) {
+    primaryFailure = { error }
+    throw error
+  } finally {
+    const cleanupFailures = await closeE2eResources(
+      async () => { await launch.app.close() },
+      async () => { await removeSsoE2eDirectories(launch.directories) },
+      async () => { await closeServer(fixture.server) },
+    )
+    throwCleanupFailures(primaryFailure, cleanupFailures)
+  }
+})
+
 test('captures the platform natural user-info response exactly once', async () => {
   await verifyPassiveCapture('exact')
 })
@@ -229,7 +298,12 @@ async function launchDirectElectron(directories: SsoE2eDirectories): Promise<Dir
   }
 }
 
-async function configureCompleteSsoDraft(page: Page, fixture: SsoFixture, mode: 'exact' | 'regex'): Promise<void> {
+async function configureCompleteSsoDraft(
+  page: Page,
+  fixture: SsoFixture,
+  mode: 'exact' | 'regex',
+  action: '保存草稿' | '保存并继续' = '保存并继续',
+): Promise<void> {
   const platformMatcher = mode === 'exact'
     ? `${fixture.origin}/platform`
     : `^${escapeRegularExpression(fixture.origin)}/platform\\?tenant=(?:e2e|backup)$`
@@ -246,7 +320,7 @@ async function configureCompleteSsoDraft(page: Page, fixture: SsoFixture, mode: 
   await page.getByLabel('用户信息接口 URL / 正则').fill(userInfoMatcher)
   await page.getByLabel('工号字段路径').fill('data.employeeId')
   await page.getByLabel('姓名字段路径').fill('$.data.name')
-  await page.getByRole('button', { name: '保存草稿', exact: true }).click()
+  await page.getByRole('button', { name: action, exact: true }).click()
   await expect.poll(async () => await page.evaluate(() => window.terminalAgent.sso.getConfig())).toMatchObject({
     enabled: true,
     loginPageUrl: fixture.loginUrl,

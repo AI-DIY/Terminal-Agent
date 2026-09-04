@@ -42,12 +42,13 @@ describe('SSO preload API', () => {
     expect(ipc.invoke).not.toHaveBeenCalled()
 
     await expect(api.sso.getConfig()).resolves.toEqual(ssoConfiguration)
-    await expect(api.sso.saveConfig(ssoConfiguration)).resolves.toEqual(ssoConfiguration)
+    await expect(api.sso.saveConfig(ssoConfiguration, 'continue')).resolves.toEqual(ssoConfiguration)
+    await expect(api.sso.saveConfig(ssoConfiguration, 'invalid' as never)).rejects.toThrow()
     await expect(api.sso.getState()).resolves.toEqual(authenticatedSsoState)
     await api.sso.retry()
 
     expect(ipc.invoke).toHaveBeenNthCalledWith(1, 'sso:config:get')
-    expect(ipc.invoke).toHaveBeenNthCalledWith(2, 'sso:config:save', ssoConfiguration)
+    expect(ipc.invoke).toHaveBeenNthCalledWith(2, 'sso:config:save', ssoConfiguration, 'continue')
     expect(ipc.invoke).toHaveBeenNthCalledWith(3, 'sso:state:get')
     expect(ipc.invoke).toHaveBeenNthCalledWith(4, 'sso:retry')
   })

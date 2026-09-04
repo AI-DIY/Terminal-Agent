@@ -4,10 +4,20 @@
   StrCpy $1 "$0\.ta"
   CreateDirectory "$1"
   IfFileExists "$1\user-config" done_config
-  FileOpen $2 "$1\user-config" w
-  IfErrors done_config
-  FileWrite $2 '{"version":1,"sso":{"enabled":true,"loginPageUrl":"","platformUrlMatcher":{"mode":"exact","value":""},"userInfoUrlMatcher":{"mode":"exact","value":""},"employeeIdField":"","nameField":""}}'
-  FileClose $2
+  GetTempFileName $2 "$1"
+  FileOpen $3 "$2" w
+  IfErrors cleanup_temp
+  ClearErrors
+  FileWrite $3 '{"version":1,"sso":{"enabled":true,"loginPageUrl":"","platformUrlMatcher":{"mode":"exact","value":""},"userInfoUrlMatcher":{"mode":"exact","value":""},"employeeIdField":"","nameField":""}}'
+  IfErrors close_temp
+  FileClose $3
+  System::Call 'kernel32::MoveFileEx(t r2, t "$1\user-config", i 0) i.r4'
+  StrCmp $4 0 cleanup_temp
+  Goto done_config
+close_temp:
+  FileClose $3
+cleanup_temp:
+  Delete "$2"
 done_config:
   WriteRegStr HKCU "Software\Terminal-Agent" "InstallPath" "$INSTDIR"
 !macroend

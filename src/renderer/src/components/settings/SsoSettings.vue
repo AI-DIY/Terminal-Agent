@@ -28,7 +28,7 @@ async function save(kind: 'draft' | 'continue' | 'workbench'): Promise<void> {
   saving.value = true
   notice.value = ''
   try {
-    await store.saveConfig({ ...draft, platformUrlMatcher: { ...draft.platformUrlMatcher }, userInfoUrlMatcher: { ...draft.userInfoUrlMatcher } })
+    await store.saveConfig({ ...draft, platformUrlMatcher: { ...draft.platformUrlMatcher }, userInfoUrlMatcher: { ...draft.userInfoUrlMatcher } }, kind)
     notice.value = '配置已保存'
     if (kind === 'continue' && continueReady.value) emit('continue')
     if (kind === 'workbench' && workbenchReady.value) emit('workbench')
