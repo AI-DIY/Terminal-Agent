@@ -181,17 +181,22 @@ export class SsoAuthenticationService {
     window.webContents.on('will-navigate', onWillNavigate)
     window.webContents.on('did-frame-navigate', onDidFrameNavigate)
     let windowClosed = false
+    let resolveCloseSignal!: () => void
+    const closeSignal = new Promise<void>(resolve => { resolveCloseSignal = resolve })
     const onClose = (): void => {
       windowClosed = true
+      resolveCloseSignal()
     }
     const onClosed = (): void => {
       windowClosed = true
+      resolveCloseSignal()
       if (generation !== this.generation || this.capture !== capture) return
       void this.failSession(generation, 'SSO sign-in window closed')
     }
     window.on('close', onClose)
     window.on('closed', onClosed)
     this.removeNavigationListeners = () => {
+      resolveCloseSignal()
       window.webContents.removeListener?.('did-navigate', onDidNavigate)
       window.webContents.removeListener?.('did-navigate-in-page', onDidNavigateInPage)
       window.webContents.removeListener?.('will-navigate', onWillNavigate)
@@ -220,6 +225,7 @@ export class SsoAuthenticationService {
       if (!this.isCurrentSession(generation, capture, window)) return
       await window.loadURL(configuration.loginPageUrl)
     } catch (error) {
+      if (!windowClosed && !isWindowDestroyed(window)) await waitForCloseSignal(closeSignal)
       await this.failSession(generation, windowClosed || isWindowDestroyed(window) ? 'SSO sign-in window closed' : safeCaptureError(error))
     }
   }
@@ -373,6 +379,18 @@ async function closeWindow(window: AuthenticationWindow | undefined): Promise<vo
 
 function isWindowDestroyed(window: AuthenticationWindow): boolean {
   return window.isDestroyed?.() === true
+}
+
+async function waitForCloseSignal(closeSignal: Promise<void>): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const timeoutSignal = new Promise<void>(resolve => {
+    timeout = setTimeout(resolve, 100)
+  })
+  try {
+    await Promise.race([closeSignal, timeoutSignal])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
 }
 
 function cloneSnapshot(snapshot: SsoAuthSnapshot): SsoAuthSnapshot {

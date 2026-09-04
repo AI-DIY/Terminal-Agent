@@ -69,3 +69,95 @@ exit_code=0
   Electron runtime/E2E case was added.
 - No request, retry, DOM fallback, URL matcher, capture protocol, or broader
   lifecycle behavior was changed.
+
+## Post-987 fix round 2
+
+### Confirmed root cause
+
+The runtime trace showed that the configured remote login navigation can reject
+with Electron `ERR_FAILED (-2)` while the authentication window is still live.
+In the failing ordering, neither `close` nor `closed` had reached the service;
+the immediate catch therefore published the generic terminal snapshot and
+removed the listeners before Electron delivered the close lifecycle events.
+The prior `close` listener fix handled an earlier close event but could not
+arbitrate this later event ordering.
+
+### RED evidence
+
+Added two executable tests to
+`tests/unit/sso/sso-authentication-service.test.ts`:
+
+- `lets a close signal arriving after login navigation rejection win terminal arbitration`
+  rejects the configured login `loadURL` with `ERR_FAILED (-2)`, verifies the
+  fake window is live at rejection, waits one event-loop turn so the current
+  implementation can settle, then emits `close`/`closed` and requires the
+  exact closed-window snapshot.
+- `maps an equivalent live-window navigation failure to the generic safe error`
+  records that the window is live at an equivalent rejection and preserves the
+  bounded generic safe error.
+
+Command:
+
+```text
+npx vitest run tests/unit/sso/sso-authentication-service.test.ts -t "terminal arbitration|equivalent live-window"
+```
+
+Result on `2f39c4c` before the production change:
+
+```text
+1 failed | 1 passed | 33 skipped
+Expected errorMessage: SSO sign-in window closed
+Received errorMessage: Unable to complete SSO sign-in
+exit_code=1
+```
+
+### Arbitration design and GREEN evidence
+
+The catch path now waits for a close signal belonging to the same session or a
+100 ms condition-based timeout. A close/closed event resolves the signal and
+wins terminal classification; an equivalent failure on a genuinely live
+window reaches the bounded timeout and remains `Unable to complete SSO sign-in`.
+The timeout is cleared when either side wins. Session teardown resolves the
+signal before removing listeners, so cancellation and generation invalidation
+cannot leave a pending wait, timer, or listener holding window/capture
+ownership. Existing safe error sanitization and all other terminal paths remain
+unchanged.
+
+Focused regression command:
+
+```text
+npx vitest run tests/unit/sso/sso-authentication-service.test.ts -t "terminal arbitration|equivalent live-window"
+```
+
+Result after the production change:
+
+```text
+Tests  2 passed | 33 skipped
+exit_code=0
+```
+
+Complete focused SSO unit group:
+
+```text
+npx vitest run tests/unit/sso
+Test Files  5 passed (5)
+Tests       61 passed (61)
+exit_code=0
+```
+
+Build, lint, and diff checks all exited 0. The required embedded save-and-
+continue E2E was run serially with one worker and the original assertion:
+
+```text
+npx playwright test tests/e2e/sso-login.spec.ts --grep "save-and-continue from embedded" --repeat-each=20 --workers=1 --timeout 60000 --reporter=line
+Running 20 tests using 1 worker
+20 passed (41.4s)
+exit_code=0
+```
+
+### Round 2 residual concerns
+
+- The 100 ms fallback is intentionally bounded; it adds up to that delay only
+  to uncategorized navigation/setup failures while a window remains live.
+- The late-event arbitration is covered by the unit fake and repeated embedded
+  Electron E2E, but no new production logging was added.

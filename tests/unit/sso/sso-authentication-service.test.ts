@@ -377,6 +377,51 @@ describe('SsoAuthenticationService', () => {
     })
   })
 
+  it('lets a close signal arriving after login navigation rejection win terminal arbitration', async () => {
+    const { service, window } = createService()
+    let rejectLoginNavigation!: (error: Error) => void
+    const loginNavigation = new Promise<void>((_resolve, reject) => { rejectLoginNavigation = reject })
+    window.loadURL.mockImplementation(async (url: string) => {
+      if (url === config.loginPageUrl) await loginNavigation
+    })
+    await service.initialize()
+
+    const retrying = service.retry()
+    await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledWith(config.loginPageUrl))
+    rejectLoginNavigation(new Error('ERR_FAILED (-2) loading login page'))
+    expect(window.isDestroyed()).toBe(false)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    window.emit('close')
+    window.emit('closed')
+
+    await retrying
+
+    expect(service.getState()).toEqual({
+      state: 'error',
+      errorMessage: 'SSO sign-in window closed',
+    })
+  })
+
+  it('maps an equivalent live-window navigation failure to the generic safe error', async () => {
+    const { service, window } = createService()
+    let wasLiveAtFailure = false
+    window.loadURL.mockImplementation(async (url: string) => {
+      if (url === config.loginPageUrl) {
+        wasLiveAtFailure = !window.isDestroyed()
+        throw new Error('ERR_FAILED (-2) loading login page')
+      }
+    })
+    await service.initialize()
+
+    await service.retry()
+
+    expect(wasLiveAtFailure).toBe(true)
+    expect(service.getState()).toEqual({
+      state: 'error',
+      errorMessage: 'Unable to complete SSO sign-in',
+    })
+  })
+
   it('preserves the terminal window-closed error while asynchronous capture teardown rejects cancellation', async () => {
     const { service, capture, window } = createService()
     let releaseDispose!: () => void
