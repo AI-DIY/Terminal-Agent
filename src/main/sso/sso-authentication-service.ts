@@ -293,6 +293,7 @@ export class SsoAuthenticationService {
 
   private async finishSession(generation: number): Promise<void> {
     if (generation !== this.generation) return
+    this.generation++
     const capture = this.capture
     const window = this.authWindow
     this.removeNavigationListeners?.()

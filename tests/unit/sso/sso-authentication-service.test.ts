@@ -333,6 +333,27 @@ describe('SsoAuthenticationService', () => {
     expect(window.loadURL).not.toHaveBeenCalledWith(config.loginPageUrl)
   })
 
+  it('preserves the terminal window-closed error while asynchronous capture teardown rejects cancellation', async () => {
+    const { service, capture, window } = createService()
+    let releaseDispose!: () => void
+    const disposeGate = new Promise<void>(resolve => { releaseDispose = resolve })
+    capture.dispose.mockImplementation(async () => {
+      capture.rejectResponse(new Error('SSO sign-in cancelled'))
+      await disposeGate
+    })
+
+    await service.initialize()
+    await service.retry()
+    window.emit('closed')
+    await vi.waitFor(() => expect(capture.dispose).toHaveBeenCalledOnce())
+    releaseDispose()
+
+    await vi.waitFor(() => expect(service.getState()).toEqual({
+      state: 'error',
+      errorMessage: 'SSO sign-in window closed',
+    }))
+  })
+
   it('ignores a stale capture completion after saving a new configuration', async () => {
     const { service, capture, configPort } = createService()
     await service.initialize()
