@@ -1,4 +1,4 @@
-# Terminal-Agent v3.0.0
+# Terminal-Agent v3.1.1
 
 Release date: 2026-09-04
 
@@ -9,11 +9,13 @@ Release date: 2026-09-04
 - 员工号和姓名字段支持多层级 Object Path/JSONPath 路径，平台地址与用户信息地址支持精确匹配和正则表达式匹配。
 - 技能限制：未认证或门控禁用时限制技能入口，避免在身份状态不满足时使用受保护能力。
 - 安装、升级和卸载均保留用户配置；默认配置仅在 `%USERPROFILE%\.ta\user-config` 不存在时创建，不覆盖已有文件，卸载不删除该文件。
+- 启动恢复仅对内部标记的 JSON/schema 损坏进入配置恢复页；其他 I/O、迁移和初始化错误继续按原错误传播。
 
 ## Windows 发布包
 
-- `Terminal-Agent-Setup-3.0.0.exe`
+- `Terminal-Agent-Setup-3.1.1.exe`
 - `putty.exe`
+- `quick-install.cmd`
 - `quick-start.pdf`
 
 ---
