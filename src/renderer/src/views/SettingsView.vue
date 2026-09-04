@@ -11,7 +11,7 @@ import { SETTINGS_TABS, type SettingsTabId } from './settings-tabs'
 
 const props = withDefaults(defineProps<{ initialTab?: SettingsTabId; lockNavigation?: boolean }>(), { lockNavigation: false })
 const emit = defineEmits<{ close: [] }>()
-const tab = ref<SettingsTabId>(props.initialTab ?? 'routing')
+const tab = ref<SettingsTabId>(props.lockNavigation ? 'sso' : props.initialTab ?? 'routing')
 const tabIcons = { routing: BrainCircuit, llm: Bot, vlm: Eye, fence: Braces, memory: Database, appearance: Palette, sso: KeyRound }
 const modelProfileManager = ref<{ clearTransientKeyForSettingsClose(): void } | null>(null)
 
@@ -22,7 +22,7 @@ function closeSettings(): void {
   }
 }
 
-watch(() => props.initialTab, value => { if (value) tab.value = value })
+watch([() => props.initialTab, () => props.lockNavigation], ([value, locked]) => { tab.value = locked ? 'sso' : value ?? 'routing' })
 </script>
 
 <template>

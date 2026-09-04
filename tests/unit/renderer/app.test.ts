@@ -1,19 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { canOpenSkills, resolveRootSurface } from '../../../src/renderer/src/sso-login-controller'
 
 describe('renderer auth gate', () => {
   it('maps every SSO state to one root surface and protects skills navigation', () => {
-    const source = readFileSync(new URL('../../../src/renderer/src/App.vue', import.meta.url), 'utf8')
-
-    for (const state of ['configuration-required', 'login-required', 'authenticating', 'authenticated', 'login-disabled', 'error']) {
-      expect(source).toContain(state)
-    }
-    expect(source).toContain('getSsoStore()')
-    expect(source).toContain('<LoginView')
-    expect(source).toContain('initial-tab="sso"')
-    expect(source).toContain(':lock-navigation="true"')
-    expect(source).toContain('skillsAvailable')
-    expect(source).toContain('return')
+    expect(resolveRootSurface('configuration-required')).toBe('configuration')
+    for (const state of ['login-required', 'authenticating', 'error'] as const) expect(resolveRootSurface(state)).toBe('login')
+    for (const state of ['authenticated', 'login-disabled'] as const) expect(resolveRootSurface(state)).toBe('workbench')
+    expect(canOpenSkills('authenticated')).toBe(true)
+    expect(canOpenSkills('login-disabled')).toBe(false)
   })
 
   it('keeps locked settings back navigation inert and includes user-facing login errors', () => {
@@ -22,7 +17,7 @@ describe('renderer auth gate', () => {
 
     expect(settings).toContain('lockNavigation')
     expect(settings).toContain('!props.lockNavigation')
-    expect(login).toContain('登录窗口已关闭')
-    expect(login).toContain('role="alert"')
+    expect(login).toContain('<SsoSettings')
+    expect(login).toContain('返回登录页')
   })
 })

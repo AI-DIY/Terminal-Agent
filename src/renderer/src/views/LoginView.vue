@@ -1,35 +1,34 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import SsoSettings from '../components/settings/SsoSettings.vue'
 import { getSsoStore } from '../stores/sso'
+import { loginErrorCopy, loginStatusCopy, shouldRetryOnMount } from '../sso-login-controller'
 
 const emit = defineEmits<{ openSettings: [] }>()
 const sso = getSsoStore()
 const retrying = ref(false)
 const retryError = ref('')
+const settingsOpen = ref(false)
+function openSettings(): void { settingsOpen.value = true; emit('openSettings') }
 const displayError = computed(() => {
   if (retryError.value) return retryError.value
   const message = sso.error.value
   if (!message) return ''
-  if (/closed|window/i.test(message)) return '登录窗口已关闭'
-  return `登录失败：${message.slice(0, 240)}`
+  return loginErrorCopy(message)
 })
-const status = computed(() => {
-  if (sso.state.state === 'authenticating') return '等待平台加载用户信息'
-  if (sso.state.state === 'login-required') return '正在打开登录页'
-  return ''
-})
+const status = computed(() => loginStatusCopy(sso.state.state))
 
 async function retry(): Promise<void> {
   retrying.value = true
   retryError.value = ''
-  try { await sso.retry() } catch (error) { retryError.value = error instanceof Error ? `登录失败：${error.message.slice(0, 240)}` : '登录失败，请重试' } finally { retrying.value = false }
+  try { await sso.retry() } catch (error) { retryError.value = error instanceof Error ? loginErrorCopy(error.message) : '登录失败，请重试' } finally { retrying.value = false }
 }
 
-onMounted(() => { if (sso.state.state === 'login-required') void retry() })
+onMounted(() => { if (shouldRetryOnMount(sso.state.state)) void retry() })
 </script>
 
 <template>
-  <main class="login-view" aria-labelledby="login-title"><section class="login-panel"><h1 id="login-title">需要登录</h1><p v-if="status" aria-live="polite">{{ status }}</p><p v-if="sso.state.state === 'error' && !displayError" role="alert">登录失败，请重试</p><p v-if="displayError" class="error" role="alert">{{ displayError }}</p><div class="actions"><button type="button" :disabled="retrying" @click="retry">重试</button><button type="button" @click="emit('openSettings')">打开单点登录设置</button></div></section></main>
+  <main class="login-view" aria-labelledby="login-title"><section v-if="!settingsOpen" class="login-panel"><h1 id="login-title">需要登录</h1><p v-if="status" aria-live="polite">{{ status }}</p><p v-if="sso.state.state === 'error' && !displayError" role="alert">登录失败，请重试</p><p v-if="displayError" class="error" role="alert">{{ displayError }}</p><div class="actions"><button type="button" :disabled="retrying" @click="retry">重试</button><button type="button" @click="openSettings">打开单点登录设置</button></div></section><section v-else class="login-settings"><button type="button" class="back-login" @click="settingsOpen = false">返回登录页</button><SsoSettings @continue="settingsOpen = false" @workbench="settingsOpen = false" /></section></main>
 </template>
 
 <style scoped>

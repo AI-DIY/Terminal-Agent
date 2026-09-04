@@ -313,8 +313,10 @@ function safeCaptureError(error: unknown): string {
 }
 
 function configurationSnapshot(configService: Pick<ConfigPort, 'isComplete'>, configuration: SsoConfiguration | undefined): SsoAuthSnapshot {
-  if (!configuration || !configService.isComplete(configuration)) return { state: 'configuration-required' }
-  return { state: configuration.enabled ? 'login-required' : 'login-disabled' }
+  if (!configuration) return { state: 'configuration-required' }
+  if (!configuration.enabled) return { state: 'login-disabled' }
+  if (!configService.isComplete(configuration)) return { state: 'configuration-required' }
+  return { state: 'login-required' }
 }
 
 function navigationDetails(value: unknown): { url: string; isMainFrame: boolean } | undefined {

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { parseSsoFieldPath } from '../../../../main/sso/sso-field-path'
-import { normalizeSsoUrl, validateSsoMatcher } from '../../../../main/sso/sso-url-matcher'
 import { getSsoStore } from '../../stores/sso'
-import type { SsoConfiguration, SsoUrlMatcher } from '../../../../shared/sso-contracts'
+import type { SsoConfiguration } from '../../../../shared/sso-contracts'
+import { getSsoDraftErrors, isDisabledWorkbenchReady, isEnabledContinueReady } from '../../sso-settings-model'
 
 const emit = defineEmits<{ continue: []; workbench: [] }>()
 const store = getSsoStore()
@@ -15,48 +14,24 @@ const draft = reactive<SsoConfiguration>({
   employeeIdField: store.config.employeeIdField,
   nameField: store.config.nameField,
 })
-const errors = reactive<Record<string, string>>({})
 const saving = ref(false)
 const notice = ref('')
 const platformExact = computed(() => draft.platformUrlMatcher.mode === 'exact')
 const userInfoExact = computed(() => draft.userInfoUrlMatcher.mode === 'exact')
-
-function validateUrl(value: string, key: string): void {
-  if (!value.trim()) { delete errors[key]; return }
-  try { normalizeSsoUrl(value); delete errors[key] } catch (error) { errors[key] = error instanceof Error ? error.message : 'URL 格式无效' }
-}
-
-function validateMatcher(matcher: SsoUrlMatcher, key: string): void {
-  if (!matcher.value.trim()) { delete errors[key]; return }
-  try { validateSsoMatcher(matcher); delete errors[key] } catch (error) { errors[key] = error instanceof Error ? error.message : '匹配规则无效' }
-}
-
-function validatePath(value: string, key: string): void {
-  if (!value.trim()) { delete errors[key]; return }
-  try { parseSsoFieldPath(value); delete errors[key] } catch (error) { errors[key] = error instanceof Error ? error.message : 'Object Path 格式无效' }
-}
-
-function validateAll(): void {
-  validateUrl(draft.loginPageUrl, 'loginPageUrl')
-  validateMatcher(draft.platformUrlMatcher, 'platformUrlMatcher')
-  validateMatcher(draft.userInfoUrlMatcher, 'userInfoUrlMatcher')
-  validatePath(draft.employeeIdField, 'employeeIdField')
-  validatePath(draft.nameField, 'nameField')
-}
-
-const formatsValid = computed(() => Object.keys(errors).length === 0)
-const completeEnabled = computed(() => draft.enabled && formatsValid.value && Boolean(draft.loginPageUrl.trim() && draft.platformUrlMatcher.value.trim() && draft.userInfoUrlMatcher.value.trim() && draft.employeeIdField.trim() && draft.nameField.trim()))
+const errors = computed(() => getSsoDraftErrors(draft))
+const formatsValid = computed(() => Object.keys(errors.value).length === 0)
+const continueReady = computed(() => isEnabledContinueReady(draft))
+const workbenchReady = computed(() => isDisabledWorkbenchReady(draft))
 
 async function save(kind: 'draft' | 'continue' | 'workbench'): Promise<void> {
-  validateAll()
   if (!formatsValid.value) return
   saving.value = true
   notice.value = ''
   try {
     await store.saveConfig({ ...draft, platformUrlMatcher: { ...draft.platformUrlMatcher }, userInfoUrlMatcher: { ...draft.userInfoUrlMatcher } })
     notice.value = '配置已保存'
-    if (kind === 'continue' && completeEnabled.value) emit('continue')
-    if (kind === 'workbench' && completeEnabled.value) emit('workbench')
+    if (kind === 'continue' && continueReady.value) emit('continue')
+    if (kind === 'workbench' && workbenchReady.value) emit('workbench')
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '配置保存失败'
   } finally { saving.value = false }
@@ -70,11 +45,11 @@ onMounted(() => { void store.initialize().then(() => Object.assign(draft, store.
     <header class="panel-head"><div><h2 id="sso-title">单点登录</h2><p>配置登录门控与平台用户信息读取规则。</p></div><span class="save-state" role="status">{{ notice }}</span></header>
     <label class="toggle-row"><input v-model="draft.enabled" type="checkbox"><span>启用单点登录门控</span></label>
     <p v-if="!draft.enabled" class="warning" role="note">关闭登录门控后，应用将以未登录状态运行，内置技能不可使用。</p>
-    <label class="field"><span>登录页 URL</span><input v-model="draft.loginPageUrl" type="url" placeholder="https://login.example.com" @input="validateUrl(draft.loginPageUrl, 'loginPageUrl')"><small v-if="errors.loginPageUrl" class="error">{{ errors.loginPageUrl }}</small></label>
-    <div class="matcher"><label class="field"><span>平台 URL 匹配方式</span><select v-model="draft.platformUrlMatcher.mode" :data-mode="platformExact ? 'exact' : 'regex'" @change="validateMatcher(draft.platformUrlMatcher, 'platformUrlMatcher')"><option value="exact">精确匹配</option><option value="regex">正则匹配</option></select></label><label class="field"><span>平台 URL / 正则</span><input v-model="draft.platformUrlMatcher.value" type="text" placeholder="https://platform.example.com" @input="validateMatcher(draft.platformUrlMatcher, 'platformUrlMatcher')"><small class="hint">Exact URL 或正则表达式</small><small v-if="errors.platformUrlMatcher" class="error">{{ errors.platformUrlMatcher }}</small></label></div>
-    <div class="matcher"><label class="field"><span>用户信息接口 URL 匹配方式</span><select v-model="draft.userInfoUrlMatcher.mode" :data-mode="userInfoExact ? 'exact' : 'regex'" @change="validateMatcher(draft.userInfoUrlMatcher, 'userInfoUrlMatcher')"><option value="exact">精确匹配</option><option value="regex">正则匹配</option></select></label><label class="field"><span>用户信息接口 URL / 正则</span><input v-model="draft.userInfoUrlMatcher.value" type="text" placeholder="https://platform.example.com/api/me" @input="validateMatcher(draft.userInfoUrlMatcher, 'userInfoUrlMatcher')"><small class="hint">Exact URL 或正则表达式</small><small v-if="errors.userInfoUrlMatcher" class="error">{{ errors.userInfoUrlMatcher }}</small></label></div>
-    <div class="matcher"><label class="field"><span>工号字段路径</span><input v-model="draft.employeeIdField" type="text" placeholder="data.employeeId" @input="validatePath(draft.employeeIdField, 'employeeIdField')"><small class="hint">Object Path 示例：data.employeeId、data.user[0].id</small><small v-if="errors.employeeIdField" class="error">{{ errors.employeeIdField }}</small></label><label class="field"><span>姓名字段路径</span><input v-model="draft.nameField" type="text" placeholder="data.name" @input="validatePath(draft.nameField, 'nameField')"><small class="hint">Object Path 示例：data.name、$.user['displayName']</small><small v-if="errors.nameField" class="error">{{ errors.nameField }}</small></label></div>
-    <footer class="actions"><button type="button" :disabled="saving || !formatsValid" @click="save('draft')">保存草稿</button><button type="button" :disabled="saving || !completeEnabled" @click="save('continue')">保存并继续</button><button type="button" :disabled="saving || !completeEnabled" @click="save('workbench')">保存并进入工作台</button></footer>
+    <label class="field"><span>登录页 URL</span><input v-model="draft.loginPageUrl" type="url" placeholder="https://login.example.com"><small v-if="errors.loginPageUrl" class="error">{{ errors.loginPageUrl }}</small></label>
+    <div class="matcher"><label class="field"><span>平台 URL 匹配方式</span><select v-model="draft.platformUrlMatcher.mode" :data-mode="platformExact ? 'exact' : 'regex'"><option value="exact">精确匹配</option><option value="regex">正则匹配</option></select></label><label class="field"><span>平台 URL / 正则</span><input v-model="draft.platformUrlMatcher.value" type="text" placeholder="https://platform.example.com"><small class="hint">Exact URL 或正则表达式</small><small v-if="errors.platformUrlMatcher" class="error">{{ errors.platformUrlMatcher }}</small></label></div>
+    <div class="matcher"><label class="field"><span>用户信息接口 URL 匹配方式</span><select v-model="draft.userInfoUrlMatcher.mode" :data-mode="userInfoExact ? 'exact' : 'regex'"><option value="exact">精确匹配</option><option value="regex">正则匹配</option></select></label><label class="field"><span>用户信息接口 URL / 正则</span><input v-model="draft.userInfoUrlMatcher.value" type="text" placeholder="https://platform.example.com/api/me"><small class="hint">Exact URL 或正则表达式</small><small v-if="errors.userInfoUrlMatcher" class="error">{{ errors.userInfoUrlMatcher }}</small></label></div>
+    <div class="matcher"><label class="field"><span>工号字段路径</span><input v-model="draft.employeeIdField" type="text" placeholder="data.employeeId"><small class="hint">Object Path 示例：data.employeeId、data.user[0].id</small><small v-if="errors.employeeIdField" class="error">{{ errors.employeeIdField }}</small></label><label class="field"><span>姓名字段路径</span><input v-model="draft.nameField" type="text" placeholder="data.name"><small class="hint">Object Path 示例：data.name、$.user['displayName']</small><small v-if="errors.nameField" class="error">{{ errors.nameField }}</small></label></div>
+    <footer class="actions"><button type="button" :disabled="saving || !formatsValid" @click="save('draft')">保存草稿</button><button type="button" :disabled="saving || !continueReady" @click="save('continue')">保存并继续</button><button type="button" :disabled="saving || !workbenchReady" @click="save('workbench')">保存并进入工作台</button></footer>
   </section>
 </template>
 

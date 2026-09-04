@@ -78,6 +78,21 @@ function createService() {
 afterEach(() => { vi.useRealTimers(); electron.windows.splice(0) })
 
 describe('SsoAuthenticationService', () => {
+  it('enters login-disabled when the gate is disabled even if optional fields are blank', async () => {
+    const { service, configPort } = createService()
+    configPort.get.mockResolvedValueOnce({
+      enabled: false,
+      loginPageUrl: '',
+      platformUrlMatcher: { mode: 'exact', value: '' },
+      userInfoUrlMatcher: { mode: 'exact', value: '' },
+      employeeIdField: '',
+      nameField: '',
+    })
+    configPort.isComplete.mockReturnValueOnce(false)
+
+    await expect(service.initialize()).resolves.toEqual({ state: 'login-disabled' })
+  })
+
   it('starts in configuration-required when configuration is incomplete', async () => {
     const { service, configPort } = createService()
     configPort.get.mockResolvedValueOnce({ ...config, loginPageUrl: '' })
