@@ -109,6 +109,43 @@ describe('Windows release artifact finalizer', () => {
     }
   })
 
+  it('copies the Markdown guide and its screenshots while ignoring legacy PDF assets', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
+    const version = '1.0.8'
+    const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
+    const installerPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe`)
+    const blockmapPath = join(projectRoot, 'release', `Terminal-Agent-Setup-${version}.exe.blockmap`)
+    const cleanupArchivePath = join(projectRoot, 'release', `Terminal-Agent-Uninstall-Cleanup-${version}.zip`)
+    const quickInstallSourcePath = join(projectRoot, 'quick-install.cmd')
+    const guidePath = join(projectRoot, '快速安装手册.md')
+    const firstImagePath = join(projectRoot, 'docs', 'images', 'quickstart', '06-select-global-putty.png')
+    const secondImagePath = join(projectRoot, 'docs', 'images', 'quickstart', '07-launch-bastion.png')
+
+    try {
+      await mkdir(dirname(packagedBridgePath), { recursive: true })
+      await mkdir(dirname(firstImagePath), { recursive: true })
+      await writeFile(packagedBridgePath, 'packaged bridge')
+      await writeFile(installerPath, 'installer payload')
+      await writeFile(blockmapPath, 'blockmap payload')
+      await writeFile(cleanupArchivePath, 'cleanup archive payload')
+      await writeFile(quickInstallSourcePath, '@echo off\r\n')
+      await writeFile(guidePath, 'guide')
+      await writeFile(firstImagePath, 'session image')
+      await writeFile(secondImagePath, 'bastion image')
+      await writeFile(join(projectRoot, 'release', '快速安装手册.pdf'), 'legacy pdf')
+
+      await finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version })
+
+      await expect(readFile(join(projectRoot, 'release', '快速安装手册.md'), 'utf8')).resolves.toBe('guide')
+      await expect(readFile(join(projectRoot, 'release', 'docs', 'images', 'quickstart', '06-select-global-putty.png'), 'utf8')).resolves.toBe('session image')
+      await expect(readFile(join(projectRoot, 'release', 'docs', 'images', 'quickstart', '07-launch-bastion.png'), 'utf8')).resolves.toBe('bastion image')
+      await expect(readFile(join(projectRoot, 'release', '快速安装手册.pdf'))).rejects.toThrow()
+    }
+    finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
   it('requires the quick installer before publishing a Windows release', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
     const version = '1.0.8'

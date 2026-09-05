@@ -41,6 +41,10 @@ class FakeWindow extends EventEmitter {
     removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => this.removeListener(`webContents:${event}`, listener)),
   }
   readonly loadURL = vi.fn(async (url: string) => { void url })
+  readonly show = vi.fn(() => { this.visible = true })
+  readonly hide = vi.fn(() => { this.visible = false })
+  readonly focus = vi.fn()
+  visible = false
   vetoClose = false
   destroyed = false
   readonly close = vi.fn(() => {
@@ -176,7 +180,7 @@ describe('SsoAuthenticationService', () => {
     firstCapture.rejectResponse(new Error('Unable to continue SSO sign-in'))
     await vi.waitFor(() => expect(service.getState().state).toBe('error'))
 
-    await expect(service.saveConfiguration(config, 'continue')).resolves.toEqual({ state: 'authenticating' })
+    await expect(service.saveConfiguration(config, 'continue')).resolves.toEqual({ state: 'login-required' })
 
     expect(createWindow).toHaveBeenCalledTimes(2)
     expect(secondWindow.loadURL.mock.calls).toEqual([
@@ -212,11 +216,73 @@ describe('SsoAuthenticationService', () => {
     const { service, capture, window } = createService()
     await service.initialize()
     await service.retry()
+    expect(service.getState()).toEqual({ state: 'login-required' })
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.focus).toHaveBeenCalledOnce()
+    expect(window.hide).not.toHaveBeenCalled()
     const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate-in-page')?.[1] as ((event: unknown, url: string, isMainFrame: boolean) => void)
     navigation({}, 'https://platform.example/home', true)
     expect(service.getState()).toEqual({ state: 'authenticating' })
+    expect(window.hide).toHaveBeenCalledOnce()
     capture.resolveResponse({ name: '李四', employeeId: 'E-2' })
     await vi.waitFor(() => expect(service.getState()).toEqual({ state: 'authenticated', identity: { name: '李四', employeeId: 'E-2' } }))
+  })
+
+  it('keeps the identity-provider login page actionable until a matching platform navigation', async () => {
+    const { service, capture, window } = createService()
+    await service.initialize()
+    await service.retry()
+
+    expect(window.visible).toBe(true)
+    expect(service.getState()).toEqual({ state: 'login-required' })
+    expect(window.hide).not.toHaveBeenCalled()
+
+    const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate')?.[1] as ((event: unknown, url: string) => void)
+    navigation({}, 'https://identity.example/login?step=credentials')
+    expect(service.getState()).toEqual({ state: 'login-required' })
+    expect(window.visible).toBe(true)
+    expect(window.hide).not.toHaveBeenCalled()
+
+    navigation({}, config.platformUrlMatcher.value)
+    expect(service.getState()).toEqual({ state: 'authenticating' })
+    expect(window.hide).toHaveBeenCalledOnce()
+    expect(window.visible).toBe(false)
+
+    capture.resolveResponse({ name: '登录用户', employeeId: 'E-LOGIN' })
+    await vi.waitFor(() => expect(service.getState()).toEqual({ state: 'authenticated', identity: { name: '登录用户', employeeId: 'E-LOGIN' } }))
+  })
+
+  it('continues response capture when hiding a destroyed login window throws', async () => {
+    const { service, capture, window } = createService()
+    await service.initialize()
+    await service.retry()
+    window.hide.mockImplementation(() => { throw new Error('Object has been destroyed') })
+
+    const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate')?.[1] as ((event: unknown, url: string) => void)
+    navigation({}, config.platformUrlMatcher.value)
+
+    expect(service.getState()).toEqual({ state: 'authenticating' })
+    expect(capture.notifyNavigation).toHaveBeenCalledWith(config.platformUrlMatcher.value)
+  })
+
+  it('switches to authenticating only after a platform URL prefix is observed', async () => {
+    const { service, capture, window, configPort } = createService()
+    const prefixConfig = {
+      ...config,
+      platformUrlMatcher: { mode: 'prefix' as const, value: 'https://platform.example/home' },
+    }
+    configPort.get.mockResolvedValue(prefixConfig)
+    await service.initialize()
+    await service.retry()
+
+    const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate')?.[1] as ((event: unknown, url: string) => void)
+    navigation({}, 'https://platform.example/home/dashboard?tenant=one')
+    expect(service.getState()).toEqual({ state: 'authenticating' })
+    expect(window.hide).toHaveBeenCalledOnce()
+    expect(capture.notifyNavigation).toHaveBeenCalledWith('https://platform.example/home/dashboard?tenant=one')
+
+    await service.dispose()
+    expect(service.getState()).toEqual({ state: 'login-required' })
   })
 
   it('requires platform navigation and identity before publishing authenticated state', async () => {
@@ -225,7 +291,7 @@ describe('SsoAuthenticationService', () => {
     await service.retry()
     capture.resolveResponse({ name: '张三', employeeId: 'E-1' })
     await Promise.resolve()
-    expect(service.getState().state).toBe('authenticating')
+    expect(service.getState().state).toBe('login-required')
     const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate')?.[1] as ((event: unknown, url: string) => void)
     navigation?.({}, 'https://platform.example/home')
     expect(capture.notifyNavigation).toHaveBeenCalledWith('https://platform.example/home')
@@ -240,7 +306,7 @@ describe('SsoAuthenticationService', () => {
     willNavigate?.({ url: 'https://platform.example/home', isMainFrame: true })
     capture.resolveResponse({ name: 'Attempt', employeeId: 'E-ATTEMPT' })
     await Promise.resolve()
-    expect(service.getState().state).toBe('authenticating')
+    expect(service.getState().state).toBe('login-required')
 
     const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate')?.[1] as ((event: unknown, url: string) => void)
     navigation({}, 'https://platform.example/home')
@@ -252,7 +318,7 @@ describe('SsoAuthenticationService', () => {
     await service.initialize()
     await service.retry()
     capture.resolveResponse({ name: '直接捕获', employeeId: 'E-DIRECT' })
-    expect(service.getState().state).toBe('authenticating')
+    expect(service.getState().state).toBe('login-required')
     capture.notifyNavigation('https://platform.example/home')
     await vi.waitFor(() => expect(service.getState()).toEqual({ state: 'authenticated', identity: { name: '直接捕获', employeeId: 'E-DIRECT' } }))
   })
@@ -300,6 +366,36 @@ describe('SsoAuthenticationService', () => {
       'ready',
       `loadURL:${config.loginPageUrl}`,
     ])
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.focus).toHaveBeenCalledOnce()
+  })
+
+  it('does not reveal the authentication window until the configured login page has loaded', async () => {
+    const { service, capture, window } = createService()
+    let releaseLogin!: () => void
+    const loginLoaded = new Promise<void>(resolve => { releaseLogin = resolve })
+    window.loadURL.mockImplementation(async (url: string) => {
+      if (url === config.loginPageUrl) await loginLoaded
+    })
+
+    await service.initialize()
+    const retrying = service.retry()
+    await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledWith(config.loginPageUrl))
+
+    expect(service.getState()).toEqual({ state: 'login-required' })
+    expect(window.visible).toBe(false)
+    expect(window.show).not.toHaveBeenCalled()
+    expect(window.focus).not.toHaveBeenCalled()
+
+    releaseLogin()
+    await retrying
+
+    expect(service.getState()).toEqual({ state: 'login-required' })
+    expect(window.visible).toBe(true)
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.focus).toHaveBeenCalledOnce()
+    await service.dispose()
+    expect(capture.dispose).toHaveBeenCalledOnce()
   })
 
   it('does not start capture or load the remote login page after cancellation during local priming', async () => {
@@ -417,6 +513,22 @@ describe('SsoAuthenticationService', () => {
     })
   })
 
+  it('prefers a later window close over an earlier debugger connection failure', async () => {
+    const { service, capture, window } = createService()
+    await service.initialize()
+    await service.retry()
+
+    capture.rejectResponse(new Error('SSO sign-in connection closed'))
+    await new Promise<void>(resolve => setImmediate(resolve))
+    window.destroyed = true
+    window.emit('closed')
+
+    await vi.waitFor(() => expect(service.getState()).toEqual({
+      state: 'error',
+      errorMessage: 'SSO sign-in window closed',
+    }))
+  })
+
   it('maps an equivalent live-window navigation failure to the generic safe error', async () => {
     const { service, window } = createService()
     let wasLiveAtFailure = false
@@ -467,7 +579,7 @@ describe('SsoAuthenticationService', () => {
     capture.resolveResponse({ name: 'Old', employeeId: 'OLD' })
     capture.notifyNavigation('https://platform.example/home')
     await old.catch(() => undefined)
-    expect(service.getState()).toEqual({ state: 'error', errorMessage: 'SSO sign-in cancelled' })
+    expect(service.getState()).toEqual({ state: 'login-required' })
     expect(configPort.save).toHaveBeenCalledOnce()
   })
 
@@ -498,7 +610,7 @@ describe('SsoAuthenticationService', () => {
     const retrying = service.retry()
     await Promise.resolve()
     expect(createWindow).toHaveBeenCalledOnce()
-    expect(service.getState().state).toBe('authenticating')
+    expect(service.getState().state).toBe('login-required')
     releaseSave({ ...config, enabled: false })
     await Promise.all([saving, retrying])
 
@@ -593,9 +705,12 @@ describe('SsoAuthenticationService', () => {
   })
 
   it('returns an interrupted authentication attempt to login-required on dispose', async () => {
-    const { service } = createService()
+    const { service, window } = createService()
     await service.initialize()
     await service.retry()
+    expect(service.getState()).toEqual({ state: 'login-required' })
+    const navigation = window.webContents.on.mock.calls.find(([event]) => event === 'did-navigate')?.[1] as ((event: unknown, url: string) => void)
+    navigation({}, config.platformUrlMatcher.value)
     expect(service.getState()).toEqual({ state: 'authenticating' })
     await service.dispose()
     expect(service.getState()).toEqual({ state: 'login-required' })
@@ -658,6 +773,7 @@ describe('SsoAuthenticationService', () => {
     await service.retry()
     expect(electron.windows).toHaveLength(2)
     const preferences = electron.windows.map(window => window.options.webPreferences as Record<string, unknown>)
+    expect(electron.windows[0]?.options).toMatchObject({ show: false })
     expect(preferences[0]).toMatchObject({ contextIsolation: true, nodeIntegration: false, sandbox: true })
     expect(preferences[0]).not.toHaveProperty('preload')
     expect(preferences[0]?.partition).toMatch(/^sso-auth-/)

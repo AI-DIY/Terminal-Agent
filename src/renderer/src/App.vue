@@ -44,9 +44,12 @@ watch(rootSurface, surface => {
   <SettingsView v-else-if="rootSurface === 'configuration'" initial-tab="sso" :lock-navigation="true" />
   <LoginView v-else-if="rootSurface === 'login'" />
   <template v-else-if="rootSurface === 'workbench'">
+    <!-- Keep the authenticated workbench mounted while secondary surfaces are open.
+         SSH panes own live xterm buffers, so replacing this component would lose
+         the terminal's current output and scrollback on every settings visit. -->
+    <WorkbenchView v-show="!settingsOpen && !skillsOpen" @show-settings="openSettings" @show-skills="openSkills" />
     <SettingsView v-if="settingsOpen" @close="closeSettings" />
-    <SkillsView v-else-if="skillsOpen" @close="closeSkills" />
-    <WorkbenchView v-else @show-settings="openSettings" @show-skills="openSkills" />
+    <SkillsView v-if="skillsOpen" @close="closeSkills" />
   </template>
 </template>
 

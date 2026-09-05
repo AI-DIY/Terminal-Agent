@@ -1145,8 +1145,6 @@ onBeforeUnmount(() => {
               :loading="bastionLoading"
               :error="bastionError"
               @direct-connect="connect"
-              @bastion-launch="launchBastion"
-              @system-change="loadBastionHosts"
               @save-profile="saveEditedProfile"
               @select-private-key="selectPrivateKey"
             />
@@ -1181,8 +1179,6 @@ onBeforeUnmount(() => {
           :error="bastionError"
           :editing-profile="editingProfile"
           @direct-connect="connect"
-          @bastion-launch="launchBastion"
-          @system-change="loadBastionHosts"
           @save-profile="saveEditedProfile"
           @select-private-key="selectPrivateKey"
           @close="closeConnectionDialog"
@@ -1225,5 +1221,5 @@ onBeforeUnmount(() => {
 .agent-empty p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .connection-error { max-width: min(42vw, 480px); margin: 0; overflow: hidden; color: var(--red); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .diagnostic-error { max-width: min(30vw, 320px); min-width: 0; margin: 0; overflow: hidden; color: var(--red); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.connection-modal { position: fixed; z-index: 10; inset: 57px 9px 9px; display: grid; align-content: center; justify-content: center; padding: 16px; overflow: auto; border-radius: 0 0 7px 7px; background: rgb(20 24 29 / 52%); backdrop-filter: blur(1px); }
+.connection-modal { position: fixed; z-index: 10; inset: 57px 9px 9px; display: grid; align-content: safe center; justify-content: center; padding: 16px; overflow: auto; border-radius: 0 0 7px 7px; background: rgb(20 24 29 / 52%); backdrop-filter: blur(1px); }
 </style>

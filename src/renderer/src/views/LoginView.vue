@@ -24,7 +24,10 @@ async function retry(): Promise<void> {
   try { await sso.retry() } catch (error) { retryError.value = error instanceof Error ? loginErrorCopy(error.message) : '登录失败，请重试' } finally { retrying.value = false }
 }
 
-onMounted(() => { if (shouldRetryOnMount(sso.state.state)) void retry() })
+onMounted(() => {
+  if (sso.consumeAutoRetrySuppression()) return
+  if (shouldRetryOnMount(sso.state.state)) void retry()
+})
 </script>
 
 <template>
@@ -46,7 +49,7 @@ onMounted(() => { if (shouldRetryOnMount(sso.state.state)) void retry() })
         <div class="actions"><button type="button" :disabled="retrying" @click="retry">重试</button><button type="button" @click="openSettings">打开单点登录设置</button></div>
       </template>
     </section>
-    <section v-else class="login-settings"><button type="button" class="back-login" @click="settingsOpen = false">返回登录页</button><SsoSettings @continue="settingsOpen = false" @workbench="settingsOpen = false" /></section>
+    <section v-else class="login-settings"><button type="button" class="back-login" @click="settingsOpen = false">返回登录页</button><SsoSettings embedded-login @continue="settingsOpen = false" @workbench="settingsOpen = false" /></section>
   </main>
 </template>
 

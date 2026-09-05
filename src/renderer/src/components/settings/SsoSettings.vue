@@ -5,6 +5,7 @@ import type { SsoConfiguration } from '../../../../shared/sso-contracts'
 import { getSsoDraftErrors, isDisabledWorkbenchReady, isEnabledContinueReady } from '../../sso-settings-model'
 
 const emit = defineEmits<{ continue: []; workbench: [] }>()
+const props = withDefaults(defineProps<{ embeddedLogin?: boolean }>(), { embeddedLogin: false })
 const store = getSsoStore()
 const draft = reactive<SsoConfiguration>({
   enabled: store.config.enabled,
@@ -16,8 +17,8 @@ const draft = reactive<SsoConfiguration>({
 })
 const saving = ref(false)
 const notice = ref('')
-const platformExact = computed(() => draft.platformUrlMatcher.mode === 'exact')
-const userInfoExact = computed(() => draft.userInfoUrlMatcher.mode === 'exact')
+const platformMatcherMode = computed(() => draft.platformUrlMatcher.mode)
+const userInfoMatcherMode = computed(() => draft.userInfoUrlMatcher.mode)
 const errors = computed(() => getSsoDraftErrors(draft))
 const formatsValid = computed(() => Object.keys(errors.value).length === 0)
 const continueReady = computed(() => isEnabledContinueReady(draft))
@@ -29,6 +30,7 @@ async function save(kind: 'draft' | 'continue' | 'workbench'): Promise<void> {
   notice.value = ''
   try {
     await store.saveConfig({ ...draft, platformUrlMatcher: { ...draft.platformUrlMatcher }, userInfoUrlMatcher: { ...draft.userInfoUrlMatcher } }, kind)
+    if (kind === 'continue' && props.embeddedLogin) store.consumeAutoRetrySuppression()
     notice.value = '配置已保存'
     if (kind === 'continue' && continueReady.value) emit('continue')
     if (kind === 'workbench' && workbenchReady.value) emit('workbench')
@@ -46,8 +48,8 @@ onMounted(() => { void store.initialize().then(() => Object.assign(draft, store.
     <label class="toggle-row"><input v-model="draft.enabled" type="checkbox"><span>启用单点登录门控</span></label>
     <p v-if="!draft.enabled" class="warning" role="note">关闭登录门控后，应用将以未登录状态运行，内置技能不可使用。</p>
     <label class="field"><span>登录页 URL</span><input v-model="draft.loginPageUrl" type="url" placeholder="https://login.example.com"><small v-if="errors.loginPageUrl" class="error">{{ errors.loginPageUrl }}</small></label>
-    <div class="matcher"><label class="field"><span>平台 URL 匹配方式</span><select v-model="draft.platformUrlMatcher.mode" :data-mode="platformExact ? 'exact' : 'regex'"><option value="exact">精确匹配</option><option value="regex">正则匹配</option></select></label><label class="field"><span>平台 URL / 正则</span><input v-model="draft.platformUrlMatcher.value" type="text" placeholder="https://platform.example.com"><small class="hint">Exact URL 或正则表达式</small><small v-if="errors.platformUrlMatcher" class="error">{{ errors.platformUrlMatcher }}</small></label></div>
-    <div class="matcher"><label class="field"><span>用户信息接口 URL 匹配方式</span><select v-model="draft.userInfoUrlMatcher.mode" :data-mode="userInfoExact ? 'exact' : 'regex'"><option value="exact">精确匹配</option><option value="regex">正则匹配</option></select></label><label class="field"><span>用户信息接口 URL / 正则</span><input v-model="draft.userInfoUrlMatcher.value" type="text" placeholder="https://platform.example.com/api/me"><small class="hint">Exact URL 或正则表达式</small><small v-if="errors.userInfoUrlMatcher" class="error">{{ errors.userInfoUrlMatcher }}</small></label></div>
+    <div class="matcher"><label class="field"><span>平台 URL 匹配方式</span><select v-model="draft.platformUrlMatcher.mode" :data-mode="platformMatcherMode"><option value="exact">精确匹配</option><option value="prefix">前缀匹配</option><option value="regex">正则匹配</option></select></label><label class="field"><span>平台 URL / 正则（含前缀）</span><input v-model="draft.platformUrlMatcher.value" type="text" placeholder="https://platform.example.com"><small class="hint">精确 URL、URL 前缀或正则表达式</small><small v-if="errors.platformUrlMatcher" class="error">{{ errors.platformUrlMatcher }}</small></label></div>
+    <div class="matcher"><label class="field"><span>用户信息接口 URL 匹配方式</span><select v-model="draft.userInfoUrlMatcher.mode" :data-mode="userInfoMatcherMode"><option value="exact">精确匹配</option><option value="prefix">前缀匹配</option><option value="regex">正则匹配</option></select></label><label class="field"><span>用户信息接口 URL / 正则（含前缀）</span><input v-model="draft.userInfoUrlMatcher.value" type="text" placeholder="https://platform.example.com/api/me"><small class="hint">精确 URL、URL 前缀或正则表达式</small><small v-if="errors.userInfoUrlMatcher" class="error">{{ errors.userInfoUrlMatcher }}</small></label></div>
     <div class="matcher"><label class="field"><span>工号字段路径</span><input v-model="draft.employeeIdField" type="text" placeholder="data.employeeId"><small class="hint">Object Path 示例：data.employeeId、data.user[0].id</small><small v-if="errors.employeeIdField" class="error">{{ errors.employeeIdField }}</small></label><label class="field"><span>姓名字段路径</span><input v-model="draft.nameField" type="text" placeholder="data.name"><small class="hint">Object Path 示例：data.name、$.user['displayName']</small><small v-if="errors.nameField" class="error">{{ errors.nameField }}</small></label></div>
     <footer class="actions"><button type="button" :disabled="saving || !formatsValid" @click="save('draft')">保存草稿</button><button type="button" :disabled="saving || !continueReady" @click="save('continue')">保存并继续</button><button type="button" :disabled="saving || !workbenchReady" @click="save('workbench')">保存并进入工作台</button></footer>
   </section>

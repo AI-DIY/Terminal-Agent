@@ -1054,6 +1054,7 @@ test('captures WebContents layouts across persisted themes with native-control s
       for (const theme of [
         { id: 'pearl', control: '珍珠白' },
         { id: 'graphite', control: '石墨黑' },
+        { id: 'noble-purple', control: '高贵紫' },
       ] as const) {
         const continuingDraft = `切换设置后继续保留的聊天草稿 ${theme.id} ${viewport.width}`
         await globalChatInput.fill(continuingDraft)
@@ -1063,7 +1064,11 @@ test('captures WebContents layouts across persisted themes with native-control s
         await page.mouse.click(settingsButtonBox.x + settingsButtonBox.width / 2, settingsButtonBox.y + settingsButtonBox.height / 2)
         await expect(page.locator('.settings')).toBeVisible()
         await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '外观', exact: true }).click()
-        await page.getByRole('group', { name: '工作台主题', exact: true }).getByRole('button', { name: theme.control }).click()
+        const themeGroup = page.getByRole('group', { name: '工作台主题', exact: true })
+        await expect(themeGroup.getByRole('button')).toHaveCount(3)
+        const themeColumns = await themeGroup.evaluate(node => getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/).length)
+        expect(themeColumns).toBe(3)
+        await themeGroup.getByRole('button', { name: theme.control }).click()
         await expect(page.getByRole('status')).toContainText('外观已保存')
         await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({ theme: theme.id })
 
@@ -1179,7 +1184,7 @@ test('removes per-terminal maximize and defaults to a full-height SSH row', asyn
   }
 })
 
-test('shows embedded SSH connection modes with bastion host default and hides CMDB', async ({ launchApp }) => {
+test('shows the unified direct SSH connection modes without legacy bastion controls', async ({ launchApp }) => {
   let app: ElectronApplication | undefined
 
   try {
@@ -1187,12 +1192,16 @@ test('shows embedded SSH connection modes with bastion host default and hides CM
     const page = await app.firstWindow()
 
     await expect(page.getByRole('tab', { name: '堡垒机 CMDB 唤起', exact: true })).toHaveCount(0)
-    const bastionHostTab = page.getByRole('tab', { name: '堡垒机SSH连接', exact: true })
-    await expect(bastionHostTab).toBeVisible()
-    await expect(bastionHostTab).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('tab', { name: '堡垒机SSH连接', exact: true })).toHaveCount(0)
     await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
     await expect(page.getByRole('tab', { name: '主机私钥连接', exact: true })).toBeVisible()
-    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toBeVisible()
+    await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '唤起终端', exact: true })).toHaveCount(0)
+    await expect(page.getByText('【配置须知】', { exact: true })).toBeVisible()
+    await expect(page.getByText('【使用须知】', { exact: true })).toBeVisible()
+    await expect(page.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toBeVisible()
+    await expect(page.getByAltText('集团堡垒机正常指定主机 SSH 连接', { exact: true })).toBeVisible()
     await expect(page.getByText('未配置堡垒机目录来源。', { exact: true })).toHaveCount(0)
   } finally {
     await app?.close()
@@ -1216,6 +1225,11 @@ test('opens the unified launcher over an existing terminal without unmounting it
     await expect(dialog).toBeVisible()
     await expect(dialog.getByText('【配置须知】', { exact: true })).toBeVisible()
     await expect(dialog.getByText('【使用须知】', { exact: true })).toBeVisible()
+    await expect(dialog.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toBeVisible()
+    await expect(dialog.getByAltText('集团堡垒机正常指定主机 SSH 连接', { exact: true })).toBeVisible()
+    await expect(dialog.getByRole('tab', { name: '堡垒机SSH连接', exact: true })).toHaveCount(0)
+    await expect(dialog.getByLabel('堡垒机主机地址', { exact: true })).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: '唤起终端', exact: true })).toHaveCount(0)
     expect(await originalPane.evaluate(node => node.isConnected)).toBe(true)
     await dialog.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true }).click()
     await expect(dialog.getByLabel('主机地址')).toBeVisible()
@@ -1355,13 +1369,12 @@ test('keeps focus inside and restores focus from the unified connection dialog',
     await openButton.click()
     const dialog = page.getByRole('dialog', { name: '新建 SSH 连接', exact: true })
     const closeButton = dialog.getByRole('button', { name: '关闭新建 SSH 连接', exact: true })
-    await expect(dialog.getByRole('tab', { name: '堡垒机SSH连接', exact: true })).toBeFocused()
+    await expect(dialog.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeFocused()
     await closeButton.focus()
     await page.keyboard.press('Shift+Tab')
-    // The active bastion form is now the first visible mode, so the dialog's
-    // focus trap wraps to its final actionable control rather than the
-    // roving-tabindex entries for inactive modes.
-    await expect(dialog.getByRole('button', { name: '唤起终端', exact: true })).toBeFocused()
+    // The direct password form is the only active mode, so the dialog's focus
+    // trap wraps from the close button to its final actionable control.
+    await expect(dialog.getByRole('button', { name: '连接', exact: true })).toBeFocused()
     await closeButton.click()
     await expect(openButton).toBeFocused()
   } finally {
@@ -1400,38 +1413,17 @@ test('renders two real SSH sessions in separate terminal panes with isolated out
   }
 })
 
-test('host memory settings expose the four scope controls', async ({ launchApp }) => {
+test('temporarily hides host-memory settings while retaining the compatibility API', async ({ launchApp }) => {
   let app: ElectronApplication | undefined
   try {
     app = (await launchApp()).app
     const page = await app.firstWindow()
     await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '本地主机记忆', exact: true }).click()
-    await expect(page.getByRole('heading', { name: '本地主机记忆' })).toBeVisible()
-    await expect(page.getByLabel('启用本地主机记忆')).toBeVisible()
-    for (const label of [
-      '主机名、连接 IP、操作系统和基础版本',
-      'CPU、内存、磁盘、网络等基础信息',
-      '运行进程名称、PID 和进程工作目录',
-      '当前用户、工作目录和常用服务状态',
-    ]) await expect(page.getByLabel(label)).toBeVisible()
+    await expect(page.getByRole('button', { name: '本地主机记忆', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: '本地主机记忆', exact: true })).toHaveCount(0)
+    const memorySettings = await page.evaluate(() => window.terminalAgent.settings.memory.get())
+    expect(memorySettings).toMatchObject({ enabled: false })
   } finally { await app?.close() }
-})
-
-test('memory disclosure controls keep the workbench terminal mount intact', async ({ launchApp }) => {
-  const sshServer = await startSshServer()
-  let app: ElectronApplication | undefined
-  try {
-    app = (await launchApp()).app
-    const page = await app.firstWindow()
-    await connect(page, sshServer.port)
-    const pane = page.locator('[data-testid^="terminal-pane-"]').first()
-    await expect(pane).toBeVisible()
-    await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '本地主机记忆', exact: true }).click()
-    await page.getByRole('button', { name: '返回工作台', exact: true }).click()
-    await expect(pane).toBeVisible()
-  } finally { await app?.close(); await closeServer(sshServer.server) }
 })
 
 test('renders a structured Ollama reply and restores it after reload', async ({ launchApp }) => {
@@ -1696,12 +1688,11 @@ test('acknowledging host memory resumes observation for the open SSH session', a
   try {
     app = (await launchApp()).app
     const page = await app.firstWindow()
-    await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '本地主机记忆', exact: true }).click()
-    await page.getByLabel('启用本地主机记忆').check()
-    await page.waitForTimeout(250)
+    await page.evaluate(async () => window.terminalAgent.settings.memory.save({
+      enabled: true,
+      scopes: { identity: true, hardware: true, processes: true, runtime: true },
+    }))
     await expect.poll(async () => await page.evaluate(() => window.terminalAgent.settings.memory.get())).toMatchObject({ enabled: true })
-    await page.getByRole('button', { name: '返回工作台', exact: true }).click()
 
     await connect(page, sshServer.port)
     const disclosure = page.getByRole('dialog', { name: '允许本地主机记忆？', exact: true })
@@ -1711,37 +1702,25 @@ test('acknowledging host memory resumes observation for the open SSH session', a
     await page.getByRole('button', { name: '我已知道', exact: true }).click()
     await expect(page.getByRole('heading', { name: '允许本地主机记忆？', exact: true })).toHaveCount(0)
 
-    await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '本地主机记忆', exact: true }).click()
-    await page.getByRole('button', { name: '刷新主机记忆', exact: true }).click()
-    const rememberedHosts = page.getByRole('list', { name: '已记忆主机' })
-    await expect(rememberedHosts.getByText('api-prod', { exact: true })).toBeVisible({ timeout: 15000 })
-    await expect(rememberedHosts.getByText('身份 3 项；硬件 4 项；进程 1 项；运行环境 3 项', { exact: true })).toBeVisible()
-    await rememberedHosts.getByRole('button', { name: '查看缓存', exact: true }).click()
-    for (const label of ['连接 IP', 'CPU 型号', '进程 PID', '当前用户']) {
-      await expect(rememberedHosts.getByText(label, { exact: true })).toBeVisible()
-    }
-    await expect(rememberedHosts.getByText('Example CPU', { exact: true })).toBeVisible()
-    await expect(rememberedHosts.getByText('appuser', { exact: true })).toBeVisible()
-    await rememberedHosts.getByRole('button', { name: '编辑', exact: true }).click()
-    const editor = rememberedHosts.getByRole('form', { name: '编辑主机记忆' })
-    await editor.getByLabel('当前用户', { exact: true }).fill('deployuser')
-    await editor.getByRole('button', { name: '保存', exact: true }).click()
-    await expect(editor).toHaveCount(0)
-    await expect(rememberedHosts.getByText('deployuser', { exact: true })).toBeVisible()
-    const clear = page.getByRole('button', { name: '清除', exact: true })
-    await clear.focus()
-    await clear.click()
-    const clearDialog = page.getByRole('dialog', { name: '确认清除主机记忆', exact: true })
-    await expect(clearDialog).toBeVisible()
-    await expect(page.getByRole('button', { name: '确认清除', exact: true })).toBeFocused()
-    await page.keyboard.press('Tab')
-    await expect(page.getByRole('button', { name: '取消', exact: true })).toBeFocused()
-    await page.keyboard.press('Tab')
-    await expect(page.getByRole('button', { name: '确认清除', exact: true })).toBeFocused()
-    await page.keyboard.press('Escape')
-    await expect(clearDialog).toHaveCount(0)
-    await expect(clear).toBeFocused()
+    await expect.poll(async () => page.evaluate(async () => (
+      await window.terminalAgent.settings.memory.list()
+    ).find(record => record.hostname === 'api-prod'))).toMatchObject({
+      hostname: 'api-prod',
+      connectionIp: '127.0.0.1',
+      operatingSystem: { name: 'Linux', version: '6.1.0' },
+      cpu: { model: 'Example CPU', logicalCores: 8 },
+      currentUser: 'appuser',
+    })
+    const record = await page.evaluate(async () => (
+      await window.terminalAgent.settings.memory.list()
+    ).find(item => item.hostname === 'api-prod'))
+    if (!record) throw new Error('Expected host memory record after acknowledgement')
+    const updated = await page.evaluate(async value => (
+      window.terminalAgent.settings.memory.update(value.hostname, { ...value, currentUser: 'deployuser' })
+    ), record)
+    expect(updated.currentUser).toBe('deployuser')
+    await page.evaluate(() => window.terminalAgent.settings.memory.remove('api-prod'))
+    await expect.poll(async () => page.evaluate(() => window.terminalAgent.settings.memory.getHost('api-prod'))).toBeNull()
   } finally { await app?.close(); await closeServer(sshServer.server) }
 })
 
@@ -1755,32 +1734,22 @@ test('clearing acknowledged host memory persists removal and requires fresh SSH 
     app = launch.app
     const initialApp = launch.app
     const page = await app.firstWindow()
-    await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '本地主机记忆', exact: true }).click()
-    await page.getByLabel('启用本地主机记忆').check()
+    await page.evaluate(async () => window.terminalAgent.settings.memory.save({
+      enabled: true,
+      scopes: { identity: true, hardware: true, processes: true, runtime: true },
+    }))
     await expect.poll(async () => await page.evaluate(() => window.terminalAgent.settings.memory.get())).toMatchObject({ enabled: true })
-    await page.getByRole('button', { name: '返回工作台', exact: true }).click()
 
     await connect(page, sshServer.port)
     const disclosure = page.getByRole('dialog', { name: '允许本地主机记忆？', exact: true })
     await expect(disclosure).toBeVisible()
     await page.getByRole('button', { name: '我已知道', exact: true }).click()
 
-    await page.getByRole('button', { name: '设置', exact: true }).click()
-    await page.getByRole('button', { name: '本地主机记忆', exact: true }).click()
-    await page.getByRole('button', { name: '刷新主机记忆', exact: true }).click()
-    const rememberedHosts = page.getByRole('list', { name: '已记忆主机' })
-    await expect(rememberedHosts.getByText('api-prod', { exact: true })).toBeVisible({ timeout: 15_000 })
-    await rememberedHosts.getByRole('button', { name: '清除', exact: true }).click()
-    const clearDialog = page.getByRole('dialog', { name: '确认清除主机记忆', exact: true })
-    await expect(clearDialog).toBeVisible()
-    await page.getByRole('button', { name: '确认清除', exact: true }).click()
-    await expect(clearDialog).toHaveCount(0)
-    await expect(rememberedHosts.getByText('api-prod', { exact: true })).toHaveCount(0)
+    await expect.poll(async () => page.evaluate(() => window.terminalAgent.settings.memory.getHost('api-prod'))).toMatchObject({ hostname: 'api-prod' })
+    await page.evaluate(() => window.terminalAgent.settings.memory.remove('api-prod'))
     await expect.poll(async () => await page.evaluate(() => window.terminalAgent.settings.memory.getHost('api-prod'))).toBeNull()
 
     await test.step('closes the cleared SSH session before restart', async () => {
-      await page.getByRole('button', { name: '返回工作台', exact: true }).click()
       await page.getByRole('button', { name: '关闭 SSH 会话 127.0.0.1', exact: true }).click()
       await expect(page.locator('[data-testid^="terminal-pane-"]')).toHaveCount(0)
     }, { timeout: 10_000 })
@@ -1831,14 +1800,22 @@ test('restores an existing SSH terminal after visiting settings and returning to
     if (!originalPaneId) throw new Error('Expected the connected SSH terminal pane')
     await expect(panes).toHaveCount(1)
     await expect(panes.first()).toContainText('ready')
+    await sendCommand(panes.first(), page, 'before-settings')
+    await expect(panes.first()).toContainText('echo:before-settings')
+    const originalPane = await panes.first().elementHandle()
+    if (!originalPane) throw new Error('Expected the connected SSH terminal pane element')
 
     await page.getByRole('button', { name: '设置', exact: true }).click()
     await expect(page.getByRole('heading', { name: '设置' })).toBeVisible()
+    await expect(panes).toHaveCount(1)
+    await expect(panes.first()).toBeHidden()
+    expect(await originalPane.evaluate(node => node.isConnected)).toBe(true)
     await page.getByRole('button', { name: '返回工作台', exact: true }).click()
 
     await expect(panes).toHaveCount(1)
     await expect(panes.first()).toBeVisible()
     expect(await panes.first().getAttribute('data-testid')).toBe(originalPaneId)
+    await expect(panes.first()).toContainText('echo:before-settings')
     await sendCommand(panes.first(), page, 'after-settings')
     await expect(panes.first()).toContainText('echo:after-settings')
   } finally {

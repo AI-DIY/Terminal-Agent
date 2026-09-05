@@ -7,6 +7,8 @@ describe('login view', () => {
     const source = readFileSync(new URL('../../../src/renderer/src/views/LoginView.vue', import.meta.url), 'utf8')
 
     expect(source).toContain('sso.retry()')
+    expect(source).toContain('consumeAutoRetrySuppression')
+    expect(source).toContain('embedded-login')
     expect(source).toContain('openSettings')
     expect(source).toContain('sso.state.state === \'authenticating\'')
     expect(source).toContain('登录进行中')

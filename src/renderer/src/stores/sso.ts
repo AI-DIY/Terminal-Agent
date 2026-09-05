@@ -25,6 +25,7 @@ export function createSsoStore(api: SsoApi) {
   let lifecycleRevision = 0
   let snapshotRevision = 0
   let configurationRevision = 0
+  let suppressNextAutoRetry = false
 
   function applyConfiguration(input: SsoConfiguration): void {
     Object.assign(config, ssoConfigurationSchema.parse(input))
@@ -70,11 +71,25 @@ export function createSsoStore(api: SsoApi) {
   }
 
   async function saveConfig(input: SsoConfiguration, intent: SsoSaveIntent = 'draft'): Promise<SsoConfiguration> {
-    const saved = await api.saveConfig(ssoConfigurationSchema.parse(input), intent)
-    configurationRevision += 1
-    applyConfiguration(saved)
-    clearIdentity()
-    return ssoConfigurationSchema.parse(saved)
+    const parsedInput = ssoConfigurationSchema.parse(input)
+    // `continue` starts authentication in the main process before the IPC
+    // call resolves. Arm this before awaiting it so LoginView cannot race the
+    // first state event and launch a duplicate session on mount.
+    // A continue save from the configuration/workbench surfaces changes the
+    // root view to LoginView, whose mount hook normally retries authentication.
+    // Embedded LoginView settings stay mounted, so leave no stale token there.
+    const suppressMountRetry = intent === 'continue' && shouldSuppressAutoRetry(state.state)
+    if (suppressMountRetry) suppressNextAutoRetry = true
+    try {
+      const saved = await api.saveConfig(parsedInput, intent)
+      configurationRevision += 1
+      applyConfiguration(saved)
+      clearIdentity()
+      return ssoConfigurationSchema.parse(saved)
+    } catch (error) {
+      if (suppressMountRetry) suppressNextAutoRetry = false
+      throw error
+    }
   }
 
   async function retry(): Promise<void> {
@@ -83,12 +98,23 @@ export function createSsoStore(api: SsoApi) {
 
   function dispose(): void {
     lifecycleRevision += 1
+    suppressNextAutoRetry = false
     unsubscribe?.()
     unsubscribe = undefined
     initializeOperation = undefined
   }
 
-  return { state, config, identity, error, skillsAvailable, initialize, saveConfig, retry, dispose }
+  function consumeAutoRetrySuppression(): boolean {
+    const suppressed = suppressNextAutoRetry
+    suppressNextAutoRetry = false
+    return suppressed
+  }
+
+  return { state, config, identity, error, skillsAvailable, initialize, saveConfig, retry, consumeAutoRetrySuppression, dispose }
+}
+
+function shouldSuppressAutoRetry(state: SsoAuthSnapshot['state']): boolean {
+  return state === 'configuration-required' || state === 'login-disabled' || state === 'authenticated'
 }
 
 let sharedStore: SsoStore | undefined

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bot, Check, ChevronDown, ChevronUp, CircleAlert, History, MessageSquarePlus, PanelRightClose, Plus, Send, Square, UserRound, X } from '@lucide/vue'
+import { Bot, Check, ChevronDown, ChevronUp, CircleAlert, History, MessageSquarePlus, PanelRightClose, Plus, Send, Square, Trash2, UserRound, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { ChatConversationSessionSummary, ChatProgressStage, ChatWorkspace } from '../../../../shared/contracts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../stores/global-chat'
@@ -389,6 +389,17 @@ async function editStep(messageId: string, stepId: string, command: string): Pro
     throw error
   }
 }
+async function removeStep(messageId: string, stepId: string): Promise<void> {
+  const actionChatId = chatId.value
+  if (!actionChatId || props.sessionBusy) return
+  actionErrors[actionChatId] = ''
+  try {
+    await store.removePlanStep(actionChatId, messageId, stepId)
+    delete stepDrafts[stepDraftKey(messageId, stepId)]
+  } catch (error) {
+    reportActionError(actionChatId, error, '计划更新失败')
+  }
+}
 async function cancelPlan(messageId: string): Promise<void> {
   const actionChatId = chatId.value
   if (!actionChatId || props.sessionBusy) return
@@ -400,10 +411,9 @@ async function executePlan(messageId: string): Promise<void> {
   if (!actionChatId || props.sessionBusy) return
   actionErrors[actionChatId] = ''
   try {
-    // The per-step save/delete controls were intentionally removed from the
-    // compact review card.  Persist the current textarea values immediately
-    // before execution so the command sent by the main process is always the
-    // command the user can see and edit in the input area.
+    // Persist the current textarea values immediately before the single plan
+    // confirmation so the command sent by the main process is the command the
+    // user can see and edit in the review card.
     const message = messages.value.find(item => item.id === messageId)
     const plan = message?.executionPlan
     if (plan?.status === 'pending_review') {
@@ -473,14 +483,19 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
           <section v-if="message.role === 'user' && message.id === runUserMessageId && progress" class="progress-item message-progress" role="status" aria-live="polite"><CircleAlert :size="14" aria-hidden="true" /><span>{{ progressLabel(progress) }}</span><span class="progress-dots" aria-hidden="true">...</span></section>
           <section v-if="message.executionPlan" class="execution-plan" :data-status="message.executionPlan.status">
             <header class="plan-head"><div><strong>{{ message.executionPlan.title }}</strong><span>{{ message.executionPlan.steps.length }} 步 · {{ planStatusLabel(message.executionPlan.status) }}</span></div><span class="plan-badge">{{ planStatusLabel(message.executionPlan.status) }}</span></header>
-            <div v-for="step in message.executionPlan.steps" :key="step.id" class="plan-step">
+            <p v-if="message.executionPlan.steps.length === 0" class="plan-empty">计划已取消，未执行任何命令。</p>
+             <div v-for="step in message.executionPlan.steps" :key="step.id" class="plan-step" :data-plan-step="step.id">
                <div class="plan-step-head"><strong>{{ planTargetLabel(step.target) }}</strong><span>{{ step.sendState }}</span></div>
                <p>{{ step.explanation }}</p>
                <div v-if="step.fence" class="plan-risk"><CircleAlert :size="12" aria-hidden="true" /><span>安全围栏：{{ step.fence.ruleName }}（{{ step.fence.ruleId }}）</span></div>
-               <label v-if="message.executionPlan.status === 'pending_review'" class="plan-command plan-command-editor"><span>执行命令（可编辑）</span><textarea class="plan-edit-input" rows="2" :disabled="sessionBusy" :value="stepDraftValue(message.id, step.id, step)" :aria-label="`编辑 ${planTargetLabel(step.target)} 命令`" @input="setStepDraft(message.id, step.id, $event)" /></label>
-               <label v-else class="plan-command"><span>执行命令</span><code>{{ stepCommand(step) }}</code></label>
+               <label class="plan-command"><span>原始命令</span><code>{{ step.originalCommand }}</code></label>
+               <label v-if="message.executionPlan.status === 'pending_review'" class="plan-command plan-command-editor"><span>修改后命令（可编辑）</span><textarea class="plan-edit-input" rows="2" :disabled="sessionBusy" :value="stepDraftValue(message.id, step.id, step)" :aria-label="`编辑 ${planTargetLabel(step.target)} 命令`" @input="setStepDraft(message.id, step.id, $event)" /></label>
+               <label v-else class="plan-command"><span>修改后命令</span><code>{{ stepCommand(step) }}</code></label>
+               <div v-if="message.executionPlan.status === 'pending_review'" class="plan-step-actions">
+                 <button type="button" class="icon-button" :disabled="sessionBusy" aria-label="删除命令" :title="message.executionPlan.steps.length <= 1 ? '删除后将取消计划' : `删除 ${planTargetLabel(step.target)} 步骤`" @click="removeStep(message.id, step.id)"><Trash2 :size="13" aria-hidden="true" /></button>
+               </div>
             </div>
-            <footer v-if="message.executionPlan.status === 'pending_review'" class="plan-actions">
+            <footer v-if="message.executionPlan.status === 'pending_review' && message.executionPlan.steps.length > 0" class="plan-actions">
                <button type="button" class="secondary-action" :disabled="sessionBusy" @click="cancelPlan(message.id)"><X :size="13" aria-hidden="true" />取消计划</button>
                <button type="button" class="primary-action" :disabled="sessionBusy" @click="executePlan(message.id)"><Send :size="13" aria-hidden="true" />确认并执行 {{ message.executionPlan.steps.length }} 步</button>
             </footer>
@@ -526,7 +541,7 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 .visually-hidden-alert,.visually-hidden-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .progress-item { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 10px; }.message-progress { margin-top: 9px; }.progress-item svg { color: var(--accent); }.progress-dots { letter-spacing: 2px; color: var(--accent); }
 .message { display: grid; grid-template-columns: 29px minmax(0, 1fr); align-items: start; gap: 8px; min-width: 0; padding: 8px 0; }.message-avatar { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); }.message.assistant .message-avatar { border-color: var(--text-strong); background: var(--text-strong); color: var(--surface); }.message-content { position: relative; min-width: 0; max-width: 100%; padding: 10px 11px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow-wrap: anywhere; }.message.assistant .message-content::before { position: absolute; top: 10px; bottom: 10px; left: -1px; width: 2px; border-radius: 0 2px 2px 0; background: var(--accent); content: ""; }.message.user { grid-template-columns: minmax(0, 1fr) 29px; padding-left: 38px; }.message.user .message-avatar { grid-column: 2; grid-row: 1; background: var(--panel); color: var(--text-strong); }.message.user .message-content { grid-column: 1; grid-row: 1; background: var(--surface-soft); }.message-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }.message-meta strong { color: var(--text-strong); font-size: 10px; }.message.assistant .message-meta strong { color: var(--accent); }.message-meta span { margin-left: auto; }.message p { margin: 0; color: var(--text); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }.message.audit .message-content { border-color: var(--amber-line); background: var(--amber-soft); }.message.audit .message-avatar { color: var(--amber); }
-.execution-plan { display: grid; gap: 8px; margin-top: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }.plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); }.plan-head > div { display: grid; gap: 3px; min-width: 0; }.plan-head strong { color: var(--text-strong); font-size: 11px; overflow-wrap: anywhere; }.plan-head span { color: var(--muted); font-size: 9px; }.plan-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent) !important; font-weight: 650; }.plan-step { display: grid; gap: 5px; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }.plan-step:last-of-type { border-bottom: 0; }.plan-step-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; }.plan-step-head strong { color: var(--text-strong); font-size: 10px; }.plan-step-head span { color: var(--muted); font-size: 9px; }.plan-step p { color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-risk { display: flex; align-items: flex-start; gap: 5px; color: var(--amber); font-size: 9px; line-height: 1.45; }.plan-risk svg { flex: 0 0 auto; margin-top: 1px; }.plan-command { display: grid; gap: 3px; min-width: 0; }.plan-command span { color: var(--faint); font-size: 8px; }.plan-command code { display: block; min-width: 0; overflow: auto; padding: 5px 6px; border: 1px solid var(--line-soft); background: var(--surface-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-step-actions,.plan-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }.plan-step-actions { margin-top: 2px; }.plan-edit-input { min-width: 0; flex: 1; height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; }.icon-button,.secondary-action,.primary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; white-space: nowrap; }.icon-button { width: 27px; padding: 0; }.icon-button:hover,.secondary-action:hover { border-color: var(--focus); color: var(--text-strong); }.primary-action { border-color: var(--accent); background: var(--accent); color: #fff; }.plan-actions { justify-content: flex-end; padding-top: 2px; }.plan-edit-input:disabled,.icon-button:disabled,.plan-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.execution-plan { display: grid; gap: 8px; margin-top: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }.plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); }.plan-head > div { display: grid; gap: 3px; min-width: 0; }.plan-head strong { color: var(--text-strong); font-size: 11px; overflow-wrap: anywhere; }.plan-head span { color: var(--muted); font-size: 9px; }.plan-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent) !important; font-weight: 650; }.plan-empty { margin: 2px 0; color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-step { display: grid; gap: 5px; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }.plan-step:last-of-type { border-bottom: 0; }.plan-step-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; }.plan-step-head strong { color: var(--text-strong); font-size: 10px; }.plan-step-head span { color: var(--muted); font-size: 9px; }.plan-step p { color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-risk { display: flex; align-items: flex-start; gap: 5px; color: var(--amber); font-size: 9px; line-height: 1.45; }.plan-risk svg { flex: 0 0 auto; margin-top: 1px; }.plan-command { display: grid; gap: 3px; min-width: 0; }.plan-command span { color: var(--faint); font-size: 8px; }.plan-command code { display: block; min-width: 0; overflow: auto; padding: 5px 6px; border: 1px solid var(--line-soft); background: var(--surface-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-step-actions,.plan-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }.plan-step-actions { margin-top: 2px; }.plan-edit-input { min-width: 0; flex: 1; height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; }.icon-button,.secondary-action,.primary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; white-space: nowrap; }.icon-button { width: 27px; padding: 0; }.icon-button:hover,.secondary-action:hover { border-color: var(--focus); color: var(--text-strong); }.primary-action { border-color: var(--accent); background: var(--accent); color: #fff; }.plan-actions { justify-content: flex-end; padding-top: 2px; }.plan-edit-input:disabled,.icon-button:disabled,.plan-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .empty { display: grid; justify-items: center; gap: 6px; padding: 34px 18px; color: var(--muted); text-align: center; }.empty strong { color: var(--text-strong); font-size: 12px; }.empty span { max-width: 270px; font-size: 10px; line-height: 1.55; }
 .plan-command-editor { gap: 4px; }
 .plan-command-editor .plan-edit-input { display: block; width: 100%; min-width: 0; min-height: 44px; height: auto; padding: 7px; resize: vertical; font: 9px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }

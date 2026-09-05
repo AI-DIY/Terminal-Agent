@@ -433,6 +433,21 @@ describe('global chat store', () => {
     expect(panel).not.toContain('个在线 SSH')
   })
 
+  it('keeps original commands visible and exposes per-step edit/delete actions before one-step confirmation', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+    const executePlan = panel.slice(panel.indexOf('async function executePlan'), panel.indexOf('onMounted(()'))
+
+    expect(panel).toContain('<span>原始命令</span>')
+    expect(panel).toContain('<span>修改后命令（可编辑）</span>')
+    expect(panel).toContain('aria-label="删除命令"')
+    expect(panel).toContain('@click="removeStep(message.id, step.id)"')
+    expect(executePlan).toContain('for (const step of plan.steps)')
+    expect(executePlan).toContain('await editStep(messageId, step.id, command)')
+    expect(executePlan).toContain('await store.executePlan(actionChatId, messageId)')
+    expect(executePlan.indexOf('await store.executePlan')).toBeGreaterThan(executePlan.indexOf('await editStep'))
+    expect(executePlan).not.toContain('window.confirm')
+  })
+
   it('passes selected SSH connections and enabled skills with sends and compaction', async () => {
     const transport = { ...api(), compact: vi.fn(async () => ({
       revision: 1,

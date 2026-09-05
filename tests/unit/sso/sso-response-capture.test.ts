@@ -97,6 +97,52 @@ describe('SsoResponseCapture', () => {
     await expect(result).resolves.toEqual({ name: 'Li Si', employeeId: 'E-2' })
   })
 
+  it('uses prefix matchers for both platform navigation and naturally captured user-info responses', async () => {
+    const window = new FakeAuthWindow()
+    const configuration = {
+      ...completeConfig(),
+      platformUrlMatcher: { mode: 'prefix' as const, value: 'https://platform.example/app' },
+      userInfoUrlMatcher: { mode: 'prefix' as const, value: 'https://platform.example/api/v2/user' },
+    }
+    const capture = new SsoResponseCapture(window, configuration)
+    const result = capture.start()
+
+    window.response('prefix-user', 'https://platform.example/api/v2/userinfo?request=natural')
+    window.debugger.bodies.set('prefix-user', {
+      body: JSON.stringify({ data: { em: [{ name: 'Prefix User', employeeId: 'E-PREFIX' }] } }),
+      base64Encoded: false,
+    })
+    window.loadingFinished('prefix-user')
+    await flush()
+    capture.notifyNavigation('https://platform.example/app/home?tenant=one')
+
+    await expect(result).resolves.toEqual({ name: 'Prefix User', employeeId: 'E-PREFIX' })
+  })
+
+  it('ignores non-http navigation and resource responses instead of aborting the session', async () => {
+    const window = new FakeAuthWindow()
+    const capture = new SsoResponseCapture(window, completeConfig())
+    const result = capture.start()
+
+    // Chromium can report about:blank/chrome-error navigations and data/blob
+    // resources alongside the remote login page. They are not SSO evidence.
+    capture.notifyNavigation('about:blank')
+    capture.notifyNavigation('chrome-error://chromewebdata/')
+    window.response('data-resource', 'data:text/javascript,console.log(1)')
+    window.loadingFinished('data-resource')
+    await flush()
+
+    window.response('valid', 'https://platform.example/api/userinfo')
+    window.debugger.bodies.set('valid', {
+      body: JSON.stringify({ data: { em: [{ name: 'Non HTTP Safe', employeeId: 'E-safe' }] } }),
+      base64Encoded: false,
+    })
+    window.loadingFinished('valid')
+    capture.notifyNavigation('https://platform.example/home')
+
+    await expect(result).resolves.toEqual({ name: 'Non HTTP Safe', employeeId: 'E-safe' })
+  })
+
   it('continues after malformed or incomplete matching candidates', async () => {
     const window = new FakeAuthWindow()
     const capture = new SsoResponseCapture(window, completeConfig())

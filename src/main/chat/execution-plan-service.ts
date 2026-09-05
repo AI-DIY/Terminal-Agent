@@ -9,6 +9,10 @@ type Chats = { get(chatId: string): Promise<{ chat: { messages: Array<{ id: stri
 
 export class ExecutionPlanService {
   private readonly active = new Set<string>()
+  // Every plan mutation and execution reads a fresh message snapshot. Keep
+  // those reads and writes in one per-message queue so an older snapshot can
+  // never overwrite a newer edit/removal.
+  private readonly operationTails = new Map<string, Promise<void>>()
   constructor(private readonly chats: Chats, private readonly sessions: Sessions, private readonly fence: FenceMatcher, private readonly createId = () => crypto.randomUUID()) {}
 
   materialize(plan: NonNullable<AssistantPlanOutput['plan']>): ChatExecutionPlan {
@@ -18,36 +22,78 @@ export class ExecutionPlanService {
     }) }
   }
 
-  async editStep(request: ChatPlanEditStepRequest): Promise<unknown> { return this.mutate(request, plan => { const step = plan.steps.find(item => item.id === request.stepId); if (!step || plan.status !== 'pending_review') throw new Error('计划不可编辑'); step.finalCommand = request.command; return plan }) }
-  async removeStep(request: ChatPlanRemoveStepRequest): Promise<unknown> { return this.mutate(request, plan => { if (plan.status !== 'pending_review') throw new Error('计划不可删除'); if (plan.steps.length <= 1) throw new Error('计划至少保留一个步骤'); plan.steps = plan.steps.filter(item => item.id !== request.stepId); return plan }) }
-  async cancel(request: ChatPlanCancelRequest): Promise<unknown> { return this.mutate(request, plan => { if (plan.status !== 'pending_review') throw new Error('计划不可取消'); plan.status = 'cancelled'; return plan }) }
+  async editStep(request: ChatPlanEditStepRequest): Promise<unknown> {
+    return this.enqueue(request.messageId, () => this.mutate(request, plan => {
+      const step = plan.steps.find(item => item.id === request.stepId)
+      if (!step || plan.status !== 'pending_review') throw new Error('计划不可编辑')
+      step.finalCommand = request.command
+      return plan
+    }))
+  }
+  async removeStep(request: ChatPlanRemoveStepRequest): Promise<unknown> {
+    return this.enqueue(request.messageId, () => this.mutate(request, plan => {
+      if (plan.status !== 'pending_review') throw new Error('计划不可删除')
+      const index = plan.steps.findIndex(item => item.id === request.stepId)
+      if (index < 0) throw new Error('计划不可删除')
+      if (plan.steps.length === 1) {
+        // Keep a cancelled plan record for the conversation audit trail, but
+        // remove its command payload so the deleted host can never be shown or
+        // executed again.
+        plan.steps = []
+        plan.status = 'cancelled'
+        return plan
+      }
+      plan.steps.splice(index, 1)
+      return plan
+    }))
+  }
+  async cancel(request: ChatPlanCancelRequest): Promise<unknown> {
+    return this.enqueue(request.messageId, () => this.mutate(request, plan => {
+      if (plan.status !== 'pending_review') throw new Error('计划不可取消')
+      plan.status = 'cancelled'
+      return plan
+    }))
+  }
 
   async execute(request: ChatPlanExecuteRequest): Promise<unknown> {
     if (this.active.has(request.messageId)) throw new Error('计划正在执行')
     this.active.add(request.messageId)
-    try {
-      const current = await this.requirePlan(request)
-      if (current.status !== 'pending_review') throw new Error('计划不可执行')
-      const workspace = await this.chats.get(request.chatId)
-      const online = this.sessions.snapshot()
-      const steps = current.steps.map(step => ({ ...step, sessionId: findSessionForTarget(step.target, workspace.chat.shells, online) }))
-      current.status = 'executing'; current.steps = steps
-      await this.save(request, current, 'executing')
-      let sent = 0
-      for (const step of current.steps) {
-        if (!step.sessionId) { step.sendState = 'failed'; step.failure = '目标 Shell 已断开或不可用'; break }
-        try { await this.sessions.write(step.sessionId, `${step.finalCommand ?? step.originalCommand}\n`); step.sendState = 'sent'; sent += 1 } catch { step.sendState = 'failed'; step.failure = '命令未能写入目标 Shell'; break }
-      }
-      const failed = current.steps.some(step => step.sendState === 'failed')
-      current.steps = current.steps.map((step, index) => index > sent && step.sendState === 'pending' ? { ...step, sendState: 'not_sent' } : step)
-      current.status = failed ? (sent > 0 ? 'partially_executed' : 'execution_failed') : 'executed'
-      return this.save(request, current, 'result')
-    } finally { this.active.delete(request.messageId) }
+    return this.enqueue(request.messageId, async () => {
+      try {
+        const current = await this.requirePlan(request)
+        if (current.status !== 'pending_review' || current.steps.length === 0) throw new Error('计划不可执行')
+        const workspace = await this.chats.get(request.chatId)
+        const online = this.sessions.snapshot()
+        const steps = current.steps.map(step => ({ ...step, sessionId: findSessionForTarget(step.target, workspace.chat.shells, online) }))
+        current.status = 'executing'; current.steps = steps
+        await this.save(request, current, 'executing')
+        let sent = 0
+        for (const step of current.steps) {
+          if (!step.sessionId) { step.sendState = 'failed'; step.failure = '目标 Shell 已断开或不可用'; break }
+          try { await this.sessions.write(step.sessionId, `${step.finalCommand ?? step.originalCommand}\n`); step.sendState = 'sent'; sent += 1 } catch { step.sendState = 'failed'; step.failure = '命令未能写入目标 Shell'; break }
+        }
+        const failed = current.steps.some(step => step.sendState === 'failed')
+        current.steps = current.steps.map((step, index) => index > sent && step.sendState === 'pending' ? { ...step, sendState: 'not_sent' } : step)
+        current.status = failed ? (sent > 0 ? 'partially_executed' : 'execution_failed') : 'executed'
+        return this.save(request, current, 'result')
+      } finally { this.active.delete(request.messageId) }
+    })
   }
 
   private async mutate(request: { chatId: string; messageId: string; requestId: string }, change: (plan: ChatExecutionPlan) => ChatExecutionPlan): Promise<unknown> { const plan = await this.requirePlan(request); const next = change(structuredClone(plan)); return this.save(request, next) }
   private async requirePlan(request: { chatId: string; messageId: string }): Promise<ChatExecutionPlan> { const workspace = await this.chats.get(request.chatId); const message = workspace.chat.messages.find(item => item.id === request.messageId); if (!message?.executionPlan || message.role !== 'assistant' || message.state !== 'complete') throw new Error('未知执行计划'); return structuredClone(message.executionPlan) }
   private async save(request: { chatId: string; messageId: string; requestId: string }, plan: ChatExecutionPlan, phase?: 'executing' | 'result'): Promise<unknown> { const workspace = await this.chats.get(request.chatId); const message = workspace.chat.messages.find(item => item.id === request.messageId); if (!message) throw new Error('未知执行计划'); const requestId = phase ? phaseRequestId(request.requestId, phase) : request.requestId; return this.chats.updateMessage({ requestId, chatId: request.chatId, messageId: request.messageId, content: message.content, state: 'complete', executionPlan: plan }) }
+
+  private enqueue<T>(messageId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.operationTails.get(messageId) ?? Promise.resolve()
+    const result = previous.catch(() => undefined).then(operation)
+    const tail = result.then(() => undefined, () => undefined)
+    this.operationTails.set(messageId, tail)
+    void tail.then(() => {
+      if (this.operationTails.get(messageId) === tail) this.operationTails.delete(messageId)
+    })
+    return result
+  }
 }
 
 function findSessionForTarget(

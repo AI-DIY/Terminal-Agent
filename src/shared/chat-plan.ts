@@ -44,7 +44,10 @@ export const chatExecutionPlanSchema = z.object({
   id: chatIdentifierSchema,
   title: z.string().trim().min(1).max(255),
   status: executionPlanStatusSchema,
-  steps: z.array(executionPlanStepSchema).min(1).max(32),
+  // A cancelled plan may intentionally retain an empty step list after the
+  // user removes its final host command. Assistant-generated plans still
+  // require at least one step via assistantPlanOutputSchema above.
+  steps: z.array(executionPlanStepSchema).max(32),
 }).strict()
 export type ChatExecutionPlan = z.infer<typeof chatExecutionPlanSchema>
 

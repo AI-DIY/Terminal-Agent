@@ -53,6 +53,9 @@ describe('execution plans', () => {
       id: 'EP-1', title: '检查服务', status: 'executed',
       steps: [{ id: 'step-1', target: 'web-02', explanation: '查看状态', originalCommand: 'id', sendState: 'sent', extra: true }],
     })).toThrow()
+    expect(chatExecutionPlanSchema.parse({
+      id: 'EP-2', title: '已删除计划', status: 'cancelled', steps: [],
+    })).toMatchObject({ id: 'EP-2', status: 'cancelled', steps: [] })
   })
 
   it('allows only restricted plan edit, remove, cancel and execute requests from the renderer', () => {

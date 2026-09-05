@@ -10,7 +10,7 @@ export function normalizeSsoUrl(value: string): string {
 }
 
 export function validateSsoMatcher(matcher: SsoUrlMatcher): void {
-  if (matcher.mode === 'exact') {
+  if (matcher.mode === 'exact' || matcher.mode === 'prefix') {
     normalizeSsoUrl(matcher.value)
     return
   }
@@ -30,11 +30,29 @@ export function validateSsoMatcher(matcher: SsoUrlMatcher): void {
 
 export function matchesSsoUrl(matcher: SsoUrlMatcher, candidateUrl: string): boolean {
   validateSsoMatcher(matcher)
-  const candidate = parseSsoUrl(candidateUrl)
+  // Browser navigation/network streams also contain internal resources such
+  // as `about:blank`, `data:`, `blob:` and `chrome-error://`. They are normal
+  // non-matches; only the persisted matcher itself must fail closed when
+  // malformed. Keeping this distinction prevents a harmless browser event
+  // from aborting an otherwise valid SSO session.
+  const candidate = tryParseSsoUrl(candidateUrl)
+  if (!candidate) return false
 
   if (matcher.mode === 'exact') return parseSsoUrl(matcher.value).exact === candidate.exact
 
+  if (matcher.mode === 'prefix') {
+    return candidate.full.startsWith(parseSsoUrl(matcher.value).full)
+  }
+
   return new RegExp(matcher.value).test(candidate.full)
+}
+
+function tryParseSsoUrl(value: string): ParsedSsoUrl | undefined {
+  try {
+    return parseSsoUrl(value)
+  } catch {
+    return undefined
+  }
 }
 
 function parseSsoUrl(value: string): ParsedSsoUrl {

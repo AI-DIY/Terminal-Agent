@@ -34,6 +34,13 @@ describe('SSO renderer behavior', () => {
   it('validates hydrated drafts and separates enabled continue from disabled workbench predicates', () => {
     expect(getSsoDraftErrors(complete)).toEqual({})
     expect(isEnabledContinueReady(complete)).toBe(true)
+    const prefixComplete = {
+      ...complete,
+      platformUrlMatcher: { mode: 'prefix' as const, value: 'https://platform.example.test/app' },
+      userInfoUrlMatcher: { mode: 'prefix' as const, value: 'https://platform.example.test/api' },
+    }
+    expect(getSsoDraftErrors(prefixComplete)).toEqual({})
+    expect(isEnabledContinueReady(prefixComplete)).toBe(true)
     expect(isDisabledWorkbenchReady({ ...complete, enabled: false })).toBe(true)
 
     const disabledDraft = createDefaultSsoConfiguration()

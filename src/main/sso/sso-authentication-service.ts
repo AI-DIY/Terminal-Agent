@@ -12,6 +12,7 @@ import {
 } from '../../shared/sso-contracts'
 import type { SsoConfigService } from '../settings/sso-config-service'
 import { SsoResponseCapture } from './sso-response-capture'
+import { matchesSsoUrl } from './sso-url-matcher'
 
 type ConfigPort = Pick<SsoConfigService, 'get' | 'save' | 'isComplete'>
 
@@ -28,6 +29,11 @@ export type AuthenticationWindow = {
     removeListener?(event: string, listener: (...args: unknown[]) => void): unknown
   }
   loadURL(url: string): Promise<unknown> | unknown
+  /** Show the user-facing login page after it has finished loading. */
+  show?(): void
+  /** Remove the remote login page once platform navigation is observed. */
+  hide?(): void
+  focus?(): void
   close(): void
   isDestroyed?(): boolean
   on(event: 'close' | 'closed', listener: () => void): unknown
@@ -116,7 +122,7 @@ export class SsoAuthenticationService {
       if (saveIntent === 'workbench') {
         return this.applyConfigurationState(saved)
       }
-      await this.startAuthentication(saved, false)
+      await this.startAuthentication(saved)
       return this.getState()
     })
   }
@@ -142,15 +148,17 @@ export class SsoAuthenticationService {
       return
     }
 
-    await this.startAuthentication(configuration, true)
+    await this.startAuthentication(configuration)
   }
 
-  private async startAuthentication(configuration: SsoConfiguration, publishLoginRequired: boolean): Promise<void> {
+  private async startAuthentication(configuration: SsoConfiguration): Promise<void> {
     await this.cancelCurrentSession()
     this.generation++
-    if (publishLoginRequired) this.setSnapshot({ state: 'login-required' })
+    // Keep the local renderer on an actionable login state while the identity
+    // provider page is visible. Progress is published only after a committed
+    // platform navigation (see notifyNavigation below).
+    this.setSnapshot({ state: 'login-required' })
     const generation = ++this.generation
-    this.setSnapshot({ state: 'authenticating' })
     const window = this.createWindow()
     const capture = this.createCapture(window, configuration)
     this.authWindow = window
@@ -159,6 +167,27 @@ export class SsoAuthenticationService {
     const notifyNavigation = (url: unknown): void => {
       if (generation !== this.generation) return
       if (typeof url !== 'string') return
+
+      // Keep the local renderer on the actionable login surface while the
+      // identity provider is displayed.  Only a committed main-frame URL that
+      // matches the configured platform route is evidence that the user has
+      // finished signing in; at that point switch to the local progress state
+      // and get the remote window out of the way before continuing capture.
+      let platformNavigation = false
+      try {
+        platformNavigation = matchesSsoUrl(configuration.platformUrlMatcher, url)
+      } catch {
+        // The capture owns matcher validation/error publication.  Do not let a
+        // malformed runtime candidate prevent it from reporting the bounded
+        // failure through its normal path.
+      }
+      if (platformNavigation && this.snapshot.state === 'login-required') {
+        this.setSnapshot({ state: 'authenticating' })
+        // A committed navigation can race with BrowserWindow destruction.
+        // Hiding an already-destroyed window is best-effort; it must not stop
+        // the URL from reaching the response capture.
+        try { window.hide?.() } catch { /* window was destroyed */ }
+      }
       capture.notifyNavigation(url)
     }
     const onDidNavigate = (_event: unknown, url: unknown): void => { notifyNavigation(url) }
@@ -187,18 +216,24 @@ export class SsoAuthenticationService {
       windowClosed = true
       resolveCloseSignal()
       if (generation !== this.generation || this.capture !== capture) return
-      void this.failSession(generation, 'SSO sign-in window closed')
+      void this.failSession(generation, 'SSO sign-in window closed').catch(() => undefined)
     }
     window.on('close', onClose)
     window.on('closed', onClosed)
     this.removeNavigationListeners = () => {
       resolveCloseSignal()
-      window.webContents.removeListener?.('did-navigate', onDidNavigate)
-      window.webContents.removeListener?.('did-navigate-in-page', onDidNavigateInPage)
-      window.webContents.removeListener?.('will-navigate', onWillNavigate)
-      window.webContents.removeListener?.('did-frame-navigate', onDidFrameNavigate)
-      window.removeListener('close', onClose)
-      window.removeListener('closed', onClosed)
+      // Electron may invalidate the WebContents proxy before the BrowserWindow
+      // `closed` callback runs. Listener cleanup is best-effort in that state.
+      try {
+        window.webContents.removeListener?.('did-navigate', onDidNavigate)
+        window.webContents.removeListener?.('did-navigate-in-page', onDidNavigateInPage)
+        window.webContents.removeListener?.('will-navigate', onWillNavigate)
+        window.webContents.removeListener?.('did-frame-navigate', onDidFrameNavigate)
+      } catch {
+        // A destroyed WebContents has no listeners that need removal.
+      }
+      try { window.removeListener('close', onClose) } catch { /* already destroyed */ }
+      try { window.removeListener('closed', onClosed) } catch { /* already destroyed */ }
     }
 
     try {
@@ -212,7 +247,7 @@ export class SsoAuthenticationService {
       void identityPromise
         .then(
           identity => this.completeSession(generation, identity),
-          error => this.failSession(generation, safeCaptureError(error)),
+          error => this.arbitrateCaptureFailure(generation, error, window, closeSignal, () => windowClosed),
         )
         .catch(() => this.failSession(generation, 'Unable to complete SSO sign-in'))
         .catch(() => undefined)
@@ -220,6 +255,14 @@ export class SsoAuthenticationService {
       await capture.ready()
       if (!this.isCurrentSession(generation, capture, window)) return
       await window.loadURL(configuration.loginPageUrl)
+      if (!this.isCurrentSession(generation, capture, window)) return
+      // Keep the blank priming document hidden, then reveal the fully loaded
+      // identity-provider page so credentials can be entered without a flash
+      // of an empty authentication window.
+      if (this.snapshot.state === 'login-required') {
+        window.show?.()
+        window.focus?.()
+      }
     } catch (error) {
       if (!windowClosed && !isWindowDestroyed(window)) await waitForCloseSignal(closeSignal)
       await this.failSession(generation, windowClosed || isWindowDestroyed(window) ? 'SSO sign-in window closed' : safeCaptureError(error))
@@ -278,6 +321,26 @@ export class SsoAuthenticationService {
     if (generation !== this.generation || !this.capture) return
     this.setSnapshot({ state: 'error', errorMessage: safeCaptureError(message) })
     await this.finishSession(generation)
+  }
+
+  /**
+   * A Chromium debugger detaches before Electron finishes closing a window.
+   * Give the close lifecycle a short chance to win so a user-initiated close
+   * is reported as such instead of being exposed as a connection failure.
+   */
+  private async arbitrateCaptureFailure(
+    generation: number,
+    error: unknown,
+    window: AuthenticationWindow,
+    closeSignal: Promise<void>,
+    wasWindowClosed: () => boolean,
+  ): Promise<void> {
+    const message = safeCaptureError(error)
+    if (message === 'SSO sign-in connection closed' && !wasWindowClosed() && !isWindowDestroyed(window)) {
+      await waitForCloseSignal(closeSignal)
+    }
+    const closed = wasWindowClosed() || isWindowDestroyed(window)
+    await this.failSession(generation, closed ? 'SSO sign-in window closed' : message)
   }
 
   private isCurrentSession(generation: number, capture: AuthenticationCapture, window: AuthenticationWindow): boolean {
@@ -342,9 +405,10 @@ function createDefaultAuthenticationWindow(): AuthenticationWindow {
   return new BrowserWindow({
     width: 900,
     height: 700,
-    // The platform login page is a capture surface, not a second user-facing
-    // window. Keep it hidden while the renderer shows the local
-    // "登录进行中" state; this avoids exposing remote pages during SSO.
+    // Start hidden while the local priming document and capture listeners are
+    // prepared. The committed identity-provider page is shown after it loads;
+    // once platform navigation is observed the window is hidden again while
+    // the local renderer displays the bounded "登录进行中" state.
     show: false,
     webPreferences: {
       partition,

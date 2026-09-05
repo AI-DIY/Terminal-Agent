@@ -24,7 +24,7 @@ function closeSettings(): void {
 watch([() => props.initialTab, () => props.lockNavigation], ([value, locked]) => { tab.value = locked ? 'sso' : normalizeTab(value) })
 
 function normalizeTab(value: SettingsTabId | undefined): SettingsTabId {
-  return value === 'routing' || value === 'vlm' || value === undefined ? 'llm' : value
+  return value === 'routing' || value === 'vlm' || value === 'memory' || value === undefined ? 'llm' : value
 }
 </script>
 

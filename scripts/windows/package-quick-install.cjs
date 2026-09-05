@@ -126,16 +126,23 @@ async function packageQuickInstall({
   const installerPath = source(installerName)
   const bridgePath = source('putty.exe')
   const manualMdPath = firstExisting([source('快速安装手册.md'), join(projectRoot, '快速安装手册.md')])
-  const manualPdfPath = firstExisting([source('快速安装手册.pdf'), join(projectRoot, '快速安装手册.pdf')])
   const scriptPath = firstExisting([source('快速安装脚本.cmd'), join(projectRoot, '快速安装脚本.cmd')])
   const implementationPath = firstExisting([source('quick-install.cmd'), join(projectRoot, 'quick-install.cmd')])
+  const quickstartImages = [
+    'docs/images/quickstart/06-select-global-putty.png',
+    'docs/images/quickstart/07-launch-bastion.png',
+  ].map(name => ({
+    name,
+    path: firstExisting([source(name), join(projectRoot, name)]),
+    label: `quick-install guide image (${name})`,
+  }))
   const entries = [
     { name: 'putty.exe', path: bridgePath, label: 'putty.exe bridge' },
     { name: installerName, path: installerPath, label: 'Windows installer' },
     { name: '快速安装手册.md', path: manualMdPath, label: 'quick-install Markdown guide' },
-    { name: '快速安装手册.pdf', path: manualPdfPath, label: 'quick-install PDF guide' },
     { name: '快速安装脚本.cmd', path: scriptPath, label: 'quick-install script' },
     { name: 'quick-install.cmd', path: implementationPath, label: 'quick-install implementation' },
+    ...quickstartImages,
   ]
   for (const entry of entries) await requireFile(entry.path, entry.label)
   const output = resolve(outputPath)

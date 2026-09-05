@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { applyInitialTheme } from '../../../src/renderer/src/theme'
 import { createInitialRenderGate } from '../../../src/renderer/src/render-gate'
-import { SETTINGS_TABS } from '../../../src/renderer/src/views/settings-tabs'
+import { SETTINGS_NAV_TABS, SETTINGS_TABS } from '../../../src/renderer/src/views/settings-tabs'
 import { readFileSync } from 'node:fs'
 
 describe('settings panels', () => {
   it('keeps prototype navigation order with host memory ready', () => {
     expect(SETTINGS_TABS.map(tab => tab.id)).toEqual(['routing', 'llm', 'vlm', 'fence', 'memory', 'appearance', 'sso'])
     expect(SETTINGS_TABS.find(tab => tab.id === 'memory')?.status).toBe('ready')
+  })
+
+  it('hides the host-memory panel from the temporary user-facing navigation', () => {
+    const visibleIds = SETTINGS_NAV_TABS.map(tab => tab.id)
+    expect(visibleIds).toEqual(['llm', 'fence', 'appearance', 'sso'])
+    expect(visibleIds).not.toContain('memory')
   })
 
   it('applies the persisted theme before the first renderer mount', () => {
@@ -39,6 +45,16 @@ describe('settings panels', () => {
     expect(canvas).toContain('SHELL_FONT_SIZE_OPTIONS')
     expect(canvas).toContain('单行高度（占工作区）')
     expect(canvas).toContain('SSH 字体大小')
+  })
+
+  it('keeps all three appearance choices in one row at desktop width', () => {
+    const appearance = readFileSync(new URL('../../../src/renderer/src/components/settings/AppearanceSettings.vue', import.meta.url), 'utf8')
+    const themeRule = /\.theme-options\s*\{([^}]*)\}/.exec(appearance)?.[1] ?? ''
+
+    expect(themeRule).toContain('grid-template-columns: repeat(3')
+    expect(themeRule).toContain('max-width: 860px')
+    expect(appearance).toContain('.theme-options { grid-template-columns: 1fr; }')
+    for (const label of ['珍珠白', '石墨黑', '高贵紫']) expect(appearance).toContain(label)
   })
 
   it('themes the settings and host-memory surfaces through shared tokens', () => {
@@ -93,6 +109,7 @@ describe('settings panels', () => {
     expect(panel).toContain('保存并继续')
     expect(panel).toContain('保存并进入工作台')
     expect(panel).toContain('<option value="exact">')
+    expect(panel).toContain('<option value="prefix">')
     expect(panel).toContain('<option value="regex">')
     expect(settings).toContain('initialTab?: SettingsTabId')
     expect(settings).toContain('lockNavigation?: boolean')

@@ -16,7 +16,7 @@ import {
 
 const removedImportButton = ['导入', '密钥'].join('')
 
-test('opens real settings with ordered panels, host memory controls, and terminal return', async () => {
+test('opens real settings with the user-facing panels and preserves drafts on return', async () => {
   const directories = await createSsoE2eDirectories('terminal-agent-settings-e2e-')
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   let primaryFailure: E2ePrimaryFailure | undefined
@@ -31,38 +31,20 @@ test('opens real settings with ordered panels, host memory controls, and termina
     await page.getByRole('button', { name: '设置', exact: true }).click()
 
     const panels = page.getByRole('navigation', { name: '设置面板' }).getByRole('button')
-    await expect(panels).toHaveCount(5)
-    await expect(panels).toHaveText(['大语言模型配置', '安全围栏', '本地主机记忆', '外观', '单点登录'])
+    await expect(panels).toHaveCount(4)
+    await expect(panels).toHaveText(['大语言模型配置', '安全围栏', '外观', '单点登录'])
+    await expect(page.getByRole('button', { name: '本地主机记忆', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: '本地主机记忆', exact: true })).toHaveCount(0)
     await expect(panels.nth(0)).toHaveAttribute('aria-current', 'page')
     await expect(panels.nth(1)).not.toHaveAttribute('aria-current', 'page')
 
-    await panels.nth(2).click()
-    await expect(page.getByRole('heading', { name: '本地主机记忆', exact: true })).toBeVisible()
-    await expect(page.getByLabel('启用本地主机记忆')).toBeVisible()
-    for (const label of [
-      '主机名、连接 IP、操作系统和基础版本',
-      'CPU、内存、磁盘、网络等基础信息',
-      '运行进程名称、PID 和进程工作目录',
-      '当前用户、工作目录和常用服务状态',
-    ]) await expect(page.getByLabel(label)).toBeVisible()
-    const catalog = page.getByRole('region', { name: '采集命令清单', exact: true })
-    await expect(catalog).toBeVisible()
-    for (const heading of ['身份与系统', '硬件', '进程', '运行环境']) {
-      await expect(catalog.getByRole('heading', { name: heading, exact: true })).toBeVisible()
-    }
-    await expect(catalog.locator('code')).toHaveCount(13)
-    await expect(catalog.locator('code').nth(0)).toHaveText('hostname')
-    await expect(catalog.locator('code').nth(1)).toHaveText('uname -s')
-    await expect(catalog.getByRole('listitem')).toHaveCount(13)
-    await expect(catalog.getByRole('listitem').filter({ hasText: '当前不执行' })).toHaveCount(13)
-    await page.getByLabel('启用本地主机记忆').check()
-    await expect(catalog.getByRole('listitem').filter({ hasText: '始终执行' })).toHaveCount(2)
-    await page.getByLabel('运行进程名称、PID 和进程工作目录').uncheck()
-    const processCommand = catalog.getByRole('listitem').filter({ hasText: '运行进程' })
-    await expect(processCommand).toHaveClass(/disabled/)
-    await expect(processCommand.getByText('当前不执行', { exact: true })).toBeVisible()
+    await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '外观', exact: true }).click()
+    const themeGroup = page.getByRole('group', { name: '工作台主题', exact: true })
+    await expect(themeGroup.getByRole('button')).toHaveCount(3)
+    const themeColumns = await themeGroup.evaluate(node => getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/).length)
+    expect(themeColumns).toBe(3)
 
-    await panels.nth(0).click()
+    await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '大语言模型配置', exact: true }).click()
     const apiKeyInput = page.getByLabel('API Key', { exact: true })
     await expect(apiKeyInput).toBeEditable()
     await expect(apiKeyInput).toHaveAttribute('type', 'password')

@@ -155,6 +155,8 @@ describe('ShellCanvas Task 7 reconnect actions', () => {
     expect(terminal).toContain('navigator.clipboard')
     expect(terminal).toContain('ref="paneElement"')
     expect(terminal).toContain('paneElement.value?.getBoundingClientRect()')
+    expect(terminal).toContain('const bounds = element.getBoundingClientRect()')
+    expect(terminal).toContain('if (bounds.width <= 0 || bounds.height <= 0) return')
     const pasteHandler = terminal.slice(terminal.indexOf('async function pasteClipboard'), terminal.indexOf('function selectAll'))
     expect(pasteHandler).toContain('terminal.focus()')
     expect(pasteHandler.indexOf('closeContextMenu()')).toBeLessThan(pasteHandler.indexOf('terminal.focus()'))

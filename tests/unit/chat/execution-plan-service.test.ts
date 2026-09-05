@@ -6,6 +6,7 @@ import { ExecutionPlanService } from '../../../src/main/chat/execution-plan-serv
 import { ChatRepository } from '../../../src/main/chat/chat-repository'
 import { ChatService } from '../../../src/main/chat/chat-service'
 import { resolveModelShellTargets } from '../../../src/shared/model-shell-target'
+import type { ChatExecutionPlan } from '../../../src/shared/chat-plan'
 
 function plan() {
   return {
@@ -67,6 +68,169 @@ describe('ExecutionPlanService', () => {
 
     expect(write).toHaveBeenCalledWith('session-1', 'systemctl status api\n')
     expect(updateMessage.mock.calls.map(call => ((call as unknown as [{ requestId: string }])[0]).requestId)).toEqual(['request-1:executing', 'request-1:result'])
+  })
+
+  it('keeps the AI original command while persisting a human final command', async () => {
+    const updateMessage = vi.fn(async () => undefined)
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: plan() }],
+        shells: [],
+      } })),
+      updateMessage,
+    }, {
+      snapshot: () => [],
+      write: vi.fn(),
+    }, { match: vi.fn(() => null) })
+
+    await service.editStep({
+      requestId: 'edit-command',
+      chatId: 'chat-1',
+      messageId: 'message-1',
+      stepId: 'step-1',
+      command: 'systemctl restart api',
+    })
+
+    expect(updateMessage).toHaveBeenCalledWith(expect.objectContaining({
+      executionPlan: expect.objectContaining({
+        status: 'pending_review',
+        steps: [expect.objectContaining({
+          originalCommand: 'systemctl status api',
+          finalCommand: 'systemctl restart api',
+        })],
+      }),
+    }))
+  })
+
+  it('writes the persisted human final command when the plan is confirmed', async () => {
+    const write = vi.fn()
+    const targetPlan = { ...plan(), steps: [{ ...plan().steps[0], finalCommand: 'systemctl restart api' }] }
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: targetPlan }],
+        shells: [{ sessionId: 'session-1', hostname: 'web-01', status: 'open' }],
+      } })),
+      updateMessage: vi.fn(async () => undefined),
+    }, {
+      snapshot: () => [{ id: 'session-1', hostname: 'web-01' }],
+      write,
+    }, { match: vi.fn(() => null) })
+
+    await service.execute({ requestId: 'execute-final-command', chatId: 'chat-1', messageId: 'message-1' })
+
+    expect(write).toHaveBeenCalledWith('session-1', 'systemctl restart api\n')
+    expect(write).not.toHaveBeenCalledWith('session-1', 'systemctl status api\n')
+  })
+
+  it('removes one host step without affecting the remaining plan steps', async () => {
+    const updateMessage = vi.fn(async () => undefined)
+    const targetPlan = {
+      ...plan(),
+      steps: [
+        ...plan().steps,
+        { id: 'step-2', target: 'db-01', explanation: '查看数据库状态', originalCommand: 'systemctl status db', sendState: 'pending' as const },
+      ],
+    }
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: targetPlan }],
+        shells: [],
+      } })),
+      updateMessage,
+    }, {
+      snapshot: () => [],
+      write: vi.fn(),
+    }, { match: vi.fn(() => null) })
+
+    await service.removeStep({ requestId: 'remove-host', chatId: 'chat-1', messageId: 'message-1', stepId: 'step-2' })
+
+    expect(updateMessage).toHaveBeenCalledWith(expect.objectContaining({
+      executionPlan: expect.objectContaining({
+        steps: [expect.objectContaining({ id: 'step-1', target: 'web-01' })],
+      }),
+    }))
+  })
+
+  it('cancels a plan and removes its command when the last host step is removed', async () => {
+    let persistedPlan: ChatExecutionPlan = plan()
+    const updateMessage = vi.fn(async (request: { executionPlan?: ChatExecutionPlan }) => {
+      if (request.executionPlan) persistedPlan = structuredClone(request.executionPlan)
+      return undefined
+    })
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: structuredClone(persistedPlan) }],
+        shells: [],
+      } })),
+      updateMessage,
+    }, {
+      snapshot: () => [],
+      write: vi.fn(),
+    }, { match: vi.fn(() => null) })
+
+    await service.removeStep({ requestId: 'remove-last', chatId: 'chat-1', messageId: 'message-1', stepId: 'step-1' })
+    expect(updateMessage).toHaveBeenCalledWith(expect.objectContaining({
+      executionPlan: expect.objectContaining({ status: 'cancelled', steps: [] }),
+    }))
+
+    expect(persistedPlan.steps).toEqual([])
+    await expect(service.execute({ requestId: 'execute-empty', chatId: 'chat-1', messageId: 'message-1' })).rejects.toThrow('计划不可执行')
+
+    const unknownStepService = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: { ...plan(), steps: [{ ...plan().steps[0], id: 'step-1' }, { id: 'step-2', target: 'db-01', explanation: '检查', originalCommand: 'uptime', sendState: 'pending' as const }] } }],
+        shells: [],
+      } })),
+      updateMessage: vi.fn(async () => undefined),
+    }, { snapshot: () => [], write: vi.fn() }, { match: vi.fn(() => null) })
+    await expect(unknownStepService.removeStep({ requestId: 'remove-unknown', chatId: 'chat-1', messageId: 'message-1', stepId: 'missing' })).rejects.toThrow('计划不可删除')
+
+    const lockedService = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: { ...plan(), status: 'executed' as const } }],
+        shells: [],
+      } })),
+      updateMessage: vi.fn(async () => undefined),
+    }, { snapshot: () => [], write: vi.fn() }, { match: vi.fn(() => null) })
+    await expect(lockedService.removeStep({ requestId: 'remove-locked', chatId: 'chat-1', messageId: 'message-1', stepId: 'step-1' })).rejects.toThrow('计划不可删除')
+  })
+
+  it('serializes a removal behind an in-flight edit so a stale snapshot cannot restore a deleted step', async () => {
+    let persistedPlan: ChatExecutionPlan = {
+      ...plan(),
+      steps: [
+        ...plan().steps,
+        { id: 'step-2', target: 'db-01', explanation: '查看数据库状态', originalCommand: 'systemctl status db', sendState: 'pending' as const },
+      ],
+    }
+    let editSaveStarted!: () => void
+    let releaseEditSave!: () => void
+    const editSave = new Promise<void>(resolve => { editSaveStarted = resolve })
+    const release = new Promise<void>(resolve => { releaseEditSave = resolve })
+    const updateMessage = vi.fn(async (request: { requestId: string; executionPlan?: ChatExecutionPlan }) => {
+      if (request.requestId === 'edit-race') {
+        editSaveStarted()
+        await release
+      }
+      if (request.executionPlan) persistedPlan = structuredClone(request.executionPlan)
+      return undefined
+    })
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: structuredClone(persistedPlan) }],
+        shells: [],
+      } })),
+      updateMessage,
+    }, { snapshot: () => [], write: vi.fn() }, { match: vi.fn(() => null) })
+
+    const editing = service.editStep({ requestId: 'edit-race', chatId: 'chat-1', messageId: 'message-1', stepId: 'step-1', command: 'systemctl restart api' })
+    await editSave
+    const removing = service.removeStep({ requestId: 'remove-race', chatId: 'chat-1', messageId: 'message-1', stepId: 'step-2' })
+    releaseEditSave()
+    await Promise.all([editing, removing])
+
+    expect(persistedPlan.steps).toEqual([expect.objectContaining({ id: 'step-1', finalCommand: 'systemctl restart api' })])
+    expect(persistedPlan.steps).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'step-2' })]))
   })
 
   it('binds targets to the matching observed host when sessions share a route hostname', async () => {

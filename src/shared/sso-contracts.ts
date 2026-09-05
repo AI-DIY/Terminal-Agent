@@ -5,7 +5,7 @@ const ssoFieldPathTextSchema = z.string().trim().max(512)
 const ssoDisplayTextSchema = z.string().trim().min(1).max(512)
 
 export const ssoUrlMatcherSchema = z.object({
-  mode: z.enum(['exact', 'regex']),
+  mode: z.enum(['exact', 'prefix', 'regex']),
   value: ssoUrlTextSchema,
 }).strict()
 export type SsoUrlMatcher = z.infer<typeof ssoUrlMatcherSchema>

@@ -114,6 +114,37 @@ describe('renderer SSO store', () => {
     expect(store.identity.value).toBeNull()
   })
 
+  it('suppresses the LoginView mount retry after save-and-continue, but only once', async () => {
+    const api = createApi()
+    const store = createSsoStore(api)
+
+    await store.initialize()
+    await store.saveConfig(configuration, 'continue')
+
+    expect(store.consumeAutoRetrySuppression()).toBe(true)
+    expect(store.consumeAutoRetrySuppression()).toBe(false)
+  })
+
+  it('does not leave the mount-retry suppression armed when save-and-continue fails', async () => {
+    const api = createApi({ saveConfig: vi.fn().mockRejectedValue(new Error('save failed')) })
+    const store = createSsoStore(api)
+
+    await expect(store.saveConfig(configuration, 'continue')).rejects.toThrow('save failed')
+    expect(store.consumeAutoRetrySuppression()).toBe(false)
+  })
+
+  it.each(['login-required', 'authenticating', 'error'] as const)('does not arm mount-retry suppression for an already mounted login state: %s', async state => {
+    const api = createApi()
+    const store = createSsoStore(api)
+    await store.initialize()
+    const listener = api.onState.mock.calls[0]?.[0]
+    listener(state === 'error' ? { state, errorMessage: '登录失败' } : { state })
+
+    await store.saveConfig(configuration, 'continue')
+
+    expect(store.consumeAutoRetrySuppression()).toBe(false)
+  })
+
   it('relays retry and disposes exactly the registered event subscription', async () => {
     const api = createApi()
     const store = createSsoStore(api)

@@ -123,7 +123,13 @@ function clearSelection(): void {
 }
 
 function resize(): void {
-  if (!terminal || !fit) return
+  const element = terminalElement.value
+  if (!terminal || !fit || !element || !element.isConnected) return
+  // WorkbenchView stays mounted while settings/skills are visible. During
+  // that interval its `v-show` ancestor has no layout box; FitAddon otherwise
+  // proposes its minimum 2x1 grid and sends that transient size to the PTY.
+  const bounds = element.getBoundingClientRect()
+  if (bounds.width <= 0 || bounds.height <= 0) return
   fit.fit()
   void window.terminalAgent.sessions.resize(props.session.id, terminal.cols, terminal.rows)
 }

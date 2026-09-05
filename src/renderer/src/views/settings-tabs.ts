@@ -10,10 +10,9 @@ export const SETTINGS_TABS = [
 export type SettingsTabId = typeof SETTINGS_TABS[number]['id']
 
 /**
- * v3.2 presents one active LLM configuration as the only model settings
- * surface.  Keep SETTINGS_TABS exported with its historical shape for plugin
- * compatibility, but do not expose the removed routing/VLM panels in the
- * settings navigation.
+ * Keep SETTINGS_TABS exported with its historical shape for plugin and stored
+ * preference compatibility, while temporarily hiding routes that are not part
+ * of the current user-facing settings surface.
  */
-export const SETTINGS_NAV_TABS = SETTINGS_TABS.filter(item => item.id !== 'routing' && item.id !== 'vlm')
+export const SETTINGS_NAV_TABS = SETTINGS_TABS.filter(item => item.id !== 'routing' && item.id !== 'vlm' && item.id !== 'memory')
 export type SettingsNavTabId = typeof SETTINGS_NAV_TABS[number]['id']

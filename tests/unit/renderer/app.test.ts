@@ -29,4 +29,14 @@ describe('renderer auth gate', () => {
     expect(app).toContain('watch(rootSurface, surface => {')
     expect(app).toContain('clearWorkbenchNavigationHandoff()')
   })
+
+  it('keeps the authenticated workbench mounted while settings or skills are visible', () => {
+    const app = readFileSync(new URL('../../../src/renderer/src/App.vue', import.meta.url), 'utf8')
+    const workbenchBranch = app.slice(app.indexOf("rootSurface === 'workbench'"))
+
+    expect(workbenchBranch).toContain('<WorkbenchView v-show="!settingsOpen && !skillsOpen"')
+    expect(workbenchBranch).toContain('<SettingsView v-if="settingsOpen"')
+    expect(workbenchBranch).toContain('<SkillsView v-if="skillsOpen"')
+    expect(workbenchBranch).not.toContain('<WorkbenchView v-else')
+  })
 })

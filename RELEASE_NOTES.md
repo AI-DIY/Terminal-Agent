@@ -1,3 +1,46 @@
+# Terminal-Agent v3.2.3
+
+Release date: 2026-09-05
+
+## 开源 TA 修改意见微调
+
+- 单点登录页在身份提供方页面等待用户操作期间保持可操作；仅在浏览器确认进入平台 URL 后显示“登录进行中”。平台 URL 与用户信息接口 URL 均支持精确、前缀和正则匹配。
+- AI 执行计划恢复逐主机步骤删除，并同时展示原始命令和修改后命令；确认计划时直接执行用户最后编辑的命令，不增加二次确认。
+- 暂时隐藏“设置 → 本地主机记忆”；外观主题在可用宽度下以一行展示珍珠白、石墨黑和高贵紫。
+- 从设置返回工作台时保留在线 SSH 终端及其输出历史；“新建 SSH 连接”入口统一使用同一连接页，移除手工堡垒机地址与“唤起终端”表单控件。
+- 快速安装手册改为通用版本占位符并补充 AccessClient 会话配置和集团堡垒机使用截图；独立安装包不再包含 `快速安装手册.pdf`。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-3.2.3.exe`
+- `putty.exe`
+- `快速安装脚本.cmd`
+- `快速安装手册.md`
+- `Terminal-Agent-Quick-Install-3.2.3.zip`
+
+---
+
+# Terminal-Agent v3.2.1
+
+Release date: 2026-09-05
+
+## SSO 登录稳定性修复
+
+- 修复 Chromium 在隐藏认证窗口中上报 `about:blank`、`data:`、`blob:`、`chrome-error://` 等内部 URL 时，错误中止单点登录并显示 `Unable to continue SSO sign-in` 的问题。
+- 非 HTTP(S) 网络候选现在会被安全忽略，已保存的 SSO URL matcher 配置仍保持严格校验。
+- 增加真实隐藏认证窗口和后续用户信息响应的回归覆盖，避免平台跳转前的浏览器内部资源影响认证。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-3.2.1.exe`
+- `putty.exe`
+- `快速安装脚本.cmd`
+- `快速安装手册.md`
+- `快速安装手册.pdf`
+- `Terminal-Agent-Quick-Install-3.2.1.zip`
+
+---
+
 # Terminal-Agent v3.2.0
 
 Release date: 2026-09-05

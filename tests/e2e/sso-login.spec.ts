@@ -138,6 +138,10 @@ test('supports nontrivial regex platform and user-info URL matchers', async () =
   await verifyPassiveCapture('regex')
 })
 
+test('supports platform and user-info URL prefix matchers through the real Electron flow', async () => {
+  await verifyPassiveCapture('prefix')
+})
+
 test('disables skills through the real Electron gate without opening the unavailable skills view', async () => {
   const launch = await launchFreshElectron()
   let primaryFailure: E2ePrimaryFailure | undefined
@@ -165,7 +169,7 @@ test('disables skills through the real Electron gate without opening the unavail
   }
 })
 
-async function verifyPassiveCapture(mode: 'exact' | 'regex'): Promise<void> {
+async function verifyPassiveCapture(mode: 'exact' | 'prefix' | 'regex'): Promise<void> {
   let fixture: SsoFixture | undefined
   let configurationLaunch: PlaywrightLaunch | undefined
   let configurationAppClosed = false
@@ -183,11 +187,19 @@ async function verifyPassiveCapture(mode: 'exact' | 'regex'): Promise<void> {
     await expect.poll(async () => await configurationPage.evaluate(() => window.terminalAgent.sso.getConfig())).toMatchObject({
       platformUrlMatcher: {
         mode,
-        value: mode === 'exact' ? `${fixture.origin}/platform` : `^${escapeRegularExpression(fixture.origin)}/platform\\?tenant=(?:e2e|backup)$`,
+        value: mode === 'exact'
+          ? `${fixture.origin}/platform`
+          : mode === 'prefix'
+            ? `${fixture.origin}/platform?tenant=`
+            : `^${escapeRegularExpression(fixture.origin)}/platform\\?tenant=(?:e2e|backup)$`,
       },
       userInfoUrlMatcher: {
         mode,
-        value: mode === 'exact' ? `${fixture.origin}/userinfo` : `^${escapeRegularExpression(fixture.origin)}/userinfo\\?request=natural$`,
+        value: mode === 'exact'
+          ? `${fixture.origin}/userinfo`
+          : mode === 'prefix'
+            ? `${fixture.origin}/userinfo?request=`
+            : `^${escapeRegularExpression(fixture.origin)}/userinfo\\?request=natural$`,
       },
     })
     await expect(configurationPage.getByRole('heading', { name: '需要登录', exact: true })).toBeVisible()
@@ -301,15 +313,19 @@ async function launchDirectElectron(directories: SsoE2eDirectories): Promise<Dir
 async function configureCompleteSsoDraft(
   page: Page,
   fixture: SsoFixture,
-  mode: 'exact' | 'regex',
+  mode: 'exact' | 'prefix' | 'regex',
   action: '保存草稿' | '保存并继续' = '保存并继续',
 ): Promise<void> {
   const platformMatcher = mode === 'exact'
     ? `${fixture.origin}/platform`
-    : `^${escapeRegularExpression(fixture.origin)}/platform\\?tenant=(?:e2e|backup)$`
+    : mode === 'prefix'
+      ? `${fixture.origin}/platform?tenant=`
+      : `^${escapeRegularExpression(fixture.origin)}/platform\\?tenant=(?:e2e|backup)$`
   const userInfoMatcher = mode === 'exact'
     ? `${fixture.origin}/userinfo`
-    : `^${escapeRegularExpression(fixture.origin)}/userinfo\\?request=natural$`
+    : mode === 'prefix'
+      ? `${fixture.origin}/userinfo?request=`
+      : `^${escapeRegularExpression(fixture.origin)}/userinfo\\?request=natural$`
 
   const gate = page.getByLabel('启用单点登录门控')
   await expect(gate).toBeChecked()
