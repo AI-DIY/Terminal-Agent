@@ -2,7 +2,13 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+type PdfGenerator = (input: {
+  projectRoot: string
+  markdownPath: string
+  outputPath: string
+}) => Promise<{ path: string; bytes: number }>
 
 type QuickInstallPackager = {
   packageQuickInstall(input: {
@@ -10,6 +16,8 @@ type QuickInstallPackager = {
     version: string
     releaseDirectory: string
     outputPath: string
+    generatePdf?: boolean
+    pdfGenerator?: PdfGenerator
   }): Promise<{ path: string; entries: string[]; bytes: number }>
 }
 
@@ -34,6 +42,14 @@ async function seedRelease(projectRoot: string, version = '1.0.8') {
   return releaseDirectory
 }
 
+function stubPdfGenerator() {
+  const pdf = Buffer.from('%PDF-1.7\nquick-install guide\n%%EOF\n')
+  return vi.fn(async ({ outputPath }: { outputPath: string }) => {
+    await writeFile(outputPath, pdf)
+    return { path: outputPath, bytes: pdf.length }
+  }) as unknown as PdfGenerator
+}
+
 describe('Windows quick-install package', () => {
   it('keeps the source guide version-neutral and tied to the packaged screenshots', async () => {
     const guide = await readFile(join(process.cwd(), '快速安装手册.md'), 'utf8')
@@ -44,21 +60,23 @@ describe('Windows quick-install package', () => {
     expect(guide).toContain('Terminal-Agent-Quick-Install-*.zip')
     expect(guide).toContain('使用全局设置(putty)')
     expect(guide).toContain('集团堡垒机的正常流程指定目标主机并发起 SSH 连接')
+    expect(guide).toContain('快速安装手册.pdf')
     expect(guide).toContain('docs/images/quickstart/06-select-global-putty.png')
     expect(guide).toContain('docs/images/quickstart/07-launch-bastion.png')
-    expect(guide).not.toMatch(/快速安装手册\.pdf|备份|恢复|常用参数|\/AccessClientDir|\/NoDownload|\/NoLaunch|\/NoPause|\b\d+\.\d+\.\d+\b/)
+    expect(guide).not.toMatch(/备份|恢复|常用参数|\/AccessClientDir|\/NoDownload|\/NoLaunch|\/NoPause|\b\d+\.\d+\.\d+\b/)
     expect(installer).toContain('快速安装手册.md')
     expect(installer).not.toContain('快速安装手册.pdf')
   })
 
-  it('includes the Markdown guide and both referenced screenshots without the removed PDF', async () => {
+  it('includes the Markdown guide, converted PDF and both referenced screenshots', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-quick-install-'))
     const version = '1.0.8'
     const outputPath = join(projectRoot, 'release', `Terminal-Agent-Quick-Install-${version}.zip`)
 
     try {
       const releaseDirectory = await seedRelease(projectRoot, version)
-      const result = await packager().packageQuickInstall({ projectRoot, version, releaseDirectory, outputPath })
+      const pdfGenerator = stubPdfGenerator()
+      const result = await packager().packageQuickInstall({ projectRoot, version, releaseDirectory, outputPath, pdfGenerator })
       const archive = await readFile(outputPath)
       const archiveText = archive.toString('utf8')
 
@@ -66,16 +84,22 @@ describe('Windows quick-install package', () => {
         'putty.exe',
         `Terminal-Agent-Setup-${version}.exe`,
         '快速安装手册.md',
+        '快速安装手册.pdf',
         '快速安装脚本.cmd',
         'quick-install.cmd',
         'docs/images/quickstart/06-select-global-putty.png',
         'docs/images/quickstart/07-launch-bastion.png',
       ])
       expect(result.bytes).toBeGreaterThan(0)
+      expect(pdfGenerator).toHaveBeenCalledWith({
+        projectRoot,
+        markdownPath: join(projectRoot, '快速安装手册.md'),
+        outputPath: join(releaseDirectory, '快速安装手册.pdf'),
+      })
       expect(archiveText).toContain('快速安装手册.md')
+      expect(archiveText).toContain('快速安装手册.pdf')
       expect(archiveText).toContain('docs/images/quickstart/06-select-global-putty.png')
       expect(archiveText).toContain('docs/images/quickstart/07-launch-bastion.png')
-      expect(archiveText).not.toContain('快速安装手册.pdf')
     }
     finally {
       await rm(projectRoot, { recursive: true, force: true })
@@ -89,11 +113,13 @@ describe('Windows quick-install package', () => {
     try {
       const releaseDirectory = await seedRelease(projectRoot, version)
       await rm(join(projectRoot, 'docs', 'images', 'quickstart', '07-launch-bastion.png'))
+      const pdfGenerator = stubPdfGenerator()
       await expect(packager().packageQuickInstall({
         projectRoot,
         version,
         releaseDirectory,
         outputPath: join(releaseDirectory, 'missing-image.zip'),
+        pdfGenerator,
       })).rejects.toThrow('07-launch-bastion.png')
     }
     finally {

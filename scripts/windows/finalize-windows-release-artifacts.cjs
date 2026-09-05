@@ -3,8 +3,9 @@
 
 const { createHash } = require('node:crypto')
 const { createReadStream } = require('node:fs')
-const { copyFile, mkdir, rm, stat, writeFile } = require('node:fs/promises')
+const { copyFile, mkdir, stat, writeFile } = require('node:fs/promises')
 const { isAbsolute, join, relative, resolve, sep } = require('node:path')
+const { generateQuickStartPdf, PDF_NAME } = require('./generate-quick-start-pdf.cjs')
 
 const RELEASE_VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$/
 
@@ -71,6 +72,7 @@ async function finalizeWindowsReleaseArtifacts({
   projectRoot = resolve(__dirname, '..', '..'),
   version = process.env.npm_package_version,
   releaseDate,
+  pdfGenerator = generateQuickStartPdf,
 } = {}) {
   const validatedVersion = releaseVersion(version)
 
@@ -87,6 +89,8 @@ async function finalizeWindowsReleaseArtifacts({
   const namedQuickInstallPath = releaseAssetPath(releaseDirectory, '快速安装脚本.cmd')
   const quickGuideMarkdownSourcePath = resolve(projectRoot, '快速安装手册.md')
   const quickGuideMarkdownPath = releaseAssetPath(releaseDirectory, '快速安装手册.md')
+  const quickGuidePdfSourcePath = resolve(projectRoot, PDF_NAME)
+  const quickGuidePdfPath = releaseAssetPath(releaseDirectory, PDF_NAME)
   const quickGuideImageNames = [
     'docs/images/quickstart/06-select-global-putty.png',
     'docs/images/quickstart/07-launch-bastion.png',
@@ -95,7 +99,6 @@ async function finalizeWindowsReleaseArtifacts({
     sourcePath: resolve(projectRoot, name),
     releasePath: releaseAssetPath(releaseDirectory, name),
   }))
-  const legacyQuickGuidePdfPath = releaseAssetPath(releaseDirectory, '快速安装手册.pdf')
   const latestYmlPath = releaseAssetPath(releaseDirectory, 'latest.yml')
   const installer = await requireNonEmptyFile(installerPath, 'Windows installer')
   await requireNonEmptyFile(blockmapPath, 'installer blockmap')
@@ -103,10 +106,6 @@ async function finalizeWindowsReleaseArtifacts({
   await requireNonEmptyFile(packagedBridgePath, 'packaged bridge')
 
   await mkdir(releaseDirectory, { recursive: true })
-  // The quick-install guide is now maintained as Markdown with adjacent
-  // screenshots. Do not leave a stale PDF from an earlier release beside the
-  // current installer where it could be mistaken for a supported asset.
-  await rm(legacyQuickGuidePdfPath, { force: true })
   await copyFile(packagedBridgePath, bridgePath)
   await requireNonEmptyFile(bridgePath, 'release bridge')
 
@@ -126,6 +125,20 @@ async function finalizeWindowsReleaseArtifacts({
   }
   if (await statIfFile(quickGuideMarkdownSourcePath)) {
     await copyFile(quickGuideMarkdownSourcePath, quickGuideMarkdownPath)
+    // Always regenerate from the checked-out Markdown. A stale PDF from a
+    // previous release must never be published with different instructions.
+    await pdfGenerator({
+      projectRoot,
+      markdownPath: quickGuideMarkdownSourcePath,
+      outputPath: quickGuidePdfPath,
+    })
+    await requireNonEmptyFile(quickGuidePdfPath, 'release quick-install PDF')
+  }
+  else if (await statIfFile(quickGuidePdfSourcePath)) {
+    // Keep compatibility with historical release fixtures that only provide a
+    // pre-rendered guide; normal releases always take the Markdown branch.
+    await copyFile(quickGuidePdfSourcePath, quickGuidePdfPath)
+    await requireNonEmptyFile(quickGuidePdfPath, 'release quick-install PDF')
   }
   for (const image of quickGuideImages) {
     if (await statIfFile(image.sourcePath)) {

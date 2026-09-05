@@ -8,6 +8,7 @@
 const { existsSync } = require('node:fs')
 const { readFile, stat, writeFile, mkdir } = require('node:fs/promises')
 const { resolve, join, relative, sep, isAbsolute } = require('node:path')
+const { generateQuickStartPdf, PDF_NAME } = require('./generate-quick-start-pdf.cjs')
 
 const VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$/
 
@@ -117,6 +118,8 @@ async function packageQuickInstall({
   version,
   releaseDirectory = join(projectRoot, 'release'),
   outputPath = join(releaseDirectory, `Terminal-Agent-Quick-Install-${releaseVersion(version)}.zip`),
+  generatePdf = true,
+  pdfGenerator = generateQuickStartPdf,
 } = {}) {
   const validatedVersion = releaseVersion(version)
   const releaseRoot = resolve(releaseDirectory)
@@ -126,6 +129,7 @@ async function packageQuickInstall({
   const installerPath = source(installerName)
   const bridgePath = source('putty.exe')
   const manualMdPath = firstExisting([source('快速安装手册.md'), join(projectRoot, '快速安装手册.md')])
+  const manualPdfPath = source(PDF_NAME)
   const scriptPath = firstExisting([source('快速安装脚本.cmd'), join(projectRoot, '快速安装脚本.cmd')])
   const implementationPath = firstExisting([source('quick-install.cmd'), join(projectRoot, 'quick-install.cmd')])
   const quickstartImages = [
@@ -136,10 +140,22 @@ async function packageQuickInstall({
     path: firstExisting([source(name), join(projectRoot, name)]),
     label: `quick-install guide image (${name})`,
   }))
+  await requireFile(manualMdPath, 'quick-install Markdown guide')
+  if (generatePdf) {
+    await pdfGenerator({
+      projectRoot,
+      markdownPath: manualMdPath,
+      outputPath: manualPdfPath,
+    })
+  }
+  else if (!existsSync(manualPdfPath)) {
+    throw new Error(`Expected quick-install PDF at ${manualPdfPath}.`)
+  }
   const entries = [
     { name: 'putty.exe', path: bridgePath, label: 'putty.exe bridge' },
     { name: installerName, path: installerPath, label: 'Windows installer' },
     { name: '快速安装手册.md', path: manualMdPath, label: 'quick-install Markdown guide' },
+    { name: PDF_NAME, path: manualPdfPath, label: 'quick-install PDF guide' },
     { name: '快速安装脚本.cmd', path: scriptPath, label: 'quick-install script' },
     { name: 'quick-install.cmd', path: implementationPath, label: 'quick-install implementation' },
     ...quickstartImages,

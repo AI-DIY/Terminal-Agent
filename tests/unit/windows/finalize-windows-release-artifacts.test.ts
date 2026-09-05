@@ -3,7 +3,13 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+type PdfGenerator = (input: {
+  projectRoot: string
+  markdownPath: string
+  outputPath: string
+}) => Promise<{ path: string; bytes: number }>
 
 type FinalizedWindowsReleaseArtifacts = {
   bridgePath: string
@@ -17,6 +23,7 @@ type WindowsReleaseArtifactFinalizer = {
     projectRoot: string
     version: string
     releaseDate?: Date
+    pdfGenerator?: PdfGenerator
   }): Promise<FinalizedWindowsReleaseArtifacts>
   latestYml(input: {
     version: string
@@ -30,6 +37,14 @@ const require = createRequire(import.meta.url)
 
 function finalizer(): WindowsReleaseArtifactFinalizer {
   return require('../../../scripts/windows/finalize-windows-release-artifacts.cjs') as WindowsReleaseArtifactFinalizer
+}
+
+function stubPdfGenerator() {
+  const pdf = Buffer.from('%PDF-1.7\nquick-install guide\n%%EOF\n')
+  return vi.fn(async ({ outputPath }: { outputPath: string }) => {
+    await writeFile(outputPath, pdf)
+    return { path: outputPath, bytes: pdf.length }
+  }) as unknown as PdfGenerator
 }
 
 describe('Windows release artifact finalizer', () => {
@@ -109,7 +124,7 @@ describe('Windows release artifact finalizer', () => {
     }
   })
 
-  it('copies the Markdown guide and its screenshots while ignoring legacy PDF assets', async () => {
+  it('copies the Markdown guide and its screenshots and regenerates the PDF from Markdown', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'terminal-agent-release-artifacts-'))
     const version = '1.0.8'
     const packagedBridgePath = join(projectRoot, 'release', 'win-unpacked', 'putty.exe')
@@ -133,13 +148,19 @@ describe('Windows release artifact finalizer', () => {
       await writeFile(firstImagePath, 'session image')
       await writeFile(secondImagePath, 'bastion image')
       await writeFile(join(projectRoot, 'release', '快速安装手册.pdf'), 'legacy pdf')
+      const pdfGenerator = stubPdfGenerator()
 
-      await finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version })
+      await finalizer().finalizeWindowsReleaseArtifacts({ projectRoot, version, pdfGenerator })
 
       await expect(readFile(join(projectRoot, 'release', '快速安装手册.md'), 'utf8')).resolves.toBe('guide')
       await expect(readFile(join(projectRoot, 'release', 'docs', 'images', 'quickstart', '06-select-global-putty.png'), 'utf8')).resolves.toBe('session image')
       await expect(readFile(join(projectRoot, 'release', 'docs', 'images', 'quickstart', '07-launch-bastion.png'), 'utf8')).resolves.toBe('bastion image')
-      await expect(readFile(join(projectRoot, 'release', '快速安装手册.pdf'))).rejects.toThrow()
+      await expect(readFile(join(projectRoot, 'release', '快速安装手册.pdf'), 'utf8')).resolves.toContain('%PDF-1.7')
+      expect(pdfGenerator).toHaveBeenCalledWith({
+        projectRoot,
+        markdownPath: guidePath,
+        outputPath: join(projectRoot, 'release', '快速安装手册.pdf'),
+      })
     }
     finally {
       await rm(projectRoot, { recursive: true, force: true })
