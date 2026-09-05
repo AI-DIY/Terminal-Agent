@@ -246,9 +246,8 @@ const updater = new UpdaterService({
   // session as the app window so update traffic honours Windows/PAC/VPN proxy
   // policy without hard-coding a proxy address.
   fetch: createElectronSessionUpdaterFetcher(() => session.defaultSession),
-  relaunch: () => app.relaunch(),
-  // Keep the normal persistence/session shutdown path when restarting after
-  // an installer launch; `app.exit()` would bypass before-quit handlers.
+  // Keep the normal persistence/session shutdown path after the installer
+  // launches; NSIS owns replacement and any post-install application launch.
   exit: code => code === 0 ? app.quit() : app.exit(code),
 })
 let unregisterSessionEvents: (() => void) | undefined

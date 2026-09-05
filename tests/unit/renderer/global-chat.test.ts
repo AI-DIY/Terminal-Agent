@@ -448,6 +448,33 @@ describe('global chat store', () => {
     expect(executePlan).not.toContain('window.confirm')
   })
 
+  it('keeps each pending-plan delete control beside and vertically centered on its editable command', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+    const editorStart = panel.indexOf('<div v-if="message.executionPlan.status === \'pending_review\'" class="plan-command-editor">')
+    const staticCommandStart = panel.indexOf('<label v-else class="plan-command">', editorStart)
+    const editorMarkup = panel.slice(editorStart, staticCommandStart)
+    const editorRule = /\.plan-command-editor\s*\{([^}]*)\}/.exec(panel)?.[1] ?? ''
+    const editorActionsRule = /\.plan-command-editor \.plan-step-actions\s*\{([^}]*)\}/.exec(panel)?.[1] ?? ''
+    const deleteRule = /\.delete-plan-step\s*\{([^}]*)\}/.exec(panel)?.[1] ?? ''
+
+    expect(editorStart).toBeGreaterThan(-1)
+    expect(staticCommandStart).toBeGreaterThan(editorStart)
+    expect(editorMarkup).toContain('<label class="plan-command">')
+    expect(editorMarkup.indexOf('textarea class="plan-edit-input"')).toBeGreaterThan(-1)
+    expect(editorMarkup.indexOf('<div class="plan-step-actions">')).toBeGreaterThan(editorMarkup.indexOf('textarea class="plan-edit-input"'))
+    expect(editorMarkup.indexOf('class="icon-button delete-plan-step"')).toBeGreaterThan(editorMarkup.indexOf('<div class="plan-step-actions">'))
+    expect(panel).not.toContain('<div v-if="message.executionPlan.status === \'pending_review\'" class="plan-step-actions">')
+
+    expect(editorRule).toContain('display: grid')
+    expect(editorRule).toContain('grid-template-columns: minmax(0, 1fr) 27px')
+    expect(editorRule).toContain('align-items: center')
+    expect(editorActionsRule).toContain('align-self: center')
+    expect(editorActionsRule).toContain('justify-self: end')
+    expect(deleteRule).toContain('border-color: var(--amber-line)')
+    expect(deleteRule).toContain('background: var(--amber-soft)')
+    expect(deleteRule).toContain('color: var(--amber)')
+  })
+
   it('passes selected SSH connections and enabled skills with sends and compaction', async () => {
     const transport = { ...api(), compact: vi.fn(async () => ({
       revision: 1,

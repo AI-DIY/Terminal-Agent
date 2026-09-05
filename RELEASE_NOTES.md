@@ -1,3 +1,24 @@
+# Terminal-Agent v3.2.4
+
+Release date: 2026-09-06
+
+## 开源 TA 修改意见微调
+
+- 升级检查继续以 Nuts 更新服务返回的版本信息为依据；当 Release 同时包含 ZIP 和 Windows 安装程序时，升级流程选择标准的 `Terminal-Agent-Setup-<version>.exe` 安装包。
+- AI 工作区的执行计划将删除命令操作与可编辑命令输入框同行显示，并使用明显的浅黄色删除图标，便于在多行命令中发现和操作。
+- 所有“新建 SSH 连接”入口继续使用统一页面；默认展示“堡垒机跳转连接”，连接方式选项卡优先单行排列，说明图仅在堡垒机连接方式中显示。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-3.2.4.exe`
+- `putty.exe`
+- `快速安装脚本.cmd`
+- `快速安装手册.md`
+- `快速安装手册.pdf`
+- `Terminal-Agent-Quick-Install-3.2.4.zip`
+
+---
+
 # Terminal-Agent v3.2.3
 
 Release date: 2026-09-05

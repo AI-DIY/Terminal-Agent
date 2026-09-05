@@ -1145,6 +1145,7 @@ onBeforeUnmount(() => {
               :loading="bastionLoading"
               :error="bastionError"
               @direct-connect="connect"
+              @bastion-launch="launchBastion"
               @save-profile="saveEditedProfile"
               @select-private-key="selectPrivateKey"
             />
@@ -1179,6 +1180,7 @@ onBeforeUnmount(() => {
           :error="bastionError"
           :editing-profile="editingProfile"
           @direct-connect="connect"
+          @bastion-launch="launchBastion"
           @save-profile="saveEditedProfile"
           @select-private-key="selectPrivateKey"
           @close="closeConnectionDialog"

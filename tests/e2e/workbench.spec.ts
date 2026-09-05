@@ -1184,7 +1184,7 @@ test('removes per-terminal maximize and defaults to a full-height SSH row', asyn
   }
 })
 
-test('shows the unified direct SSH connection modes without legacy bastion controls', async ({ launchApp }) => {
+test('shows direct and bastion-jump SSH modes, defaulting to the bastion launcher', async ({ launchApp }) => {
   let app: ElectronApplication | undefined
 
   try {
@@ -1195,14 +1195,31 @@ test('shows the unified direct SSH connection modes without legacy bastion contr
     await expect(page.getByRole('tab', { name: '堡垒机SSH连接', exact: true })).toHaveCount(0)
     await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
     await expect(page.getByRole('tab', { name: '主机私钥连接', exact: true })).toBeVisible()
-    await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: '唤起终端', exact: true })).toHaveCount(0)
+    const bastionTab = page.getByRole('tab', { name: '堡垒机跳转连接', exact: true })
+    const passwordTab = page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })
+    await expect(bastionTab).toBeVisible()
+    await expect(bastionTab).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '唤起终端', exact: true })).toBeVisible()
     await expect(page.getByText('【配置须知】', { exact: true })).toBeVisible()
     await expect(page.getByText('【使用须知】', { exact: true })).toBeVisible()
     await expect(page.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toBeVisible()
     await expect(page.getByAltText('集团堡垒机正常指定主机 SSH 连接', { exact: true })).toBeVisible()
     await expect(page.getByText('未配置堡垒机目录来源。', { exact: true })).toHaveCount(0)
+    await passwordTab.click()
+    await expect(passwordTab).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByLabel('主机地址', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '唤起终端', exact: true })).toHaveCount(0)
+    await expect(page.getByText('【配置须知】', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('【使用须知】', { exact: true })).toHaveCount(0)
+    await expect(page.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toHaveCount(0)
+    await expect(page.getByAltText('集团堡垒机正常指定主机 SSH 连接', { exact: true })).toHaveCount(0)
+
+    await bastionTab.click()
+    await expect(bastionTab).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toBeVisible()
+    await expect(page.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toBeVisible()
   } finally {
     await app?.close()
   }
@@ -1223,16 +1240,23 @@ test('opens the unified launcher over an existing terminal without unmounting it
     await page.locator('.shell-toolbar-content').getByRole('button', { name: '新建 SSH 连接', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: '新建 SSH 连接', exact: true })
     await expect(dialog).toBeVisible()
+    const bastionTab = dialog.getByRole('tab', { name: '堡垒机跳转连接', exact: true })
+    await expect(bastionTab).toBeVisible()
+    await expect(bastionTab).toHaveAttribute('aria-selected', 'true')
+    await expect(dialog.getByLabel('堡垒机主机地址', { exact: true })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: '唤起终端', exact: true })).toBeVisible()
     await expect(dialog.getByText('【配置须知】', { exact: true })).toBeVisible()
     await expect(dialog.getByText('【使用须知】', { exact: true })).toBeVisible()
     await expect(dialog.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toBeVisible()
     await expect(dialog.getByAltText('集团堡垒机正常指定主机 SSH 连接', { exact: true })).toBeVisible()
     await expect(dialog.getByRole('tab', { name: '堡垒机SSH连接', exact: true })).toHaveCount(0)
-    await expect(dialog.getByLabel('堡垒机主机地址', { exact: true })).toHaveCount(0)
-    await expect(dialog.getByRole('button', { name: '唤起终端', exact: true })).toHaveCount(0)
     expect(await originalPane.evaluate(node => node.isConnected)).toBe(true)
     await dialog.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true }).click()
     await expect(dialog.getByLabel('主机地址')).toBeVisible()
+    await expect(dialog.getByLabel('堡垒机主机地址', { exact: true })).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: '唤起终端', exact: true })).toHaveCount(0)
+    await expect(dialog.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toHaveCount(0)
+    await expect(dialog.getByAltText('集团堡垒机正常指定主机 SSH 连接', { exact: true })).toHaveCount(0)
   } finally {
     await app?.close()
     await closeServer(sshServer.server)

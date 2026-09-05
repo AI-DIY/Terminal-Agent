@@ -79,7 +79,7 @@ async function download(): Promise<void> {
 
 async function install(): Promise<void> {
   if (!downloaded.value || busy.value) return
-  if (typeof window.confirm === 'function' && !window.confirm('更新安装程序即将启动，安装完成后 Terminal-Agent 会自动重启。是否继续？')) return
+  if (typeof window.confirm === 'function' && !window.confirm('更新安装程序即将启动，当前应用将关闭。请在安装向导中完成升级。是否继续？')) return
   busy.value = true
   message.value = '正在启动安装程序…'
   const updater = updaterBridge()
@@ -91,15 +91,9 @@ async function install(): Promise<void> {
   try {
     await updater.install()
     await loadState()
-    message.value = '安装程序已启动，正在准备重启…'
-    // Give the NSIS process a moment to take ownership of the installer
-    // before asking Electron to relaunch.  The installer itself displays its
-    // native installation progress window.
-    window.setTimeout(() => {
-      void updater.restart()
-        .then(() => emit('restarted'))
-        .catch(error => { busy.value = false; message.value = error instanceof Error ? error.message : '无法自动重启应用。' })
-    }, 700)
+    message.value = '安装程序已启动，正在关闭当前应用…'
+    await updater.restart()
+    emit('restarted')
   } catch (error) {
     busy.value = false
     message.value = error instanceof Error ? error.message : '启动安装程序失败，请稍后重试。'
@@ -148,7 +142,7 @@ onBeforeUnmount(() => { stopProgress?.(); stopStatus?.(); stopError?.() })
         <section v-if="release" class="release-card">
           <div class="release-card-head"><div><strong>{{ release.name }}</strong><span>版本 v{{ release.version }} · Windows x64</span></div><CheckCircle2 :size="18" aria-hidden="true" /></div>
           <p v-if="release.notes" class="release-notes">{{ release.notes }}</p>
-          <p class="release-source">来源：Nuts 更新服务</p>
+          <p class="release-source">版本来源：Nuts 更新服务；安装包：官方 GitHub Release</p>
         </section>
         <p v-if="message" class="upgrade-message" :class="{ error: phase === 'error' }" role="status">{{ message }}</p>
         <p v-if="!release && !busy && phase !== 'error'" class="upgrade-hint">点击“检查更新”获取更新服务中的最新版本。</p>
