@@ -1393,12 +1393,12 @@ test('keeps focus inside and restores focus from the unified connection dialog',
     await openButton.click()
     const dialog = page.getByRole('dialog', { name: '新建 SSH 连接', exact: true })
     const closeButton = dialog.getByRole('button', { name: '关闭新建 SSH 连接', exact: true })
-    await expect(dialog.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeFocused()
+    await expect(dialog.getByRole('tab', { name: '堡垒机跳转连接', exact: true })).toBeFocused()
     await closeButton.focus()
     await page.keyboard.press('Shift+Tab')
-    // The direct password form is the only active mode, so the dialog's focus
-    // trap wraps from the close button to its final actionable control.
-    await expect(dialog.getByRole('button', { name: '连接', exact: true })).toBeFocused()
+    // The bastion-jump form is the default mode, so the dialog's focus trap
+    // wraps from the close button to its final actionable control.
+    await expect(dialog.getByRole('button', { name: '唤起终端', exact: true })).toBeFocused()
     await closeButton.click()
     await expect(openButton).toBeFocused()
   } finally {
