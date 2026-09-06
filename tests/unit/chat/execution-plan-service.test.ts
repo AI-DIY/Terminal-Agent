@@ -70,6 +70,67 @@ describe('ExecutionPlanService', () => {
     expect(updateMessage.mock.calls.map(call => ((call as unknown as [{ requestId: string }])[0]).requestId)).toEqual(['request-1:executing', 'request-1:result'])
   })
 
+  it('arms one result-output watcher before writing and preserves the confirmed AI context selection', async () => {
+    const write = vi.fn(async () => undefined)
+    const output = { expect: vi.fn(), forget: vi.fn(), complete: vi.fn(), cancel: vi.fn() }
+    const watcher = { watch: vi.fn(() => output) }
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: plan() }],
+        shells: [{ sessionId: 'session-1', hostname: 'web-01', status: 'open' }],
+      } })),
+      updateMessage: vi.fn(async () => undefined),
+    }, {
+      snapshot: () => [{ id: 'session-1', hostname: 'web-01' }],
+      write,
+    }, { match: () => null })
+    service.setResultOutputWatcher(watcher)
+
+    await service.execute({
+      requestId: 'watch-output',
+      chatId: 'chat-1',
+      messageId: 'message-1',
+      sshContextLines: 125,
+      sshContextSessionIds: ['session-1'],
+      skillIds: ['security-review'],
+    })
+
+    expect(watcher.watch).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      messageId: 'message-1',
+      sshContextLines: 125,
+      sshContextSessionIds: ['session-1'],
+      skillIds: ['security-review'],
+    })
+    expect(output.expect).toHaveBeenCalledWith('session-1')
+    expect(output.expect.mock.invocationCallOrder[0]).toBeLessThan(write.mock.invocationCallOrder[0]!)
+    expect(output.complete).toHaveBeenCalledOnce()
+    expect(output.complete.mock.invocationCallOrder[0]).toBeGreaterThan(write.mock.invocationCallOrder[0]!)
+    expect(output.cancel).not.toHaveBeenCalled()
+  })
+
+  it('cancels the output watcher when the final execution state cannot be saved', async () => {
+    const output = { expect: vi.fn(), forget: vi.fn(), complete: vi.fn(), cancel: vi.fn() }
+    const watcher = { watch: vi.fn(() => output) }
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: plan() }],
+        shells: [{ sessionId: 'session-1', hostname: 'web-01', status: 'open' }],
+      } })),
+      updateMessage: vi.fn(async ({ requestId }: { requestId: string }) => {
+        if (requestId.endsWith(':result')) throw new Error('storage unavailable')
+      }),
+    }, {
+      snapshot: () => [{ id: 'session-1', hostname: 'web-01' }],
+      write: vi.fn(async () => undefined),
+    }, { match: () => null })
+    service.setResultOutputWatcher(watcher)
+
+    await expect(service.execute({ requestId: 'save-fails', chatId: 'chat-1', messageId: 'message-1' })).rejects.toThrow('storage unavailable')
+    expect(output.cancel).toHaveBeenCalledOnce()
+    expect(output.complete).not.toHaveBeenCalled()
+  })
+
   it('keeps the AI original command while persisting a human final command', async () => {
     const updateMessage = vi.fn(async () => undefined)
     const service = new ExecutionPlanService({

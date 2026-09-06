@@ -67,4 +67,18 @@ describe('execution plans', () => {
     expect(() => chatPlanExecuteRequestSchema.parse({ ...identity, sessionId: 'forged' })).toThrow()
     expect(() => chatPlanEditStepRequestSchema.parse({ ...identity, stepId: 's1', command: 'echo\0unsafe' })).toThrow()
   })
+
+  it('allows confirmed plans to retain only a bounded, explicit AI context selection', () => {
+    const request = {
+      requestId: 'r1',
+      chatId: 'c1',
+      messageId: 'm1',
+      sshContextLines: 125,
+      sshContextSessionIds: ['primary', 'alternate'],
+      skillIds: ['security-review'],
+    }
+    expect(chatPlanExecuteRequestSchema.parse(request)).toMatchObject(request)
+    expect(() => chatPlanExecuteRequestSchema.parse({ ...request, sshContextSessionIds: ['primary', 'primary'] })).toThrow()
+    expect(() => chatPlanExecuteRequestSchema.parse({ ...request, skillIds: ['untrusted-skill'] })).toThrow()
+  })
 })

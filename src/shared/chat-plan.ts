@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { BUILT_IN_SKILLS, type BuiltInSkillId } from './built-in-skills'
 
 const chatIdentifierSchema = z.string().trim().min(1).max(128)
 const hostnameSchema = z.string().trim().min(1).max(255)
@@ -71,7 +72,23 @@ export type ChatPlanRemoveStepRequest = z.infer<typeof chatPlanRemoveStepRequest
 export const chatPlanCancelRequestSchema = chatPlanRequestSchema
 export type ChatPlanCancelRequest = z.infer<typeof chatPlanCancelRequestSchema>
 
-export const chatPlanExecuteRequestSchema = chatPlanRequestSchema
+/**
+ * The plan review card captures the same explicit SSH context selection that
+ * produced the plan.  The main process uses it only when an already-approved
+ * command later produces terminal output and asks the AI to analyse that
+ * result; it never changes the plan's command targets.
+ */
+const planExecutionContextSchema = {
+  sshContextLines: z.number().int().min(0).optional(),
+  sshContextSessionIds: z.array(chatIdentifierSchema).max(128).superRefine((ids, context) => {
+    if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'sshContextSessionIds must be unique' })
+  }).optional(),
+  skillIds: z.array(z.enum(BUILT_IN_SKILLS.map(skill => skill.id) as [BuiltInSkillId, ...BuiltInSkillId[]])).max(BUILT_IN_SKILLS.length).superRefine((ids, context) => {
+    if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'skillIds must be unique' })
+  }).optional(),
+}
+
+export const chatPlanExecuteRequestSchema = chatPlanRequestSchema.extend(planExecutionContextSchema).strict()
 export type ChatPlanExecuteRequest = z.infer<typeof chatPlanExecuteRequestSchema>
 
 export function parseAssistantPlanOutput(value: string): AssistantPlanOutput {

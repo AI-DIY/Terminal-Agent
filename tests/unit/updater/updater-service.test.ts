@@ -187,6 +187,48 @@ describe('UpdaterService', () => {
     finally { await rm(directory, { recursive: true, force: true }) }
   })
 
+  it('recovers from a temporary Nuts 503 by checking the official latest release', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-updater-test-'))
+    const version = '3.2.5'
+    const installer = Buffer.from('fallback installer')
+    const digest = createHash('sha256').update(installer).digest('hex')
+    const nutsUrl = 'http://ta.ai-diy.me/update/win32/3.2.4'
+    const githubUrl = 'https://api.github.com/repos/AI-DIY/Terminal-Agent/releases/latest'
+    const installerUrl = `https://github.com/AI-DIY/Terminal-Agent/releases/download/v${version}/Terminal-Agent-Setup-${version}.exe`
+    try {
+      const calls: string[] = []
+      const service = new UpdaterService({
+        currentVersion: '3.2.4',
+        tempDirectory: directory,
+        platform: 'win32',
+        architecture: 'x64',
+        feedUrl: 'http://ta.ai-diy.me/update/win32',
+        fetch: async (url) => {
+          calls.push(url)
+          if (url === nutsUrl) return response(503, '')
+          if (url === githubUrl) return response(200, JSON.stringify({
+            tag_name: `v${version}`,
+            name: `Terminal-Agent ${version}`,
+            html_url: `https://github.com/AI-DIY/Terminal-Agent/releases/tag/v${version}`,
+            assets: [{
+              name: `Terminal-Agent-Setup-${version}.exe`,
+              browser_download_url: installerUrl,
+              size: installer.length,
+              digest: `sha256:${digest}`,
+            }],
+          }))
+          if (url === installerUrl) return response(200, installer, { 'content-length': String(installer.length) })
+          throw new Error(`Unexpected updater request: ${url}`)
+        },
+      })
+
+      await expect(service.check()).resolves.toMatchObject({ updateAvailable: true, release: { version, installerName: `Terminal-Agent-Setup-${version}.exe` } })
+      expect(calls).toEqual([nutsUrl, githubUrl])
+      await expect(service.download()).resolves.toMatchObject({ version, integrityVerified: true })
+    }
+    finally { await rm(directory, { recursive: true, force: true }) }
+  })
+
   it('uses Nuts only to select a version and downloads the matching signed GitHub installer', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-updater-test-'))
     const version = '3.2.0'

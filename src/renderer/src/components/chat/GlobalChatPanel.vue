@@ -424,7 +424,9 @@ async function executePlan(messageId: string): Promise<void> {
         if (command !== stepCommand(step)) await editStep(messageId, step.id, command)
       }
     }
-    await store.executePlan(actionChatId, messageId)
+    await runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (
+      store.executePlan(actionChatId, messageId, selectedContextSessionIds.value, skillIds)
+    ))
   } catch (error) {
     reportActionError(actionChatId, error, '计划执行失败')
   }
@@ -524,7 +526,7 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 .global-chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--panel); color: var(--text); }.global-chat-panel.context-details-expanded { grid-template-rows: minmax(130px, auto) minmax(0, 1fr) auto; }
 .ai-head { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; align-content: start; gap: 5px 8px; min-width: 0; min-height: 0; padding: 8px 10px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--surface); }
 .ai-avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 6px; background: var(--text-strong); color: var(--surface); font-size: 10px; font-weight: 800; }
-.ai-head-copy { min-width: 0; }.ai-head-copy h3 { margin: 0; overflow: hidden; color: var(--text-strong); font-size: 15px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }.ai-head-copy span { display: block; margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.ai-head-copy { min-width: 0; }.ai-head-copy h3 { margin: 0; overflow: hidden; color: var(--text-strong); font-size: 14px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }.ai-head-copy span { display: block; margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .ai-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
 .session-action,.session-switch { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 30px; min-width: 0; padding: 0 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 9px; font-weight: 650; white-space: nowrap; }
 .session-action:hover:not(:disabled),.session-switch:hover { border-color: var(--focus); background: var(--hover); }.session-action:disabled,.session-switch:has(select:disabled) { cursor: not-allowed; opacity: .55; }

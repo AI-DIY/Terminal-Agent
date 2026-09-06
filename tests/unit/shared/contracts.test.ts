@@ -417,6 +417,7 @@ describe('chat contracts', () => {
 
   it('allows only completed runtime events to carry a materialized execution plan', () => {
     const base = { chatId: 'chat-1', runId: '550e8400-e29b-41d4-a716-446655440000', messageId: 'message-1' }
+    expect(chatRuntimeEventSchema.parse({ kind: 'chat:auto-started', chatId: base.chatId, runId: base.runId })).toMatchObject({ kind: 'chat:auto-started' })
     expect(chatRuntimeEventSchema.parse({ ...base, kind: 'chat:completed', content: '{"version":1,"reply":"完成","plan":null}', executionPlan })).toMatchObject({ executionPlan })
     expect(() => chatRuntimeEventSchema.parse({ ...base, kind: 'chat:delta', content: 'x', executionPlan })).toThrow()
     expect(() => chatRuntimeEventSchema.parse({ ...base, kind: 'chat:error', error: '失败', retryable: true, executionPlan })).toThrow()

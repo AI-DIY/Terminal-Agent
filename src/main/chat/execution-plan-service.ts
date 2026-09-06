@@ -2,6 +2,7 @@ import type { AssistantPlanOutput, ChatExecutionPlan, ChatPlanEditStepRequest, C
 import type { ChatMessageContent } from '../../shared/chat-content'
 import { resolvedHostnames } from '../../shared/shell-display-label'
 import { resolveModelShellTargets, sameModelShellTarget, selectStableModelTargetIndex } from '../../shared/model-shell-target'
+import type { PlanResultOutputWatcher } from './plan-result-auto-continue'
 
 type FenceMatcher = { match(command: string): { id: string; name: string } | null }
 type Sessions = { snapshot(): Array<{ id: string; hostname: string; observedHostname?: string; title?: string }>; write(sessionId: string, data: string): void | Promise<void> }
@@ -9,6 +10,7 @@ type Chats = { get(chatId: string): Promise<{ chat: { messages: Array<{ id: stri
 
 export class ExecutionPlanService {
   private readonly active = new Set<string>()
+  private resultOutputWatcher?: PlanResultOutputWatcher
   // Every plan mutation and execution reads a fresh message snapshot. Keep
   // those reads and writes in one per-message queue so an older snapshot can
   // never overwrite a newer edit/removal.
@@ -29,6 +31,11 @@ export class ExecutionPlanService {
       step.finalCommand = request.command
       return plan
     }))
+  }
+
+  /** Attach the process-wide Shell-output observer after ChatRuntime is ready. */
+  setResultOutputWatcher(watcher: PlanResultOutputWatcher | undefined): void {
+    this.resultOutputWatcher = watcher
   }
   async removeStep(request: ChatPlanRemoveStepRequest): Promise<unknown> {
     return this.enqueue(request.messageId, () => this.mutate(request, plan => {
@@ -67,15 +74,39 @@ export class ExecutionPlanService {
         const steps = current.steps.map(step => ({ ...step, sessionId: findSessionForTarget(step.target, workspace.chat.shells, online) }))
         current.status = 'executing'; current.steps = steps
         await this.save(request, current, 'executing')
+        // Register before SessionService.write(). Some Shell adapters can
+        // synchronously publish an echo/result while write() is returning;
+        // delaying this registration would lose that result and leave the AI
+        // waiting for a later unrelated terminal event.
+        const resultOutput = this.resultOutputWatcher?.watch({
+          chatId: request.chatId,
+          messageId: request.messageId,
+          ...(request.sshContextLines === undefined ? {} : { sshContextLines: request.sshContextLines }),
+          ...(request.sshContextSessionIds === undefined ? {} : { sshContextSessionIds: [...request.sshContextSessionIds] }),
+          ...(request.skillIds === undefined ? {} : { skillIds: [...request.skillIds] }),
+        })
         let sent = 0
         for (const step of current.steps) {
           if (!step.sessionId) { step.sendState = 'failed'; step.failure = '目标 Shell 已断开或不可用'; break }
-          try { await this.sessions.write(step.sessionId, `${step.finalCommand ?? step.originalCommand}\n`); step.sendState = 'sent'; sent += 1 } catch { step.sendState = 'failed'; step.failure = '命令未能写入目标 Shell'; break }
+          resultOutput?.expect(step.sessionId)
+          try { await this.sessions.write(step.sessionId, `${step.finalCommand ?? step.originalCommand}\n`); step.sendState = 'sent'; sent += 1 } catch { resultOutput?.forget(step.sessionId); step.sendState = 'failed'; step.failure = '命令未能写入目标 Shell'; break }
         }
         const failed = current.steps.some(step => step.sendState === 'failed')
         current.steps = current.steps.map((step, index) => index > sent && step.sendState === 'pending' ? { ...step, sendState: 'not_sent' } : step)
         current.status = failed ? (sent > 0 ? 'partially_executed' : 'execution_failed') : 'executed'
-        return this.save(request, current, 'result')
+        try {
+          // Keep output observations buffered until the durable result state
+          // is written. This avoids launching an analysis turn against an
+          // execution record that failed to persist, while still retaining
+          // synchronous Shell output captured during the writes above.
+          const saved = await this.save(request, current, 'result')
+          if (sent === 0) resultOutput?.cancel()
+          else resultOutput?.complete()
+          return saved
+        } catch (error) {
+          resultOutput?.cancel()
+          throw error
+        }
       } finally { this.active.delete(request.messageId) }
     })
   }

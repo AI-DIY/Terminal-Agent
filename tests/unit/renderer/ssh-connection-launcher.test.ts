@@ -5,15 +5,27 @@ const launcher = readFileSync(new URL('../../../src/renderer/src/components/conn
 const workbench = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 describe('unified SSH connection launcher', () => {
-  it('exposes the direct and bastion-jump modes, defaulting to bastion guidance', () => {
+  it('puts the manual bastion guidance first and leaves direct modes available', () => {
+    const bastionMode = launcher.indexOf("{ id: 'bastionHost'")
+    const passwordMode = launcher.indexOf("{ id: 'password'")
+    const privateKeyMode = launcher.indexOf("{ id: 'privateKey'")
+
+    expect(bastionMode).toBeGreaterThan(-1)
+    expect(bastionMode).toBeLessThan(passwordMode)
+    expect(passwordMode).toBeLessThan(privateKeyMode)
     expect(launcher).toContain("id: 'password'")
     expect(launcher).toContain("id: 'privateKey'")
     expect(launcher).toContain("id: 'bastionHost'")
     expect(launcher).toContain("label: '堡垒机跳转连接'")
     expect(launcher).toContain("const initialMode = props.editingProfile?.authKind ?? 'bastionHost'")
-    expect(launcher).toContain('BastionHostForm')
-    expect(launcher).toContain('bastionLaunch: [request: BastionLaunchRequest]')
-    expect(launcher).toContain('@launch="launchBastion"')
+    expect(launcher).not.toContain('BastionHostForm')
+    expect(launcher).not.toContain('BastionLaunchRequest')
+    expect(launcher).not.toContain('bastionLaunch:')
+    expect(launcher).not.toContain('堡垒机主机地址')
+    expect(launcher).not.toContain('唤起终端')
+    expect(launcher).toContain('请手动操作')
+    expect(launcher).toContain('不会自动填写或唤起堡垒机')
+    expect(launcher).toContain('.manual-launch-note { grid-column: 1 / -1;')
     expect(launcher).toContain('<template v-if="mode === \'bastionHost\'">')
     expect(launcher).toContain('【配置须知】')
     expect(launcher).toContain('【使用须知】')

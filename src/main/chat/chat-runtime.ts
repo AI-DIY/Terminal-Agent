@@ -17,12 +17,30 @@ export type ChatRuntimeRequest = {
   sshContextLines?: number
   sshContextSessionIds?: string[]
   skillIds?: BuiltInSkillId[]
+  /** Trusted main-process continuation: do not persist a synthetic user turn. */
+  skipUserMessage?: true
+  /** Trusted prompt appended only to the model request, never to the transcript. */
+  transientPrompt?: string
+  /** Called after this run becomes the active owner. Not exposed through IPC. */
+  onStarted?: () => void
+  /** Trusted continuation guard: return without superseding an existing run. */
+  onlyIfIdle?: true
+  /** Epoch captured before the continuation's scheduling boundary. */
+  onlyIfIdleEpoch?: number
 }
 export type ChatRuntimeEvent =
+  | { kind: 'chat:auto-started'; chatId: string; runId: string }
   | { kind: 'chat:progress'; chatId: string; runId: string; stage: ChatProgressStage }
   | { kind: 'chat:delta'; chatId: string; runId: string; messageId: string; content: string }
   | { kind: 'chat:completed'; chatId: string; runId: string; messageId: string; content: string; executionPlan?: import('../../shared/chat-plan').ChatExecutionPlan }
   | { kind: 'chat:error'; chatId: string; runId: string; messageId: string; error: string; retryable: boolean }
+
+export type ChatPlanResultContinuationRequest = {
+  chatId: string
+  sshContextLines?: number
+  sshContextSessionIds?: string[]
+  skillIds?: BuiltInSkillId[]
+}
 
 type RuntimeDeps = {
   appendMessage(request: any): Promise<{ messageId?: string } | unknown>
@@ -52,6 +70,12 @@ export class ChatRuntime {
   private readonly active = new Map<string, ActiveChatRun>()
   private readonly generations = new Map<string, number>()
   /**
+   * Counts user-originated send invocations, including ones still waiting on
+   * compaction. Automatic result turns use the captured value to avoid
+   * overtaking a user request that has already entered the runtime.
+   */
+  private readonly userRequestEpochs = new Map<string, number>()
+  /**
    * A compaction lock is held for the whole compaction transaction.  In
    * particular, the lock is not released until the caller has persisted the
    * generated summary (see compactAndPersist).  This prevents a new turn from
@@ -61,10 +85,21 @@ export class ChatRuntime {
   constructor(private readonly deps: RuntimeDeps) {}
 
   async send(request: ChatRuntimeRequest, publish: (event: ChatRuntimeEvent) => void): Promise<void> {
+    const userRequestEpoch = this.userRequestEpochs.get(request.chatId) ?? 0
+    if (!request.onlyIfIdle) this.userRequestEpochs.set(request.chatId, userRequestEpoch + 1)
+    const expectedUserRequestEpoch = request.onlyIfIdleEpoch ?? userRequestEpoch
     // A compaction may have cancelled the previous run but still be reading
     // and summarising its transcript.  Wait for that transaction to finish so
     // this turn cannot hydrate from the pre-summary snapshot.
     await this.waitForCompaction(request.chatId)
+    // Automatic plan-result turns must never win a race against a user turn
+    // that became active while compaction was settling. Keep this check
+    // immediately adjacent to active-run installation; there is no await
+    // between the two operations, so either side wins deterministically.
+    if (request.onlyIfIdle && (
+      this.active.has(request.chatId)
+      || (this.userRequestEpochs.get(request.chatId) ?? 0) !== expectedUserRequestEpoch
+    )) return
     const superseded = this.active.get(request.chatId)
     superseded?.controller.abort()
     const controller = new AbortController()
@@ -86,6 +121,7 @@ export class ChatRuntime {
       resolveDone,
     }
     this.active.set(request.chatId, run)
+    request.onStarted?.()
     if (superseded) await this.finalizeCancelledRun(superseded)
     const isOwner = () => {
       const current = this.active.get(request.chatId)
@@ -111,7 +147,7 @@ export class ChatRuntime {
     const pendingUpdates: Promise<unknown>[] = []
     try {
       if (request.retry) retryMessageId = await this.deps.getRetryMessageId?.(request.chatId, request.content)
-      if ((!request.retry || !retryMessageId) && isOwner()) {
+      if ((!request.retry || !retryMessageId) && !request.skipUserMessage && isOwner()) {
         try {
           await this.deps.appendMessage({ requestId: `${request.runId}:user`, chatId: request.chatId, role: 'user', content: request.content, state: 'complete' })
         } catch {
@@ -129,6 +165,13 @@ export class ChatRuntime {
       })
       const structuredContext = Array.isArray(contextResult) ? null : contextResult
       const context = Array.isArray(contextResult) ? contextResult : contextResult.messages
+      // Plan-result follow-ups are deliberately transient. The persisted
+      // transcript already carries the reviewed plan, while this trusted
+      // prompt tells the model why it should inspect the freshly selected SSH
+      // output without manufacturing a user message in the conversation.
+      const modelContext = request.transientPrompt
+        ? [...context, { role: 'user' as const, content: request.transientPrompt }]
+        : context
       const effectiveSkillIds = structuredContext?.skillIds ?? request.skillIds
       const preserveShellConnections = structuredContext?.preserveShellConnections ?? request.sshContextSessionIds !== undefined
       const settings = await this.deps.resolveModel({ hasImages: structuredContext?.hasImages ?? false })
@@ -136,7 +179,7 @@ export class ChatRuntime {
         await finalizeCancellationIfNeeded()
         return
       }
-      if (estimateChatMessages(context) > settings.contextLimit) throw new Error('聊天上下文超出当前模型限制，请先压缩历史消息。')
+      if (estimateChatMessages(modelContext) > settings.contextLimit) throw new Error('聊天上下文超出当前模型限制，请先压缩历史消息。')
       if (isLiveOwner()) {
         persistedMessageId = retryMessageId
         if (isLiveOwner()) {
@@ -161,13 +204,13 @@ export class ChatRuntime {
       try {
         const providerStream = this.deps.runStructured
           ? (publishProgress('thinking'), this.deps.runStructured(settings, {
-            messages: context,
+            messages: modelContext,
             availableHostnames: structuredContext?.availableHostnames ?? [],
             ...(structuredContext?.availableShells ? { availableShells: structuredContext.availableShells } : {}),
             ...(preserveShellConnections ? { preserveShellConnections: true } : {}),
             ...(effectiveSkillIds?.length ? { skillIds: effectiveSkillIds } : {}),
           }, controller.signal, publishProgress)).then(result => { publishProgress('observing'); materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) })
-          : Promise.resolve().then(() => this.deps.stream(settings, context, delta => {
+          : Promise.resolve().then(() => this.deps.stream(settings, modelContext, delta => {
           if (!isLiveOwner()) return
           output += delta
           if (persistedMessageId && this.deps.updateMessage) {
@@ -242,6 +285,45 @@ export class ChatRuntime {
       if (isOwner()) this.active.delete(request.chatId)
       run.resolveDone()
     }
+  }
+
+  /**
+   * Start one trusted follow-up after an approved plan's target Shell emits
+   * output. The prompt is intentionally not persisted as a user message: the
+   * existing task history and explicit SSH selection remain the source of
+   * truth, and any next command still materializes as a new reviewable plan.
+   */
+  async continueAfterPlanResult(
+    request: ChatPlanResultContinuationRequest,
+    publish: (event: ChatRuntimeEvent) => void,
+  ): Promise<boolean> {
+    // A result must never interrupt a user turn or a deliberate compaction.
+    // Dropping the automatic continuation in that case leaves the terminal
+    // output available for the user's next explicit request.
+    if (this.active.has(request.chatId) || this.compactions.has(request.chatId)) return false
+    const idleEpoch = this.userRequestEpochs.get(request.chatId) ?? 0
+    // Give an already-dispatched renderer input a chance to install its
+    // explicit run before this timer-driven continuation claims the chat.
+    // This microtask-only delay keeps the normal result analysis responsive
+    // while making the idle-only policy deterministic at the UI event boundary.
+    await Promise.resolve()
+    if (this.active.has(request.chatId) || this.compactions.has(request.chatId)) return false
+    const runId = randomUUID()
+    let started = false
+    await this.send({
+      ...request,
+      runId,
+      content: planResultContinuationPrompt,
+      skipUserMessage: true,
+      transientPrompt: planResultContinuationPrompt,
+      onlyIfIdle: true,
+      onlyIfIdleEpoch: idleEpoch,
+      onStarted: () => {
+        started = true
+        publish({ kind: 'chat:auto-started', chatId: request.chatId, runId })
+      },
+    }, publish)
+    return started
   }
 
   /**
@@ -450,6 +532,8 @@ type ActiveChatRun = {
   done: Promise<void>
   resolveDone: () => void
 }
+
+const planResultContinuationPrompt = '系统触发：用户已经确认并发送此前执行计划中的命令，相关 SSH 会话产生了新输出。请仅基于当前任务历史和本次明确选择的 SSH 上下文分析执行结果，说明已确认的事实、风险和下一步；如需要执行命令，必须返回新的待人工确认计划。不要重复发送此前计划的命令。'
 
 function persistedMessageIdFrom(value: unknown): string | undefined {
   return typeof value === 'object' && value && 'messageId' in value && typeof value.messageId === 'string' ? value.messageId : undefined

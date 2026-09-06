@@ -387,7 +387,7 @@ watch(
 .shell-canvas.empty { grid-template-rows: minmax(0, 1fr); }
 .shell-canvas.empty .canvas-content { grid-row: 1; }
 .shell-toolbar-content { position: relative; display: flex; align-items: stretch; min-width: 0; height: 42px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--panel); }
-.workspace-toolbar-title { display: flex; flex: 0 0 auto; align-items: center; min-width: 92px; padding: 0 11px; border-right: 1px solid var(--line-soft); }.workspace-toolbar-title strong { color: var(--text-strong); font-size: 11px; white-space: nowrap; }
+.workspace-toolbar-title { display: flex; flex: 0 0 auto; align-items: center; min-width: 92px; padding: 0 11px; border-right: 1px solid var(--line-soft); }.workspace-toolbar-title strong { color: var(--text-strong); font-size: 14px; white-space: nowrap; }
 .hostbar-tools { position: sticky; z-index: 3; right: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 6px; min-width: max-content; margin-left: auto; padding: 0 8px; border-left: 1px solid var(--line-soft); background: var(--panel); box-shadow: -8px 0 12px var(--panel); }
 .shell-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; }
 .shell-title strong { color: var(--text-strong); font-size: 10px; white-space: nowrap; }

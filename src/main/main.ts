@@ -58,7 +58,7 @@ import { ShellHistoryService } from './shell-history/shell-history-service'
 import { registerShellHistoryHandlers } from './shell-history/register-shell-history-handlers'
 import { registerShellHistoryLifecycle } from './shell-history/register-shell-history-lifecycle'
 import { registerGracefulApplicationShutdown } from './application-shutdown'
-import { createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../shared/contracts'
+import { chatRuntimeEventSchema, createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../shared/contracts'
 import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
 import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'
 import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'
@@ -68,6 +68,7 @@ import { registerUpdaterHandlers } from './updater/register-updater-handlers'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { buildStructuredShellContextEntries, StructuredChatAgent } from './chat/structured-chat-agent'
 import { ExecutionPlanService } from './chat/execution-plan-service'
+import { PlanResultAutoContinue } from './chat/plan-result-auto-continue'
 import { modelHostname, uniqueModelHostnames } from '../shared/model-context'
 import { normalizeChatContextSessionIds } from '../shared/chat-context-selection'
 import { normalizeBuiltInSkillIds } from '../shared/built-in-skills'
@@ -224,6 +225,16 @@ const chatRuntime = new ChatRuntime({
   stream: (settings, messages, onDelta, format, signal) => chatCompletions.stream(settings, messages, onDelta, format, signal),
 })
 ;(chatRuntime as ChatRuntime & { planService?: ExecutionPlanService }).planService = executionPlans
+const planResultAutoContinue = new PlanResultAutoContinue(
+  sessions,
+  chatRuntime,
+  event => {
+    const target = mainWindow
+    if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return
+    target.webContents.send('chat:event', chatRuntimeEventSchema.parse(event))
+  },
+)
+executionPlans.setResultOutputWatcher(planResultAutoContinue)
 const executionGateway = new ExecutionGateway(
   sessionModes,
   confirmations,
@@ -433,6 +444,11 @@ if (isPrimaryInstance) {
     () => sessions.closeAll(),
     () => shellHistoryLifecycle.drain(),
     () => {
+      // Stop result watchers before closing Shells. In-flight plan IPC work
+      // then receives an inert watcher instead of retaining post-shutdown
+      // timers or initiating a model turn while Electron is quitting.
+      planResultAutoContinue.dispose()
+      executionPlans.setResultOutputWatcher(undefined)
       diagnostics?.dispose()
       updater.dispose()
     },

@@ -170,10 +170,7 @@ nav:hover::-webkit-scrollbar-thumb:hover,nav:focus-within::-webkit-scrollbar-thu
 .chat-group h2 { margin: 0 0 5px; padding: 11px 9px 0; color: var(--muted); font-size: 10px; font-weight: 650; }
 .history-item { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 28px; border-radius: 5px; }
 .history-item:hover { background: var(--hover); }
-.history-item.active { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }
-.history-item.has-online-shell { background: var(--amber-soft); box-shadow: inset 3px 0 0 var(--amber-line); }
-.history-item.has-online-shell:hover { background: color-mix(in srgb, var(--amber-soft) 82%, var(--hover)); }
-.history-item.has-online-shell.active { background: color-mix(in srgb, var(--amber-soft) 72%, var(--selected)); box-shadow: inset 3px 0 0 var(--amber-line); }
+.history-item.active { background: var(--amber-soft); box-shadow: inset 3px 0 0 var(--red); }
 .chat-select,.chat-rename { min-width: 0; padding: 9px 6px 10px 10px; border: 0; background: transparent; color: var(--text); text-align: left; }
 .chat-title { display: flex; min-width: 0; align-items: center; gap: 5px; }.chat-title strong { overflow: hidden; color: var(--text-strong); font-size: 11px; font-weight: 690; text-overflow: ellipsis; white-space: nowrap; }.pin-status { display: grid; flex: 0 0 auto; color: var(--accent); }
 .chat-select-meta { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: 5px; color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }.chat-select-meta b { color: var(--muted); font-weight: 550; white-space: nowrap; }.working-status,.finished-status { margin-left: auto; font-size: 9px; font-weight: 750; white-space: nowrap; }.working-status { color: var(--red); }.finished-status { color: var(--muted); }

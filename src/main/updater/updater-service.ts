@@ -138,11 +138,14 @@ const githubHosts = new Set([
  */
 export class UpdaterError extends Error {
   readonly code: string
+  /** HTTP status when the failure came from a non-success response. */
+  readonly statusCode?: number
 
-  constructor(message: string, code = 'UPDATE_FAILED') {
+  constructor(message: string, code = 'UPDATE_FAILED', statusCode?: number) {
     super(message)
     this.name = 'UpdaterError'
     this.code = code
+    this.statusCode = statusCode
   }
 }
 
@@ -399,27 +402,65 @@ export class UpdaterService {
 
       const metadataUrl = this.feedUrl
         ? `${this.feedUrl}/${encodeURIComponent(this.currentVersion)}`
-        : `${DEFAULT_API_BASE}/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repository)}/releases/latest`
-      const metadataSource: UpdateSource = this.feedUrl ? 'nuts' : 'github'
-      request = await this.request(metadataUrl, {
-        maxBytes: this.maxMetadataBytes,
-        timeoutMs: this.requestTimeoutMs,
-      }, {}, metadataSource)
-      this.assertActive()
-      // Nuts follows the Squirrel update convention: a 204 response means
-      // that the current version is up to date and intentionally has no body.
-      if (request.response.status === 204) {
-        this.release = null
-        this.downloaded = null
-        this.installerPath = undefined
-        await this.removeUpdateDirectory()
-        this.setState({ phase: 'up-to-date', release: null, downloaded: null, error: null })
-        this.emitProgress({ phase: 'check', percent: 100 })
-        return { currentVersion: this.currentVersion, updateAvailable: false, release: null }
+        : githubLatestReleaseUrl(this.owner, this.repository)
+      let release: UpdateRelease | null = null
+      if (this.feedUrl) {
+        let nutsPayload: NutsReleasePayload | undefined
+        let usedGithubFallback = false
+        try {
+          request = await this.request(metadataUrl, {
+            maxBytes: this.maxMetadataBytes,
+            timeoutMs: this.requestTimeoutMs,
+          }, {}, 'nuts')
+          this.assertActive()
+          // Nuts follows the Squirrel update convention: a 204 response means
+          // that the current version is up to date and intentionally has no body.
+          if (request.response.status === 204) {
+            this.release = null
+            this.downloaded = null
+            this.installerPath = undefined
+            await this.removeUpdateDirectory()
+            this.setState({ phase: 'up-to-date', release: null, downloaded: null, error: null })
+            this.emitProgress({ phase: 'check', percent: 100 })
+            return { currentVersion: this.currentVersion, updateAvailable: false, release: null }
+          }
+          nutsPayload = parseJsonObject(
+            await readResponseText(request.response, this.maxMetadataBytes, request.request.controller.signal),
+            this.maxMetadataBytes,
+            '更新服务',
+          )
+          this.assertActive()
+        } catch (error) {
+          if (!isNutsAvailabilityFailure(error)) throw error
+          if (request) {
+            this.releaseRequest(request.request)
+            request = undefined
+          }
+          // The public Nuts endpoint can temporarily return 503 while the
+          // official release API remains healthy. Use GitHub latest as a
+          // bounded recovery path, retaining all normal release/asset trust
+          // checks and never accepting the Nuts download URL itself.
+          release = await this.fetchLatestGithubRelease()
+          usedGithubFallback = true
+        }
+        // A valid Nuts response remains authoritative. In particular, a
+        // failure while resolving its selected GitHub tag must not silently
+        // switch to the unrelated latest release.
+        if (!usedGithubFallback) release = await this.resolveNutsRelease(nutsPayload!)
+      } else {
+        request = await this.request(metadataUrl, {
+          maxBytes: this.maxMetadataBytes,
+          timeoutMs: this.requestTimeoutMs,
+        }, {}, 'github')
+        this.assertActive()
+        const payload = parseJsonObject(
+          await readResponseText(request.response, this.maxMetadataBytes, request.request.controller.signal),
+          this.maxMetadataBytes,
+          'GitHub',
+        )
+        this.assertActive()
+        release = this.parseRelease(payload)
       }
-      const payload = parseJsonObject(await readResponseText(request.response, this.maxMetadataBytes, request.request.controller.signal), this.maxMetadataBytes, metadataSource === 'nuts' ? '更新服务' : 'GitHub')
-      this.assertActive()
-      const release = this.feedUrl ? await this.resolveNutsRelease(payload as NutsReleasePayload) : this.parseRelease(payload)
       const updateAvailable = release !== null
       this.release = release
       this.downloaded = null
@@ -440,6 +481,28 @@ export class UpdaterService {
       // The body is consumed above; release only this operation's request.
       // (A concurrent download may own another request.)
       if (typeof request !== 'undefined') this.releaseRequest(request.request)
+    }
+  }
+
+  /** Resolve the latest official release for a temporary Nuts outage. */
+  private async fetchLatestGithubRelease(): Promise<UpdateRelease | null> {
+    let request: UpdaterRequestResult | undefined
+    try {
+      request = await this.request(githubLatestReleaseUrl(this.owner, this.repository), {
+        maxBytes: this.maxMetadataBytes,
+        timeoutMs: this.requestTimeoutMs,
+      }, {}, 'github')
+      this.assertActive()
+      const payload = parseJsonObject(
+        await readResponseText(request.response, this.maxMetadataBytes, request.request.controller.signal),
+        this.maxMetadataBytes,
+        'GitHub',
+      )
+      this.assertActive()
+      return this.parseRelease(payload)
+    }
+    finally {
+      if (request) this.releaseRequest(request.request)
     }
   }
 
@@ -902,7 +965,7 @@ export class UpdaterService {
         if (response.status < 200 || response.status >= 300) {
           if (response.status === 404) throw new UpdaterError('暂未找到可用版本。', 'NOT_FOUND')
           if (response.status === 403) throw new UpdaterError(source === 'nuts' ? '更新服务请求受限，请稍后重试。' : 'GitHub 请求受限，请稍后重试。', 'RATE_LIMITED')
-          throw new UpdaterError(`${source === 'nuts' ? '更新服务' : 'GitHub'} 请求失败（${response.status}）。`, 'HTTP_ERROR')
+          throw new UpdaterError(`${source === 'nuts' ? '更新服务' : 'GitHub'} 请求失败（${response.status}）。`, 'HTTP_ERROR', response.status)
         }
         const contentLength = parseContentLength(response.headers.get('content-length'))
         if (contentLength !== undefined && contentLength > limits.maxBytes) throw new UpdaterError('更新响应超过允许的大小上限。', 'PAYLOAD_TOO_LARGE')
@@ -1219,6 +1282,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isSupportedArchitecture(architecture: string): boolean {
   return architecture === 'x64' || architecture === 'amd64'
+}
+
+function githubLatestReleaseUrl(owner: string, repository: string): string {
+  return `${DEFAULT_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/releases/latest`
+}
+
+function isNutsAvailabilityFailure(error: unknown): boolean {
+  if (!(error instanceof UpdaterError)) return false
+  if (error.code === 'HTTP_ERROR') return (error.statusCode ?? 0) >= 500 && (error.statusCode ?? 0) <= 599
+  return error.code === 'NETWORK_ERROR' || error.code === 'TIMEOUT'
 }
 
 function isAbortError(error: unknown): boolean {

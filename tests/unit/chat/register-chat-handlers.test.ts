@@ -55,6 +55,35 @@ describe('registerChatHandlers', () => {
     dispose()
   })
 
+  it('forwards confirmed-plan SSH context while applying the same skill gate to result continuations', async () => {
+    const service = {
+      list: vi.fn(), create: vi.fn(), get: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), remove: vi.fn(), associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(), reconcileSessions: vi.fn(), onChanged: vi.fn(() => () => undefined), appendMessage: vi.fn(),
+    }
+    const plans = { editStep: vi.fn(), removeStep: vi.fn(), cancel: vi.fn(), execute: vi.fn(async () => undefined) }
+    const trusted = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    const sessions = { snapshot: vi.fn(() => []), onClosed: vi.fn(() => () => undefined) }
+    const dispose = registerChatHandlers(service as never, trusted as never, sessions as never, undefined, plans as never, { skillAuthorization: { isAuthenticated: () => false } })
+
+    await handlerFor('chat:plan:execute')({ sender: trusted }, {
+      requestId: 'execute-plan-1',
+      chatId: 'chat-1',
+      messageId: 'message-1',
+      sshContextLines: 125,
+      sshContextSessionIds: ['primary', 'alternate'],
+      skillIds: ['security-review'],
+    })
+
+    expect(plans.execute).toHaveBeenCalledWith({
+      requestId: 'execute-plan-1',
+      chatId: 'chat-1',
+      messageId: 'message-1',
+      sshContextLines: 125,
+      sshContextSessionIds: ['primary', 'alternate'],
+      skillIds: [],
+    })
+    dispose()
+  })
+
   it('rejects every untrusted channel before reading payloads or calling the service', async () => {
     const service = { list: vi.fn(), create: vi.fn(), get: vi.fn(), listConversationSessions: vi.fn(), createConversationSession: vi.fn(), switchConversationSession: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), updateTitle: vi.fn(), pin: vi.fn(), unpin: vi.fn(), remove: vi.fn(), associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(), reconcileSessions: vi.fn(), onChanged: vi.fn(() => () => undefined) }
     const sessions = { snapshot: vi.fn(), onClosed: vi.fn(() => () => undefined) }

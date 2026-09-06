@@ -166,7 +166,14 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
     ipcMain.handle('chat:plan:edit-step', (event, request: unknown) => { assertTrustedSender(event, trustedSender); return plans.editStep(chatPlanEditStepRequestSchema.parse(request)) })
     ipcMain.handle('chat:plan:remove-step', (event, request: unknown) => { assertTrustedSender(event, trustedSender); return plans.removeStep(chatPlanRemoveStepRequestSchema.parse(request)) })
     ipcMain.handle('chat:plan:cancel', (event, request: unknown) => { assertTrustedSender(event, trustedSender); return plans.cancel(chatPlanCancelRequestSchema.parse(request)) })
-    ipcMain.handle('chat:plan:execute', (event, request: unknown) => { assertTrustedSender(event, trustedSender); return plans.execute(chatPlanExecuteRequestSchema.parse(request)) })
+    ipcMain.handle('chat:plan:execute', (event, request: unknown) => {
+      assertTrustedSender(event, trustedSender)
+      const parsed = chatPlanExecuteRequestSchema.parse(request)
+      // A confirmed plan can carry the renderer's enabled skills into its
+      // result-analysis turn. Apply the same authentication gate as ordinary
+      // chat sends so a forged IPC payload cannot enable product skills.
+      return plans.execute(skillsAuthenticated(options) ? parsed : { ...parsed, skillIds: [] })
+    })
   }
 
   const unsubscribeChanged = service.onChanged(event => trustedSender.send('chats:changed', event))

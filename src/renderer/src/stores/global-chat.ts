@@ -133,6 +133,20 @@ export function createGlobalChatStore(api: Api) {
   }
 
   function apply(event: ChatRuntimeEvent): void {
+    if (event.kind === 'chat:auto-started') {
+      // Plan-result continuations originate in the trusted main process, so
+      // there is no optimistic user message to establish this run locally.
+      // Never let a delayed automatic start replace an active user turn.
+      if (state.runs[event.chatId]) return
+      cancelledRuns.delete(event.chatId)
+      state.runs[event.chatId] = event.runId
+      state.progress[event.chatId] = null
+      state.activeMessageIds[event.chatId] = null
+      state.runUserMessageIds[event.chatId] = null
+      state.errors[event.chatId] = ''
+      state.retryableErrors[event.chatId] = false
+      return
+    }
     const acceptsCancelledRun = event.kind === 'chat:error'
       && !event.retryable
       && cancelledRuns.get(event.chatId) === event.runId
@@ -413,9 +427,17 @@ export function createGlobalChatStore(api: Api) {
       this.hydrate(chatId, snapshot.chat.messages)
       return snapshot
     },
-    async executePlan(chatId: string, messageId: string): Promise<ChatWorkspaceSnapshot> {
+    async executePlan(chatId: string, messageId: string, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[]): Promise<ChatWorkspaceSnapshot> {
       if (!api.plans) throw new Error('计划操作不可用')
-      const snapshot = await api.plans.execute({ requestId: crypto.randomUUID(), chatId, messageId })
+      const selectedSessionIds = sessionIds ?? state.sshContextSessionIds[chatId]
+      const snapshot = await api.plans.execute({
+        requestId: crypto.randomUUID(),
+        chatId,
+        messageId,
+        sshContextLines: state.sshContextLines,
+        ...(selectedSessionIds === undefined ? {} : { sshContextSessionIds: [...new Set(selectedSessionIds)] }),
+        ...(skillIds === undefined ? {} : { skillIds: [...new Set(skillIds)] }),
+      })
       this.hydrate(chatId, snapshot.chat.messages)
       return snapshot
     },

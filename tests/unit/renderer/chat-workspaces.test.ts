@@ -1322,23 +1322,15 @@ describe('durable chat workbench components', () => {
     expect(reconnect).not.toContain('attachSession(session, true, () => true, session.chatId)')
   })
 
-  it('gates Bastion launch completion and cleanup by the current workbench operation', () => {
+  it('keeps the workbench free of obsolete Bastion catalog and launch plumbing', () => {
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
 
-    expect(view).toContain('if (!workbenchOperations.isCurrent(operationGeneration)) return')
-    expect(view).toContain('if (workbenchOperations.isCurrent(operationGeneration)) bastionLoading.value = false')
-    expect(view).toMatch(/bastionLoading\.value = false\r?\n {2}showConnection\.value = false/)
-  })
-
-  it('clears superseded Bastion loading before opening a modal or direct session', () => {
-    const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
-    const connect = view.slice(view.indexOf('async function connect'), view.indexOf('function createConnection'))
-    const createConnection = view.slice(view.indexOf('function createConnection'), view.indexOf('function editSavedProfile'))
-
-    expect(connect.indexOf('bastionLoading.value = false')).toBeGreaterThanOrEqual(0)
-    expect(connect.indexOf('bastionLoading.value = false')).toBeLessThan(connect.indexOf('runWorkbenchSessionOpen'))
-    expect(createConnection.indexOf('bastionLoading.value = false')).toBeGreaterThanOrEqual(0)
-    expect(createConnection.indexOf('bastionLoading.value = false')).toBeLessThan(createConnection.indexOf('showConnection.value = true'))
+    expect(view).not.toContain('refreshBastionCatalog')
+    expect(view).not.toContain('loadBastionHosts')
+    expect(view).not.toContain('launchBastion')
+    expect(view).not.toContain('bastionLoading')
+    expect(view).not.toContain('accessClient.catalog()')
+    expect(view).toContain('@direct-connect="connect"')
   })
 
   it('uses one atomic batch request before removing a chat with running sessions', () => {
@@ -1407,16 +1399,13 @@ describe('durable chat workbench components', () => {
     expect(openedHandler).toContain('handleOpenedSession(session)')
   })
 
-  it('captures direct and bastion attachment targets before asynchronous open completes', () => {
+  it('captures the direct attachment target before asynchronous open completes', () => {
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
     const connect = view.slice(view.indexOf('async function connect'), view.indexOf('function createConnection'))
-    const bastion = view.slice(view.indexOf('async function launchBastion'), view.indexOf('function selectPrivateKey'))
 
     expect(connect).toContain('const targetChatId = activeWorkbenchChatId.value')
     expect(connect).toContain('targetChatId,')
     expect(connect).toContain('capturedTargetChatId')
-    expect(bastion).toContain('const targetChatId = activeWorkbenchChatId.value')
-    expect(bastion).toContain('attachSession(session, true, () => workbenchOperations.isCurrent(operationGeneration), (session as SessionView & { chatId?: string }).chatId ?? targetChatId ?? undefined)')
   })
 
   it('keeps an opened event on its captured task when selection changes during the open', async () => {

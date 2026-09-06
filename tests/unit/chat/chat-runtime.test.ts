@@ -546,6 +546,74 @@ describe('chat runtime', () => {
     expect(getContext).toHaveBeenCalledWith('c1', { sshContextLines: 240, sshContextSessionIds: ['alternate'] })
   })
 
+  it('continues from approved-plan output with selected SSH context without persisting a synthetic user message', async () => {
+    const appendMessage = vi.fn(async (input: { requestId: string; role?: string }) => ({ messageId: input.requestId }))
+    const getContext = vi.fn(async () => ({
+      messages: [{ role: 'user' as const, content: '历史任务：检查服务状态。' }],
+      hasImages: false,
+      availableHostnames: ['web-01'],
+    }))
+    const runStructured = vi.fn(async (_settings: unknown, input: { messages: Array<{ role: string; content: string }>; skillIds?: string[] }) => {
+      expect(input.messages).toContainEqual({ role: 'user', content: '历史任务：检查服务状态。' })
+      expect(input.messages.at(-1)?.content).toContain('用户已经确认并发送此前执行计划')
+      expect(input.skillIds).toEqual(['security-review'])
+      return { version: 1 as const, reply: '已收到 SSH 返回结果。', plan: null }
+    })
+    const runtime = new ChatRuntime({
+      appendMessage,
+      getContext,
+      resolveModel: vi.fn(async () => ({ endpoint: 'http://model', model: 'm', contextLimit: 10_000, apiKey: null })),
+      runStructured,
+      stream: vi.fn(async () => undefined),
+    })
+    const events: ChatRuntimeEvent[] = []
+
+    await expect(runtime.continueAfterPlanResult({
+      chatId: 'c1',
+      sshContextLines: 125,
+      sshContextSessionIds: ['primary', 'alternate'],
+      skillIds: ['security-review'],
+    }, event => events.push(event))).resolves.toBe(true)
+
+    expect(getContext).toHaveBeenCalledWith('c1', {
+      sshContextLines: 125,
+      sshContextSessionIds: ['primary', 'alternate'],
+      skillIds: ['security-review'],
+    })
+    expect(appendMessage.mock.calls.map(([request]) => request).filter(request => request.role === 'user')).toEqual([])
+    expect(events[0]).toMatchObject({ kind: 'chat:auto-started', chatId: 'c1' })
+    expect(events.at(-1)).toMatchObject({ kind: 'chat:completed', content: '{"version":1,"reply":"已收到 SSH 返回结果。","plan":null}' })
+  })
+
+  it('does not let an idle-only automatic turn supersede an active user run', async () => {
+    const userRunStarted = deferred<void>()
+    const releaseUserRun = deferred<void>()
+    const runStructured = vi.fn(async (_settings: unknown, input: { messages: Array<{ role: string; content: string }> }) => {
+      if (input.messages.at(-1)?.content === '用户请求') {
+        userRunStarted.resolve()
+        await releaseUserRun.promise
+      }
+      return { version: 1 as const, reply: '完成', plan: null }
+    })
+    const runtime = new ChatRuntime({
+      appendMessage: vi.fn(async (input: { requestId: string; role?: string }) => ({ messageId: input.requestId })),
+      getContext: vi.fn(async () => ({ messages: [{ role: 'user' as const, content: '用户请求' }], hasImages: false, availableHostnames: [] })),
+      resolveModel: vi.fn(async () => ({ endpoint: 'http://model', model: 'm', contextLimit: 10_000, apiKey: null })),
+      runStructured,
+      stream: vi.fn(async () => undefined),
+    })
+    // Invoke the automatic turn first, then enter the user turn before the
+    // automatic send resumes from its initial async boundary. The user epoch
+    // must make the automatic request return without taking ownership.
+    const auto = runtime.continueAfterPlanResult({ chatId: 'c1' }, () => undefined)
+    const user = runtime.send({ chatId: 'c1', runId: 'user-run', content: '用户请求' }, () => undefined)
+    await userRunStarted
+    await expect(auto).resolves.toBe(false)
+    releaseUserRun.resolve()
+    await user
+    expect(runStructured).toHaveBeenCalledTimes(1)
+  })
+
   it('forwards enabled product skills to structured generation', async () => {
     const getContext = vi.fn(async () => ({
       messages: [{ role: 'user' as const, content: 'check' }],

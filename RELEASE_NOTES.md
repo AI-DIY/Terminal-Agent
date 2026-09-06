@@ -1,3 +1,27 @@
+# Terminal-Agent v3.2.5
+
+Release date: 2026-09-06
+
+## 开源 TA 修改意见微调
+
+- 执行计划确认后，目标 SSH 会话产生返回数据时自动触发 AI 结果分析；沿用历史上下文和用户明确选择的 SSH 主机，不重复发送已确认命令。
+- 任务空间仅突出当前选中的任务；工作中的任务保留红色状态文字，不再使用浅黄色工作态背景。
+- 新建任务、新建 SSH 连接和无在线 SSH 连接统一使用同一 SSH 页面；堡垒机跳转连接置于首位并改为手动操作说明，保留配置须知、使用须知及截图。
+- 升级流程只选择并下载 `Terminal-Agent-Setup-<version>.exe`，不升级 `putty.exe` 等附属组件；大包支持多路 Range 下载，Nuts 服务短暂返回 503 时使用经过完整校验的官方 Release 恢复检查。
+- 执行计划删除操作与多行命令编辑框同行、垂直居中，并保持浅黄色视觉提示。
+- 任务空间、SSH 工作区和 AI 工作区标题字号统一。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-3.2.5.exe`
+- `putty.exe`
+- `快速安装脚本.cmd`
+- `快速安装手册.md`
+- `快速安装手册.pdf`
+- `Terminal-Agent-Quick-Install-3.2.5.zip`
+
+---
+
 # Terminal-Agent v3.2.4
 
 Release date: 2026-09-06

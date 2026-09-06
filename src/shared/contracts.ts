@@ -357,6 +357,10 @@ export const chatProgressStageSchema = z.enum(['thinking', 'executing', 'observi
 export type ChatProgressStage = z.infer<typeof chatProgressStageSchema>
 
 export const chatRuntimeEventSchema = z.discriminatedUnion('kind', [
+  // A plan-result continuation is initiated by the trusted main process,
+  // rather than an optimistic renderer user message.  Let the renderer bind
+  // the generated run id before it receives progress or a final reply.
+  z.object({ kind: z.literal('chat:auto-started'), chatId: chatIdentifierSchema, runId: z.string().uuid() }).strict(),
   z.object({ kind: z.literal('chat:progress'), chatId: chatIdentifierSchema, runId: z.string().uuid(), stage: chatProgressStageSchema }).strict(),
   z.object({ kind: z.literal('chat:delta'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, content: z.string().max(100_000) }).strict(),
   z.object({ kind: z.literal('chat:completed'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, content: z.string().max(1_000_000), executionPlan: chatExecutionPlanSchema.optional() }).strict(),

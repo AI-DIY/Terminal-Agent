@@ -1,33 +1,26 @@
 <script setup lang="ts">
 import { CheckCircle2, SquareTerminal, X } from '@lucide/vue'
 import { computed, nextTick, ref, type ComponentPublicInstance } from 'vue'
-import type { BastionCatalogSnapshot, BastionHostSummary, BastionLaunchRequest, SavedDirectSessionInput } from '../../../../shared/contracts'
+import type { SavedDirectSessionInput } from '../../../../shared/contracts'
 import type { DirectSessionSummary } from '../../../../main/ssh/direct-session-repository'
 import sessionConfigImage from '../../../../../docs/images/quickstart/06-select-global-putty.png'
 import bastionUsageImage from '../../../../../docs/images/quickstart/07-launch-bastion.png'
-import BastionHostForm from './BastionHostForm.vue'
 import DirectSshForm, { type DirectSshConnectRequest, type DirectSshSharedFields, type PrivateKeySelection } from './DirectSshForm.vue'
 import { nextConnectionEntryState } from './connection-entry-state'
 
 const modes = [
+  { id: 'bastionHost', label: '堡垒机跳转连接' },
   { id: 'password', label: '主机用户名 + 密码连接' },
   { id: 'privateKey', label: '主机私钥连接' },
-  { id: 'bastionHost', label: '堡垒机跳转连接' },
 ] as const
 export type SshConnectionLauncherMode = typeof modes[number]['id']
 
 const props = withDefaults(defineProps<{
   appearance?: 'embedded' | 'dialog'
-  catalog: BastionCatalogSnapshot | null
-  hosts?: BastionHostSummary[]
-  openHostIds?: ReadonlySet<string>
-  loading?: boolean
-  error?: string
   editingProfile?: DirectSessionSummary | null
-}>(), { appearance: 'dialog', hosts: () => [], openHostIds: () => new Set(), loading: false, error: '' })
+}>(), { appearance: 'dialog', editingProfile: null })
 const emit = defineEmits<{
   directConnect: [request: DirectSshConnectRequest]
-  bastionLaunch: [request: BastionLaunchRequest]
   saveProfile: [profile: SavedDirectSessionInput]
   selectPrivateKey: [accept: (selection: PrivateKeySelection | null) => void]
   close: []
@@ -39,7 +32,6 @@ const visibleModes = computed(() => modes)
 const initialMode = props.editingProfile?.authKind ?? 'bastionHost'
 const mode = ref<SshConnectionLauncherMode>(initialMode)
 const fields = ref<DirectSshSharedFields>({ host: '', port: 22, username: '' })
-const target = ref('')
 const tabRefs = ref<HTMLButtonElement[]>([])
 const activeLabel = computed(() => modes.find(item => item.id === mode.value)?.label ?? '')
 
@@ -59,10 +51,6 @@ function selectMode(nextMode: SshConnectionLauncherMode): void {
   }, nextMode)
   mode.value = nextMode
   fields.value = { host: nextState.host, port: nextState.port, username: nextState.username }
-  if (nextMode === 'bastionHost') target.value = fields.value.host
-  if (nextMode === 'password' || nextMode === 'privateKey') {
-    fields.value = { ...fields.value, host: target.value || fields.value.host }
-  }
 }
 
 function onKeydown(event: KeyboardEvent): void {
@@ -77,10 +65,6 @@ function onKeydown(event: KeyboardEvent): void {
 
 function directConnect(request: DirectSshConnectRequest): void {
   emit('directConnect', request)
-}
-
-function launchBastion(request: BastionLaunchRequest): void {
-  emit('bastionLaunch', request)
 }
 
 function updateFields(next: DirectSshSharedFields): void {
@@ -117,8 +101,8 @@ function updateFields(next: DirectSshSharedFields): void {
     </div>
     <div class="mode-panel" role="tabpanel" :id="`ssh-panel-${mode}`">
       <template v-if="mode === 'bastionHost'">
-        <BastionHostForm :initial-target="target" :loading="loading" :error="error" @target-change="target = $event" @launch="launchBastion" />
         <section class="connection-notices" aria-label="堡垒机连接须知">
+          <p class="manual-launch-note"><strong>请手动操作</strong>请在堡垒机客户端中指定目标主机并发起 SSH 连接，Terminal-Agent 不会自动填写或唤起堡垒机。</p>
           <figure class="connection-notice">
             <figcaption><strong>【配置须知】</strong>AccessClient“会话配置”的“会话访问方式”必须使用“使用全局设置(putty)”。</figcaption>
             <img :src="sessionConfigImage" alt="AccessClient 会话配置：使用全局设置(putty)" />
@@ -150,6 +134,8 @@ h2 { color: var(--text-strong); font-size: 18px; font-weight: 720; }.appearance-
 .mode-tabs button { flex: 1 1 140px; min-height: 30px; padding: 5px 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 650; text-align: center; }
 .mode-tabs button:hover { color: var(--text-strong); }.mode-tabs button.active { border-color: var(--line); background: var(--surface); color: var(--accent); box-shadow: 0 1px 2px rgb(35 44 55 / 12%); }
 .mode-panel { margin-top: 12px; text-align: left; }
+.manual-launch-note { grid-column: 1 / -1; margin: 0 0 2px; padding: 7px 8px; border: 1px solid var(--amber-line); border-radius: 4px; background: var(--amber-soft); color: var(--amber); font-size: 10px; line-height: 1.55; }
+.manual-launch-note strong { margin-right: 4px; color: var(--text-strong); font-weight: 700; }
 .connection-notices { display: grid; gap: 12px; margin-top: 14px; padding: 10px 11px; border-left: 3px solid var(--accent); border-radius: 4px; background: var(--surface-soft); color: var(--muted); font-size: 10px; line-height: 1.55; }.connection-notice { display: grid; gap: 7px; margin: 0; }.connection-notice figcaption { margin: 0; }.connection-notice strong { margin-right: 4px; color: var(--text-strong); font-weight: 700; }.connection-notice img { display: block; width: 100%; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }.appearance-dialog .connection-notices { grid-template-columns: repeat(2, minmax(0, 1fr)); }.appearance-dialog .connection-notice img { max-height: 120px; object-fit: contain; object-position: top left; }
 @media (max-width: 520px) { .mode-tabs button { flex-basis: 100%; } .appearance-dialog { padding: 17px; }.appearance-dialog .connection-notices { grid-template-columns: 1fr; }.appearance-dialog .connection-notice img { max-height: 180px; } }
 </style>

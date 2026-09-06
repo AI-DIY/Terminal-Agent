@@ -443,8 +443,9 @@ describe('global chat store', () => {
     expect(panel).toContain('@click="removeStep(message.id, step.id)"')
     expect(executePlan).toContain('for (const step of plan.steps)')
     expect(executePlan).toContain('await editStep(messageId, step.id, command)')
-    expect(executePlan).toContain('await store.executePlan(actionChatId, messageId)')
-    expect(executePlan.indexOf('await store.executePlan')).toBeGreaterThan(executePlan.indexOf('await editStep'))
+    expect(executePlan).toContain('await runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (')
+    expect(executePlan).toContain('store.executePlan(actionChatId, messageId, selectedContextSessionIds.value, skillIds)')
+    expect(executePlan.indexOf('store.executePlan')).toBeGreaterThan(executePlan.indexOf('await editStep'))
     expect(executePlan).not.toContain('window.confirm')
   })
 
@@ -488,6 +489,49 @@ describe('global chat store', () => {
     store.hydrate('c1', [{ id: 'u', role: 'user', content: 'check', state: 'complete' }])
     await store.compact('c1', undefined, ['security-review'])
     expect(transport.compact).toHaveBeenCalledWith(expect.objectContaining({ sshContextSessionIds: ['primary', 'alternate'], skillIds: ['security-review'] }))
+  })
+
+  it('passes confirmed-plan SSH context to the main process and accepts a trusted automatic run start', async () => {
+    const snapshot = {
+      revision: 1,
+      chat: { id: 'c1', messages: [] },
+      liveChatId: 'c1',
+    } as unknown as ChatWorkspaceSnapshot
+    const transport = {
+      ...api(),
+      plans: {
+        editStep: vi.fn(async () => snapshot),
+        removeStep: vi.fn(async () => snapshot),
+        cancel: vi.fn(async () => snapshot),
+        execute: vi.fn(async () => snapshot),
+      },
+    }
+    const store = createGlobalChatStore(transport)
+    store.setSshContextLines(125)
+    store.setSshContextSessionIds('c1', ['primary', 'alternate'])
+
+    await store.executePlan('c1', 'plan-message', undefined, ['security-review'])
+    expect(transport.plans.execute).toHaveBeenCalledWith(expect.objectContaining({
+      chatId: 'c1',
+      messageId: 'plan-message',
+      sshContextLines: 125,
+      sshContextSessionIds: ['primary', 'alternate'],
+      skillIds: ['security-review'],
+    }))
+
+    store.apply({ kind: 'chat:auto-started', chatId: 'c1', runId: '550e8400-e29b-41d4-a716-446655440000' })
+    store.apply({ kind: 'chat:progress', chatId: 'c1', runId: '550e8400-e29b-41d4-a716-446655440000', stage: 'thinking' })
+    expect(store.state.runs.c1).toBe('550e8400-e29b-41d4-a716-446655440000')
+    expect(store.state.runUserMessageIds.c1).toBeNull()
+    expect(store.state.progress.c1).toBe('thinking')
+
+    store.beginRun('c1', 'manual-run')
+    store.apply({ kind: 'chat:auto-started', chatId: 'c1', runId: '660e8400-e29b-41d4-a716-446655440000' })
+    expect(store.state.runs.c1).toBe('manual-run')
+
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+    expect(panel).toContain('store.executePlan(actionChatId, messageId, selectedContextSessionIds.value, skillIds)')
+    expect(panel).toContain('runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (')
   })
 
   it('sends empty skill IDs through both chat actions while the renderer gate is disabled', async () => {

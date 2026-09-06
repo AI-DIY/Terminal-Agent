@@ -1184,7 +1184,7 @@ test('removes per-terminal maximize and defaults to a full-height SSH row', asyn
   }
 })
 
-test('shows direct and bastion-jump SSH modes, defaulting to the bastion launcher', async ({ launchApp }) => {
+test('shows direct and manual bastion SSH modes, defaulting to the bastion guidance', async ({ launchApp }) => {
   let app: ElectronApplication | undefined
 
   try {
@@ -1199,8 +1199,14 @@ test('shows direct and bastion-jump SSH modes, defaulting to the bastion launche
     const passwordTab = page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })
     await expect(bastionTab).toBeVisible()
     await expect(bastionTab).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '唤起终端', exact: true })).toBeVisible()
+    await expect(page.getByRole('tab')).toHaveText([
+      '堡垒机跳转连接',
+      '主机用户名 + 密码连接',
+      '主机私钥连接',
+    ])
+    await expect(page.getByText('请手动操作', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '唤起终端', exact: true })).toHaveCount(0)
     await expect(page.getByText('【配置须知】', { exact: true })).toBeVisible()
     await expect(page.getByText('【使用须知】', { exact: true })).toBeVisible()
     await expect(page.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toBeVisible()
@@ -1218,7 +1224,7 @@ test('shows direct and bastion-jump SSH modes, defaulting to the bastion launche
 
     await bastionTab.click()
     await expect(bastionTab).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByLabel('堡垒机主机地址', { exact: true })).toBeVisible()
+    await expect(page.getByText('请手动操作', { exact: true })).toBeVisible()
     await expect(page.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toBeVisible()
   } finally {
     await app?.close()
@@ -1243,8 +1249,9 @@ test('opens the unified launcher over an existing terminal without unmounting it
     const bastionTab = dialog.getByRole('tab', { name: '堡垒机跳转连接', exact: true })
     await expect(bastionTab).toBeVisible()
     await expect(bastionTab).toHaveAttribute('aria-selected', 'true')
-    await expect(dialog.getByLabel('堡垒机主机地址', { exact: true })).toBeVisible()
-    await expect(dialog.getByRole('button', { name: '唤起终端', exact: true })).toBeVisible()
+    await expect(dialog.getByText('请手动操作', { exact: true })).toBeVisible()
+    await expect(dialog.getByLabel('堡垒机主机地址', { exact: true })).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: '唤起终端', exact: true })).toHaveCount(0)
     await expect(dialog.getByText('【配置须知】', { exact: true })).toBeVisible()
     await expect(dialog.getByText('【使用须知】', { exact: true })).toBeVisible()
     await expect(dialog.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toBeVisible()
@@ -1396,9 +1403,9 @@ test('keeps focus inside and restores focus from the unified connection dialog',
     await expect(dialog.getByRole('tab', { name: '堡垒机跳转连接', exact: true })).toBeFocused()
     await closeButton.focus()
     await page.keyboard.press('Shift+Tab')
-    // The bastion-jump form is the default mode, so the dialog's focus trap
-    // wraps from the close button to its final actionable control.
-    await expect(dialog.getByRole('button', { name: '唤起终端', exact: true })).toBeFocused()
+    // The manual-only bastion panel has no launch control, so the dialog's
+    // focus trap wraps from the close button to the final mode tab.
+    await expect(dialog.getByRole('tab', { name: '主机私钥连接', exact: true })).toBeFocused()
     await closeButton.click()
     await expect(openButton).toBeFocused()
   } finally {

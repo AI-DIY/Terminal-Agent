@@ -2,14 +2,13 @@
 import { Bug, Code2, Settings } from '@lucide/vue'
 import { Sparkles } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { BastionCatalogSnapshot, BastionHostSummary, BastionLaunchRequest, ChatConversationSessionSummary, ChatWorkspace, SavedDirectSessionInput, ShellHistorySummary, TerminalDataEvent } from '../../../shared/contracts'
+import type { ChatConversationSessionSummary, ChatWorkspace, SavedDirectSessionInput, ShellHistorySummary, TerminalDataEvent } from '../../../shared/contracts'
 import type { ConnectionDialogRequest } from '../components/ConnectionDialog.vue'
 import SavedSessionsDialog from '../components/SavedSessionsDialog.vue'
 import type { DirectSessionSummary } from '../../../main/ssh/direct-session-repository'
 import GlobalChatPanel from '../components/chat/GlobalChatPanel.vue'
 import SshConnectionLauncher from '../components/connections/SshConnectionLauncher.vue'
 import type { PrivateKeySelection } from '../components/connections/DirectSshForm.vue'
-import { activeCmdbHostIds, shouldApplyBastionHostResponse } from '../components/connections/bastion-cmdb-state'
 import WorkbenchShell from '../components/workbench/WorkbenchShell.vue'
 import WorkbenchSessionSidebar from '../components/workbench/WorkbenchSessionSidebar.vue'
 import ShellCanvas from '../components/workbench/ShellCanvas.vue'
@@ -39,13 +38,6 @@ const connectionError = ref('')
 const diagnosticError = ref('')
 const appVersion = ref('')
 const showUpgrade = ref(false)
-const bastionCatalog = ref<BastionCatalogSnapshot | null>(null)
-const bastionHosts = ref<BastionHostSummary[]>([])
-const selectedBastionSystemId = ref('')
-const bastionLoading = ref(false)
-const bastionError = ref('')
-const openedCmdbHostIds = ref<Set<string>>(new Set())
-const cmdbSessionHostIds = new Map<string, string>()
 const savedProfiles = ref<Awaited<ReturnType<typeof window.terminalAgent.sessions.listProfiles>>>([])
 const chatStore = createChatWorkspacesStore(window.terminalAgent.chats)
 const shellHistory = createShellHistoryStore(window.terminalAgent.shellHistory)
@@ -234,7 +226,6 @@ let unsubscribeHostMemoryDisclosure: (() => void) | undefined
 let unsubscribeHostMemoryInvalidation: (() => void) | undefined
 let unsubscribeDiagnosticsError: (() => void) | undefined
 let stopShellHistoryEligibilityRefresh: (() => void) | undefined
-let bastionHostRequestId = 0
 const workbenchOperations = createWorkbenchOperationGate()
 let connectionFocusOrigin: HTMLElement | null = null
 const sessionOwnership = createWorkbenchSessionOwnershipTracker<{ id: string }>()
@@ -362,8 +353,6 @@ function addSession(session: Omit<SessionView, 'buffer'>, activate = true): void
 }
 
 function removeSession(sessionId: string): void {
-  cmdbSessionHostIds.delete(sessionId)
-  openedCmdbHostIds.value = activeCmdbHostIds(cmdbSessionHostIds)
   const wasActive = activeSessionId.value === sessionId
   store.remove(sessionId)
   visibleSessionIds.value = visibleSessionIds.value.filter(id => id !== sessionId)
@@ -698,83 +687,6 @@ async function refreshSavedProfiles(): Promise<void> {
   savedProfiles.value = await window.terminalAgent.sessions.listProfiles()
 }
 
-async function refreshBastionCatalog(): Promise<void> {
-  bastionError.value = ''
-  try {
-    bastionCatalog.value = await window.terminalAgent.accessClient.catalog()
-  } catch (error) {
-    bastionCatalog.value = { available: false, systems: [], message: '未配置堡垒机目录来源。' }
-    bastionError.value = error instanceof Error ? error.message : '无法读取堡垒机目录。'
-  }
-}
-
-async function loadBastionHosts(systemId: string): Promise<void> {
-  const requestId = ++bastionHostRequestId
-  selectedBastionSystemId.value = systemId
-  bastionHosts.value = []
-  bastionError.value = ''
-  if (!systemId || !bastionCatalog.value?.available) return
-  try {
-    const hosts = await window.terminalAgent.accessClient.hosts(systemId)
-    if (!shouldApplyBastionHostResponse({
-      requestId,
-      latestRequestId: bastionHostRequestId,
-      requestedSystemId: systemId,
-      selectedSystemId: selectedBastionSystemId.value,
-    })) return
-    bastionHosts.value = hosts
-  } catch (error) {
-    if (requestId !== bastionHostRequestId || systemId !== selectedBastionSystemId.value) return
-    bastionError.value = error instanceof Error ? error.message : '无法读取堡垒机主机目录。'
-  }
-}
-
-async function launchBastion(request: BastionLaunchRequest): Promise<void> {
-  const operationGeneration = workbenchOperations.begin()
-  const targetChatId = activeWorkbenchChatId.value
-  const ownershipOperation = sessionOwnership.begin(targetChatId ?? '')
-  connectionError.value = ''
-  bastionError.value = ''
-  bastionLoading.value = true
-  try {
-    const result = await window.terminalAgent.accessClient.launch(request)
-    if (!workbenchOperations.isCurrent(operationGeneration)) return
-    if (request.kind === 'cmdb') {
-      cmdbSessionHostIds.set(result.sessionId, request.hostId)
-      openedCmdbHostIds.value = activeCmdbHostIds(cmdbSessionHostIds)
-    }
-    if (result.kind === 'opened') {
-      const session = (await window.terminalAgent.sessions.list()).find(item => item.id === result.sessionId)
-      if (!workbenchOperations.isCurrent(operationGeneration)) return
-      if (!session) throw new Error('无法读取新建终端会话。')
-      sessionOwnership.resolve(ownershipOperation, session)
-      await attachSession(session, true, () => workbenchOperations.isCurrent(operationGeneration), (session as SessionView & { chatId?: string }).chatId ?? targetChatId ?? undefined)
-    } else {
-      const focused = await focusOwnedWorkbenchSession({
-        sessionId: result.sessionId,
-        resolve: (sessionId, isCurrent) => chatStore.resolveSession(sessionId, isCurrent),
-        selectChat: (workspace, isCurrent) => selectChat(workspace.id, false, isCurrent),
-        selectSession: select,
-        isCurrent: () => workbenchOperations.isCurrent(operationGeneration),
-      })
-      if (!focused) {
-        if (!workbenchOperations.isCurrent(operationGeneration)) return
-        throw new Error('无法确定已有终端会话的聊天归属。')
-      }
-    }
-    if (!workbenchOperations.isCurrent(operationGeneration)) return
-    closeConnectionDialog()
-  } catch (error) {
-    if (!workbenchOperations.isCurrent(operationGeneration)) return
-    const message = error instanceof Error ? error.message : '无法唤起堡垒机终端。'
-    bastionError.value = message
-    connectionError.value = message
-  } finally {
-    sessionOwnership.complete(ownershipOperation)
-    if (workbenchOperations.isCurrent(operationGeneration)) bastionLoading.value = false
-  }
-}
-
 function selectPrivateKey(accept: (selection: PrivateKeySelection | null) => void): void {
   void window.terminalAgent.sessions.selectPrivateKey()
     .then(accept)
@@ -785,7 +697,6 @@ function selectPrivateKey(accept: (selection: PrivateKeySelection | null) => voi
 }
 
 async function connect(request: ConnectionDialogRequest): Promise<void> {
-  bastionLoading.value = false
   connectionError.value = ''
   const targetChatId = activeWorkbenchChatId.value
   const ownershipOperation = sessionOwnership.begin(targetChatId ?? '')
@@ -807,12 +718,9 @@ async function connect(request: ConnectionDialogRequest): Promise<void> {
 
 function createConnection(): void {
   workbenchOperations.invalidate()
-  bastionLoading.value = false
   connectionFocusOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null
   editingProfile.value = null
-  bastionError.value = ''
   showConnection.value = true
-  if (!bastionCatalog.value) void refreshBastionCatalog()
   void nextTick(focusConnectionDialog)
 }
 
@@ -837,10 +745,8 @@ async function saveEditedProfile(profile: SavedDirectSessionInput): Promise<void
 
 function closeConnectionDialog(): void {
   workbenchOperations.invalidate()
-  bastionLoading.value = false
   showConnection.value = false
   editingProfile.value = null
-  bastionError.value = ''
   const focusOrigin = connectionFocusOrigin
   connectionFocusOrigin = null
   void nextTick(() => { if (focusOrigin?.isConnected) focusOrigin.focus() })
@@ -1057,7 +963,6 @@ onMounted(() => {
   void refreshSavedProfiles().catch(() => { connectionError.value = '无法读取已保存会话。' })
   const updater = window.terminalAgent?.updater
   if (updater) void updater.getState().then(state => { appVersion.value = state.currentVersion }).catch(() => undefined)
-  void refreshBastionCatalog()
   window.addEventListener('keydown', onWindowKeydown)
 })
 onBeforeUnmount(() => {
@@ -1139,13 +1044,7 @@ onBeforeUnmount(() => {
           <section class="empty-state">
             <SshConnectionLauncher
               appearance="embedded"
-              :catalog="bastionCatalog"
-              :hosts="bastionHosts"
-              :open-host-ids="openedCmdbHostIds"
-              :loading="bastionLoading"
-              :error="bastionError"
               @direct-connect="connect"
-              @bastion-launch="launchBastion"
               @save-profile="saveEditedProfile"
               @select-private-key="selectPrivateKey"
             />
@@ -1161,10 +1060,10 @@ onBeforeUnmount(() => {
         :context-sessions="currentChatSessions"
         :conversation-sessions="conversationSessions"
         :session-busy="conversationSessionBusy"
-         :skills-available="skillsAvailable"
-         @collapse="collapse"
-         @new-connection="createConnection"
-         @new-session="createConversationSession"
+        :skills-available="skillsAvailable"
+        @collapse="collapse"
+        @new-connection="createConnection"
+        @new-session="createConversationSession"
         @switch-session="switchConversationSession"
       />
     </template>
@@ -1173,14 +1072,8 @@ onBeforeUnmount(() => {
       <div v-if="showConnection" ref="connectionModal" class="connection-modal" role="dialog" aria-modal="true" aria-label="新建 SSH 连接" @keydown.capture="trapConnectionFocus" @pointerdown.self="closeConnectionDialog">
         <SshConnectionLauncher
           appearance="dialog"
-          :catalog="bastionCatalog"
-          :hosts="bastionHosts"
-          :open-host-ids="openedCmdbHostIds"
-          :loading="bastionLoading"
-          :error="bastionError"
           :editing-profile="editingProfile"
           @direct-connect="connect"
-          @bastion-launch="launchBastion"
           @save-profile="saveEditedProfile"
           @select-private-key="selectPrivateKey"
           @close="closeConnectionDialog"

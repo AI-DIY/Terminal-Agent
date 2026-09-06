@@ -86,6 +86,31 @@ describe('V18 production visual contract', () => {
     expect(sidebar).toContain('::-webkit-scrollbar-button')
   })
 
+  it('keeps working tasks on the normal row surface and highlights only the selected task', () => {
+    const sidebar = rendererSource('components/workbench/WorkbenchSessionSidebar.vue')
+    const activeRule = /\.history-item\.active\s*\{([^}]*)\}/.exec(sidebar)?.[1] ?? ''
+
+    expect(sidebar).toContain("'has-online-shell': props.onlineChatIds?.has(chat.id)")
+    expect(sidebar).toContain("'working-status'")
+    expect(sidebar).toContain('.working-status { color: var(--red); }')
+    expect(activeRule).toContain('background: var(--amber-soft)')
+    expect(sidebar).not.toContain('.history-item.has-online-shell { background: var(--amber-soft)')
+    expect(sidebar).not.toContain('.history-item.has-online-shell.active')
+  })
+
+  it('uses one title size for the task, SSH, and AI workspaces', () => {
+    const sidebar = rendererSource('components/workbench/WorkbenchSessionSidebar.vue')
+    const shellCanvas = rendererSource('components/workbench/ShellCanvas.vue')
+    const chat = rendererSource('components/chat/GlobalChatPanel.vue')
+    const sidebarSize = /\.panel-title strong\s*\{[^}]*font-size:\s*(\d+)px/.exec(sidebar)?.[1]
+    const shellSize = /\.workspace-toolbar-title strong\s*\{[^}]*font-size:\s*(\d+)px/.exec(shellCanvas)?.[1]
+    const chatSize = /\.ai-head-copy h3\s*\{[^}]*font-size:\s*(\d+)px/.exec(chat)?.[1]
+
+    expect(sidebarSize).toBeDefined()
+    expect(shellSize).toBe(sidebarSize)
+    expect(chatSize).toBe(sidebarSize)
+  })
+
   it('uses task-facing labels without renaming internal chat contracts', () => {
     const workbench = rendererSource('views/WorkbenchView.vue')
     const shell = rendererSource('components/workbench/WorkbenchShell.vue')
