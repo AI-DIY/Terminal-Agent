@@ -1062,7 +1062,6 @@ onBeforeUnmount(() => {
         :session-busy="conversationSessionBusy"
         :skills-available="skillsAvailable"
         @collapse="collapse"
-        @new-connection="createConnection"
         @new-session="createConversationSession"
         @switch-session="switchConversationSession"
       />

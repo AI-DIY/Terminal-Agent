@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ExecutionPlanService } from '../../../src/main/chat/execution-plan-service'
+import { PlanResultAutoContinue } from '../../../src/main/chat/plan-result-auto-continue'
 import { ChatRepository } from '../../../src/main/chat/chat-repository'
 import { ChatService } from '../../../src/main/chat/chat-service'
 import { resolveModelShellTargets } from '../../../src/shared/model-shell-target'
@@ -107,6 +108,172 @@ describe('ExecutionPlanService', () => {
     expect(output.complete).toHaveBeenCalledOnce()
     expect(output.complete.mock.invocationCallOrder[0]).toBeGreaterThan(write.mock.invocationCallOrder[0]!)
     expect(output.cancel).not.toHaveBeenCalled()
+  })
+
+  it('adds an executed target back to the automatic-analysis context after it was unchecked', async () => {
+    const write = vi.fn(async () => undefined)
+    const output = { expect: vi.fn(), forget: vi.fn(), complete: vi.fn(), cancel: vi.fn() }
+    const watcher = { watch: vi.fn(() => output) }
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: plan() }],
+        shells: [{ sessionId: 'session-1', hostname: 'web-01', status: 'open' }],
+      } })),
+      updateMessage: vi.fn(async () => undefined),
+    }, {
+      snapshot: () => [{ id: 'session-1', hostname: 'web-01' }],
+      write,
+    }, { match: () => null })
+    service.setResultOutputWatcher(watcher)
+
+    await service.execute({
+      requestId: 'restore-executed-target',
+      chatId: 'chat-1',
+      messageId: 'message-1',
+      sshContextSessionIds: [],
+    })
+
+    expect(watcher.watch).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      messageId: 'message-1',
+      sshContextSessionIds: ['session-1'],
+    })
+    expect(write).toHaveBeenCalledWith('session-1', 'systemctl status api\n')
+  })
+
+  it('waits for each transport completion before sending the next plan command', async () => {
+    const targetPlan = {
+      ...plan(),
+      steps: [
+        plan().steps[0],
+        { id: 'step-2', target: 'db-01', explanation: '查看数据库状态', originalCommand: 'systemctl status db', sendState: 'pending' as const },
+      ],
+    }
+    const resolvers: Array<(result: { completed: boolean; timedOut: boolean }) => void> = []
+    const writeAndWaitForCompletion = vi.fn(() => new Promise<{ completed: boolean; timedOut: boolean }>(resolve => { resolvers.push(resolve) }))
+    const updateMessage = vi.fn(async () => undefined)
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: targetPlan }],
+        shells: [
+          { sessionId: 'session-web', hostname: 'web-01', status: 'open' },
+          { sessionId: 'session-db', hostname: 'db-01', status: 'open' },
+        ],
+      } })),
+      updateMessage,
+    }, {
+      snapshot: () => [
+        { id: 'session-web', hostname: 'web-01' },
+        { id: 'session-db', hostname: 'db-01' },
+      ],
+      write: vi.fn(),
+      writeAndWaitForCompletion,
+    }, { match: () => null })
+
+    const execution = service.execute({ requestId: 'serial-completion', chatId: 'chat-1', messageId: 'message-1' })
+    // Let the queued execution reach its first transport call.
+    for (let attempt = 0; attempt < 12 && writeAndWaitForCompletion.mock.calls.length === 0; attempt += 1) await Promise.resolve()
+    expect(writeAndWaitForCompletion).toHaveBeenCalledOnce()
+    expect(writeAndWaitForCompletion).toHaveBeenCalledWith('session-web', 'systemctl status api\n')
+
+    resolvers[0]!({ completed: true, timedOut: false })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(writeAndWaitForCompletion).toHaveBeenCalledTimes(2)
+    expect(writeAndWaitForCompletion).toHaveBeenLastCalledWith('session-db', 'systemctl status db\n')
+
+    resolvers[1]!({ completed: true, timedOut: false })
+    await expect(execution).resolves.toBeUndefined()
+    expect(updateMessage.mock.calls.map(call => ((call as unknown as [{ requestId: string }])[0]).requestId)).toEqual([
+      'serial-completion:executing',
+      'serial-completion:result',
+    ])
+  })
+
+  it('does not inject a shell completion probe into a Raw TCP session', async () => {
+    const write = vi.fn(async () => undefined)
+    const writeAndWaitForCompletion = vi.fn()
+    const supportsCommandCompletion = vi.fn(() => false)
+    const output = { expect: vi.fn(), forget: vi.fn(), complete: vi.fn(), cancel: vi.fn() }
+    const watcher = { watch: vi.fn(() => output) }
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: plan() }],
+        shells: [{ sessionId: 'raw-session', hostname: 'web-01', status: 'open' }],
+      } })),
+      updateMessage: vi.fn(async () => undefined),
+    }, {
+      snapshot: () => [{ id: 'raw-session', hostname: 'web-01' }],
+      write,
+      writeAndWaitForCompletion,
+      supportsCommandCompletion,
+    }, { match: () => null })
+    service.setResultOutputWatcher(watcher)
+
+    await service.execute({ requestId: 'raw-session-plan', chatId: 'chat-1', messageId: 'message-1' })
+
+    expect(supportsCommandCompletion).toHaveBeenCalledWith('raw-session')
+    expect(write).toHaveBeenCalledWith('raw-session', 'systemctl status api\n')
+    expect(writeAndWaitForCompletion).not.toHaveBeenCalled()
+    expect(output.expect).toHaveBeenCalledWith('raw-session')
+    expect(output.complete).toHaveBeenCalledOnce()
+  })
+
+  it('does not auto-analyse streaming output until the completion signal has settled', async () => {
+    vi.useFakeTimers()
+    try {
+      let onData!: (event: { sessionId: string; data: string }) => void
+      const outputSource = {
+        onData: vi.fn((listener: (event: { sessionId: string; data: string }) => void) => {
+          onData = listener
+          return () => undefined
+        }),
+      }
+      const observed: string[] = []
+      const runtime = {
+        continueAfterPlanResult: vi.fn(async () => {
+          observed.push('final-output-was-visible-before-analysis')
+          return true
+        }),
+      }
+      let resolveCompletion!: (result: { completed: boolean; timedOut: boolean }) => void
+      const writeAndWaitForCompletion = vi.fn(() => new Promise<{ completed: boolean; timedOut: boolean }>(resolve => { resolveCompletion = resolve }))
+      const watcher = new PlanResultAutoContinue(
+        outputSource,
+        runtime,
+        vi.fn(),
+        { settleMs: 20, partialResultWaitMs: 50, timeoutMs: 1_000 },
+      )
+      const service = new ExecutionPlanService({
+        get: vi.fn(async () => ({ chat: {
+          messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: plan() }],
+          shells: [{ sessionId: 'session-1', hostname: 'web-01', status: 'open' }],
+        } })),
+        updateMessage: vi.fn(async () => undefined),
+      }, {
+        snapshot: () => [{ id: 'session-1', hostname: 'web-01' }],
+        write: vi.fn(),
+        writeAndWaitForCompletion,
+      }, { match: () => null })
+      service.setResultOutputWatcher(watcher)
+
+      const execution = service.execute({ requestId: 'completion-gate', chatId: 'chat-1', messageId: 'message-1' })
+      for (let attempt = 0; attempt < 12 && writeAndWaitForCompletion.mock.calls.length === 0; attempt += 1) await Promise.resolve()
+      expect(writeAndWaitForCompletion).toHaveBeenCalledOnce()
+
+      onData({ sessionId: 'session-1', data: 'streaming result (still running)\n' })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(runtime.continueAfterPlanResult).not.toHaveBeenCalled()
+
+      resolveCompletion({ completed: true, timedOut: false })
+      await execution
+      await vi.advanceTimersByTimeAsync(20)
+      expect(runtime.continueAfterPlanResult).toHaveBeenCalledOnce()
+      expect(observed).toEqual(['final-output-was-visible-before-analysis'])
+      watcher.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('cancels the output watcher when the final execution state cannot be saved', async () => {

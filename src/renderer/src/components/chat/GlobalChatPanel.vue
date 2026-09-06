@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bot, Check, ChevronDown, ChevronUp, CircleAlert, History, MessageSquarePlus, PanelRightClose, Plus, Send, Square, Trash2, UserRound, X } from '@lucide/vue'
+import { Bot, Check, ChevronDown, ChevronUp, CircleAlert, History, MessageSquarePlus, PanelRightClose, Send, Square, Trash2, UserRound, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { ChatConversationSessionSummary, ChatProgressStage, ChatWorkspace } from '../../../../shared/contracts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../stores/global-chat'
@@ -35,7 +35,6 @@ const props = withDefaults(defineProps<{
 })
 const emit = defineEmits<{
   collapse: []
-  newConnection: []
   newSession: []
   switchSession: [chatId: string]
 }>()
@@ -108,10 +107,13 @@ watch(chatId, id => {
 const messages = computed(() => chatId.value ? store.state.messages[chatId.value] ?? [] : [])
 const draft = computed(() => chatId.value ? store.draft(chatId.value) : '')
 const running = computed(() => chatId.value ? Boolean(store.state.runs[chatId.value]) : false)
-const runUserMessageId = computed(() => chatId.value ? store.state.runUserMessageIds[chatId.value] ?? null : null)
 const progress = computed<ChatProgressStage | null>(() => {
-  if (!chatId.value) return null
-  return store.state.progress[chatId.value] ?? (store.state.runs[chatId.value] ? 'thinking' : null)
+  const id = chatId.value
+  if (!id) return null
+  // `null` is an explicit suppression after the first assistant delta. Only
+  // fall back to the initial thinking state when no progress value exists yet.
+  if (Object.prototype.hasOwnProperty.call(store.state.progress, id)) return store.state.progress[id]
+  return store.state.runs[id] ? 'thinking' : null
 })
 const standaloneError = computed(() => {
   const error = chatId.value ? store.state.errors[chatId.value] ?? '' : ''
@@ -348,7 +350,7 @@ function insertNewline(): void {
 }
 function formatTokens(value: number): string { return new Intl.NumberFormat('zh-CN').format(value) }
 function progressLabel(stage: ChatProgressStage | null): string {
-  return stage === 'thinking' ? '正在思考' : stage === 'executing' ? '正在执行' : stage === 'observing' ? '正在整理观察结果' : stage === 'repairing' ? '正在修正计划' : ''
+  return stage === 'thinking' ? '正在思考' : stage === 'executing' ? '正在执行计划' : stage === 'observing' ? '正在整理结果' : stage === 'repairing' ? '正在完善方案' : ''
 }
 function assistantReply(content: unknown): string {
   if (typeof content !== 'string') return chatContentText(content as any)
@@ -447,7 +449,6 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
       <span class="ai-avatar" aria-hidden="true">AI</span>
       <div class="ai-head-copy"><h3>AI工作区</h3><span>当前任务的全局协作助手</span></div>
       <div class="ai-head-actions">
-        <button type="button" class="session-action new-connection" :disabled="sessionBusy" aria-label="新建 SSH 连接" title="新建 SSH 连接" @click="emit('newConnection')"><Plus :size="13" aria-hidden="true" /><span>新建 SSH 连接</span></button>
         <button type="button" class="session-action new-session" :disabled="!canCreateConversationSession" aria-label="新建会话" title="新建会话：备份当前聊天内容后开始新的会话" @click="requestNewConversationSession"><MessageSquarePlus :size="13" aria-hidden="true" /><span>新建会话</span></button>
         <label class="session-switch"><History :size="13" aria-hidden="true" /><span class="visually-hidden-label">切换会话</span><select v-model="selectedConversationSessionId" :disabled="!canSwitchConversationSession" aria-label="切换会话" title="切换会话" @change="requestConversationSessionSwitch"><option value="">切换会话</option><option v-for="session in conversationSessions" :key="session.id" :value="session.id">{{ session.label }}</option></select></label>
         <button type="button" class="collapse-button" aria-label="收起 AI工作区" title="收起 AI工作区" @click="emit('collapse')"><span>收起</span><PanelRightClose :size="14" aria-hidden="true" /></button>
@@ -482,7 +483,6 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
         <div class="message-content">
           <div class="message-meta"><strong>{{ message.messageType === 'execution_audit' ? '执行审计' : message.role === 'user' ? '你' : 'Terminal-Agent' }}</strong><span v-if="message.state === 'streaming'">生成中</span><span v-else-if="message.state === 'error'">未完成</span></div>
           <p>{{ message.messageType === 'execution_audit' ? String(message.content) : message.role === 'assistant' ? assistantReply(message.content) : (typeof message.content === 'string' ? message.content : chatContentText(message.content)) }}</p>
-          <section v-if="message.role === 'user' && message.id === runUserMessageId && progress" class="progress-item message-progress" role="status" aria-live="polite"><CircleAlert :size="14" aria-hidden="true" /><span>{{ progressLabel(progress) }}</span><span class="progress-dots" aria-hidden="true">...</span></section>
           <section v-if="message.executionPlan" class="execution-plan" :data-status="message.executionPlan.status">
             <header class="plan-head"><div><strong>{{ message.executionPlan.title }}</strong><span>{{ message.executionPlan.steps.length }} 步 · {{ planStatusLabel(message.executionPlan.status) }}</span></div><span class="plan-badge">{{ planStatusLabel(message.executionPlan.status) }}</span></header>
             <p v-if="message.executionPlan.steps.length === 0" class="plan-empty">计划已取消，未执行任何命令。</p>
@@ -506,7 +506,17 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
           </section>
         </div>
       </article>
-      <section v-if="!messages.length" class="empty"><Bot :size="24" aria-hidden="true" /><strong>开始协作</strong><span>输入目标，AI 会结合当前任务中的 SSH 信息回答</span></section>
+      <article v-if="progress" class="message assistant progress-message">
+        <span class="message-avatar" aria-hidden="true"><Bot :size="14" /></span>
+        <div class="message-content progress-content">
+          <div class="message-meta"><strong>Terminal-Agent</strong><span>处理中</span></div>
+          <section class="progress-item" role="status" aria-live="polite" aria-atomic="true">
+            <span class="progress-dots" aria-hidden="true"><i /><i /><i /></span>
+            <span>{{ progressLabel(progress) }}</span>
+          </section>
+        </div>
+      </article>
+      <section v-if="!messages.length && !progress" class="empty"><Bot :size="24" aria-hidden="true" /><strong>开始协作</strong><span>输入目标，AI 会结合当前任务中的 SSH 信息回答</span></section>
       <p v-if="standaloneError" class="error">{{ standaloneError }}</p>
       <p v-if="actionError" class="error">{{ actionError }}</p>
     </div>
@@ -543,12 +553,14 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 .messages:hover::-webkit-scrollbar-thumb,.messages:focus-within::-webkit-scrollbar-thumb { background: var(--line); }
 .messages::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 .visually-hidden-alert,.visually-hidden-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.progress-item { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 10px; }.message-progress { margin-top: 9px; }.progress-item svg { color: var(--accent); }.progress-dots { letter-spacing: 2px; color: var(--accent); }
+.progress-message { padding-top: 2px; }.progress-content { padding-top: 8px; padding-bottom: 8px; }.progress-item { display: flex; align-items: center; gap: 9px; min-height: 32px; padding: 7px 10px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 10px; }.progress-item svg { color: var(--accent); }.progress-dots { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; min-width: 19px; color: var(--accent); }.progress-dots i { display: block; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .3; animation: chat-progress-dot 1.15s ease-in-out infinite; }.progress-dots i:nth-child(2) { animation-delay: .14s; }.progress-dots i:nth-child(3) { animation-delay: .28s; }
 .message { display: grid; grid-template-columns: 29px minmax(0, 1fr); align-items: start; gap: 8px; min-width: 0; padding: 8px 0; }.message-avatar { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); }.message.assistant .message-avatar { border-color: var(--text-strong); background: var(--text-strong); color: var(--surface); }.message-content { position: relative; min-width: 0; max-width: 100%; padding: 10px 11px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow-wrap: anywhere; }.message.assistant .message-content::before { position: absolute; top: 10px; bottom: 10px; left: -1px; width: 2px; border-radius: 0 2px 2px 0; background: var(--accent); content: ""; }.message.user { grid-template-columns: minmax(0, 1fr) 29px; padding-left: 38px; }.message.user .message-avatar { grid-column: 2; grid-row: 1; background: var(--panel); color: var(--text-strong); }.message.user .message-content { grid-column: 1; grid-row: 1; background: var(--surface-soft); }.message-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }.message-meta strong { color: var(--text-strong); font-size: 10px; }.message.assistant .message-meta strong { color: var(--accent); }.message-meta span { margin-left: auto; }.message p { margin: 0; color: var(--text); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }.message.audit .message-content { border-color: var(--amber-line); background: var(--amber-soft); }.message.audit .message-avatar { color: var(--amber); }
 .execution-plan { display: grid; gap: 8px; margin-top: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }.plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); }.plan-head > div { display: grid; gap: 3px; min-width: 0; }.plan-head strong { color: var(--text-strong); font-size: 11px; overflow-wrap: anywhere; }.plan-head span { color: var(--muted); font-size: 9px; }.plan-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent) !important; font-weight: 650; }.plan-empty { margin: 2px 0; color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-step { display: grid; gap: 5px; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }.plan-step:last-of-type { border-bottom: 0; }.plan-step-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; }.plan-step-head strong { color: var(--text-strong); font-size: 10px; }.plan-step-head span { color: var(--muted); font-size: 9px; }.plan-step p { color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-risk { display: flex; align-items: flex-start; gap: 5px; color: var(--amber); font-size: 9px; line-height: 1.45; }.plan-risk svg { flex: 0 0 auto; margin-top: 1px; }.plan-command { display: grid; gap: 3px; min-width: 0; }.plan-command span { color: var(--faint); font-size: 8px; }.plan-command code { display: block; min-width: 0; overflow: auto; padding: 5px 6px; border: 1px solid var(--line-soft); background: var(--surface-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-step-actions,.plan-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }.plan-edit-input { min-width: 0; flex: 1; height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; }.icon-button,.secondary-action,.primary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; white-space: nowrap; }.icon-button { width: 27px; padding: 0; }.icon-button:hover,.secondary-action:hover { border-color: var(--focus); color: var(--text-strong); }.delete-plan-step { border-color: var(--amber-line); background: var(--amber-soft); color: var(--amber); }.delete-plan-step:hover:not(:disabled) { border-color: var(--amber); background: var(--amber-soft); color: var(--amber); }.primary-action { border-color: var(--accent); background: var(--accent); color: #fff; }.plan-actions { justify-content: flex-end; padding-top: 2px; }.plan-edit-input:disabled,.icon-button:disabled,.plan-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .empty { display: grid; justify-items: center; gap: 6px; padding: 34px 18px; color: var(--muted); text-align: center; }.empty strong { color: var(--text-strong); font-size: 12px; }.empty span { max-width: 270px; font-size: 10px; line-height: 1.55; }
 .plan-command-editor { display: grid; grid-template-columns: minmax(0, 1fr) 27px; align-items: center; gap: 6px; min-width: 0; }.plan-command-editor .plan-edit-input { display: block; width: 100%; min-width: 0; min-height: 44px; height: auto; padding: 7px; resize: vertical; font: 9px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-command-editor .plan-step-actions { align-self: center; justify-self: end; }
 .error { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0 37px; padding: 9px 10px; border-left: 2px solid var(--red); background: var(--surface); color: var(--red); font-size: 10px; line-height: 1.5; }.error span { min-width: 0; flex: 1; overflow-wrap: anywhere; }.error button { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); }
 .composer { min-width: 0; padding: 10px; border-top: 1px solid var(--line); background: var(--surface); }.composer-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }.composer:focus-within .composer-shell { border-color: var(--focus); box-shadow: 0 0 0 2px var(--accent-soft); }.composer textarea { display: block; width: 100%; height: 64px; resize: none; padding: 10px 11px 7px; border: 0; background: transparent; color: var(--text-strong); font-size: 11px; line-height: 1.5; }.composer textarea::placeholder { color: var(--faint); }.composer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-height: 39px; padding: 6px 7px 7px 10px; border-top: 1px solid var(--line-soft); }.composer-foot button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 29px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; font-weight: 650; }.composer-foot button:disabled { cursor: not-allowed; opacity: .55; }.composer-foot .send-button { border-color: var(--accent); background: var(--accent); color: #fff; }.composer-foot .line-break-button:hover { border-color: var(--focus); color: var(--text-strong); }.composer-foot .cancel-button:hover { border-color: var(--red); color: var(--red); }
+@keyframes chat-progress-dot { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { .progress-dots i { animation-duration: .01ms; animation-iteration-count: 1; } }
 @media (max-width: 1180px) { .collapse-button span { display: none; }.collapse-button { width: 30px; padding: 0; }.ai-head-copy span { display: none; } }
 </style>

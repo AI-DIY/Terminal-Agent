@@ -148,7 +148,7 @@ describe('StructuredChatAgent', () => {
     expect(complete).toHaveBeenCalledTimes(1)
   })
 
-  it('adds only enabled product-owned skill instructions to the system prompt', async () => {
+  it('keeps catalogue-only demo skills out of the model instructions', async () => {
     let system = ''
     const complete = vi.fn(async messages => {
       system = String(messages[0]?.content ?? '')
@@ -161,7 +161,7 @@ describe('StructuredChatAgent', () => {
     })).resolves.toMatchObject({ reply: '已准备。' })
 
     expect(system).toContain('当前启用的产品技能工作方法')
-    expect(system).toContain('影响范围')
+    expect(system).toContain('当前启用的产品技能工作方法：[]')
     expect(system).toContain('不能绕过任何安全围栏')
     expect(system).not.toContain('多主机巡检')
   })

@@ -3,9 +3,17 @@ import type { ChatMessageContent } from '../../shared/chat-content'
 import { resolvedHostnames } from '../../shared/shell-display-label'
 import { resolveModelShellTargets, sameModelShellTarget, selectStableModelTargetIndex } from '../../shared/model-shell-target'
 import type { PlanResultOutputWatcher } from './plan-result-auto-continue'
+import type { SessionCommandCompletion } from '../ssh/session-service'
 
 type FenceMatcher = { match(command: string): { id: string; name: string } | null }
-type Sessions = { snapshot(): Array<{ id: string; hostname: string; observedHostname?: string; title?: string }>; write(sessionId: string, data: string): void | Promise<void> }
+type Sessions = {
+  snapshot(): Array<{ id: string; hostname: string; observedHostname?: string; title?: string }>
+  write(sessionId: string, data: string): void | Promise<void>
+  /** Newer SessionService transports can acknowledge completion of a command. */
+  writeAndWaitForCompletion?: (sessionId: string, data: string) => Promise<SessionCommandCompletion>
+  /** Raw TCP sessions must not receive shell completion syntax. */
+  supportsCommandCompletion?: (sessionId: string) => boolean
+}
 type Chats = { get(chatId: string): Promise<{ chat: { messages: Array<{ id: string; role: string; state: string; content: ChatMessageContent; executionPlan?: ChatExecutionPlan }>; shells: Array<{ sessionId?: string; hostname: string; observedHostname?: string; title?: string; status: string }> } }>; updateMessage(request: { requestId: string; chatId: string; messageId: string; content: ChatMessageContent; state: 'complete'; executionPlan?: ChatExecutionPlan }): Promise<unknown>; appendMessage?: (request: { requestId: string; chatId: string; role: 'user'; state: 'complete'; content: string; messageType: 'execution_audit' }) => Promise<unknown> }
 
 export class ExecutionPlanService {
@@ -74,6 +82,15 @@ export class ExecutionPlanService {
         const steps = current.steps.map(step => ({ ...step, sessionId: findSessionForTarget(step.target, workspace.chat.shells, online) }))
         current.status = 'executing'; current.steps = steps
         await this.save(request, current, 'executing')
+        // A user may change the context checkboxes between plan generation and
+        // confirmation. Keep every resolved execution target in the follow-up
+        // context so the command output cannot be accidentally excluded.
+        const continuationSessionIds = request.sshContextSessionIds === undefined
+          ? undefined
+          : [...new Set([
+            ...request.sshContextSessionIds,
+            ...steps.flatMap(step => step.sessionId ? [step.sessionId] : []),
+          ])]
         // Register before SessionService.write(). Some Shell adapters can
         // synchronously publish an echo/result while write() is returning;
         // delaying this registration would lose that result and leave the AI
@@ -82,14 +99,42 @@ export class ExecutionPlanService {
           chatId: request.chatId,
           messageId: request.messageId,
           ...(request.sshContextLines === undefined ? {} : { sshContextLines: request.sshContextLines }),
-          ...(request.sshContextSessionIds === undefined ? {} : { sshContextSessionIds: [...request.sshContextSessionIds] }),
+          ...(continuationSessionIds === undefined ? {} : { sshContextSessionIds: continuationSessionIds }),
           ...(request.skillIds === undefined ? {} : { skillIds: [...request.skillIds] }),
         })
         let sent = 0
+        let completionUnconfirmed = false
         for (const step of current.steps) {
           if (!step.sessionId) { step.sendState = 'failed'; step.failure = '目标 Shell 已断开或不可用'; break }
-          resultOutput?.expect(step.sessionId)
-          try { await this.sessions.write(step.sessionId, `${step.finalCommand ?? step.originalCommand}\n`); step.sendState = 'sent'; sent += 1 } catch { resultOutput?.forget(step.sessionId); step.sendState = 'failed'; step.failure = '命令未能写入目标 Shell'; break }
+          const command = `${step.finalCommand ?? step.originalCommand}\n`
+          const completionAware = typeof this.sessions.writeAndWaitForCompletion === 'function'
+            && (typeof this.sessions.supportsCommandCompletion !== 'function' || this.sessions.supportsCommandCompletion(step.sessionId))
+          if (completionAware) resultOutput?.expect(step.sessionId, { waitForCompletion: true })
+          else resultOutput?.expect(step.sessionId)
+          try {
+            if (completionAware) {
+              // Keep the plan loop serialized: a later command must not be
+              // sent until this command's completion probe has been observed.
+              const completion = await this.sessions.writeAndWaitForCompletion!(step.sessionId, command)
+              if (!completion.completed) {
+                resultOutput?.forget(step.sessionId)
+                step.sendState = 'failed'
+                step.failure = completion.timedOut ? '命令执行等待超时' : '命令未能确认执行完成'
+                completionUnconfirmed = true
+                break
+              }
+              resultOutput?.settle?.(step.sessionId)
+            } else {
+              await this.sessions.write(step.sessionId, command)
+            }
+            step.sendState = 'sent'
+            sent += 1
+          } catch {
+            resultOutput?.forget(step.sessionId)
+            step.sendState = 'failed'
+            step.failure = '命令未能写入目标 Shell'
+            break
+          }
         }
         const failed = current.steps.some(step => step.sendState === 'failed')
         current.steps = current.steps.map((step, index) => index > sent && step.sendState === 'pending' ? { ...step, sendState: 'not_sent' } : step)
@@ -100,7 +145,7 @@ export class ExecutionPlanService {
           // execution record that failed to persist, while still retaining
           // synchronous Shell output captured during the writes above.
           const saved = await this.save(request, current, 'result')
-          if (sent === 0) resultOutput?.cancel()
+          if (sent === 0 || completionUnconfirmed) resultOutput?.cancel()
           else resultOutput?.complete()
           return saved
         } catch (error) {

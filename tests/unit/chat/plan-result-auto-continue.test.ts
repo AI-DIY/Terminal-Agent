@@ -132,6 +132,79 @@ describe('PlanResultAutoContinue', () => {
     }
   })
 
+  it('does not continue on early streaming output until every completion-aware command settles', async () => {
+    vi.useFakeTimers()
+    try {
+      let onData!: (event: { sessionId: string; data: string }) => void
+      const sessions = { onData: vi.fn((listener: (event: { sessionId: string; data: string }) => void) => { onData = listener; return () => undefined }) }
+      const runtime = { continueAfterPlanResult: vi.fn(async () => true) }
+      const continuation = new PlanResultAutoContinue(sessions, runtime, vi.fn(), {
+        settleMs: 20,
+        partialResultWaitMs: 50,
+        timeoutMs: 1_000,
+      })
+      const watch = continuation.watch({ chatId: 'chat-1', messageId: 'message-1' })
+
+      watch.expect('web-01', { waitForCompletion: true })
+      watch.complete()
+      onData({ sessionId: 'web-01', data: 'first chunk (command still running)\n' })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(runtime.continueAfterPlanResult).not.toHaveBeenCalled()
+
+      watch.settle!('web-01')
+      await vi.advanceTimersByTimeAsync(20)
+      expect(runtime.continueAfterPlanResult).toHaveBeenCalledOnce()
+
+      continuation.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('allows a silent completion-aware command to continue after its completion signal', async () => {
+    vi.useFakeTimers()
+    try {
+      let onData!: (event: { sessionId: string; data: string }) => void
+      const sessions = { onData: vi.fn((listener: (event: { sessionId: string; data: string }) => void) => { onData = listener; return () => undefined }) }
+      const runtime = { continueAfterPlanResult: vi.fn(async () => true) }
+      const continuation = new PlanResultAutoContinue(sessions, runtime, vi.fn(), { settleMs: 10, timeoutMs: 1_000 })
+      const watch = continuation.watch({ chatId: 'chat-1', messageId: 'message-1' })
+
+      watch.expect('silent-host', { waitForCompletion: true })
+      watch.complete()
+      // No output event is emitted: the transport completion probe alone is
+      // sufficient evidence that the command's context is ready.
+      watch.settle!('silent-host')
+      await vi.advanceTimersByTimeAsync(10)
+
+      expect(runtime.continueAfterPlanResult).toHaveBeenCalledOnce()
+      continuation.dispose()
+      void onData
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('treats an explicit settle signal as authoritative for legacy expect callers', async () => {
+    vi.useFakeTimers()
+    try {
+      const sessions = { onData: vi.fn(() => () => undefined) }
+      const runtime = { continueAfterPlanResult: vi.fn(async () => true) }
+      const continuation = new PlanResultAutoContinue(sessions, runtime, vi.fn(), { settleMs: 10, partialResultWaitMs: 25, timeoutMs: 1_000 })
+      const watch = continuation.watch({ chatId: 'chat-1', messageId: 'message-1' })
+
+      watch.expect('silent-host')
+      watch.complete()
+      watch.settle!('silent-host')
+      await vi.advanceTimersByTimeAsync(10)
+
+      expect(runtime.continueAfterPlanResult).toHaveBeenCalledOnce()
+      continuation.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('retains an earlier successful write when a later same-Shell write fails', async () => {
     vi.useFakeTimers()
     try {

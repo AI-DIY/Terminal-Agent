@@ -117,7 +117,7 @@ describe('global chat store', () => {
     expect(panel).toContain('function onKeydown(event: KeyboardEvent): void {')
   })
 
-  it('anchors active progress below the user message that started the matching task run', async () => {
+  it('renders active progress as an independent assistant-side status item', async () => {
     const transport = api()
     const store = createGlobalChatStore(transport)
 
@@ -142,9 +142,11 @@ describe('global chat store', () => {
     expect(store.state.runUserMessageIds['task-b']).toBe(taskBUserMessageId)
 
     const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
-    expect(panel).toContain("const runUserMessageId = computed(() => chatId.value ? store.state.runUserMessageIds[chatId.value] ?? null : null)")
-    expect(panel).toContain("v-if=\"message.role === 'user' && message.id === runUserMessageId && progress\"")
-    expect(panel).not.toContain('<section v-if="progress" class="progress-item"')
+    expect(panel).not.toContain('const runUserMessageId = computed(')
+    expect(panel).toContain('<article v-if="progress" class="message assistant progress-message">')
+    expect(panel).toContain('<section class="progress-item" role="status" aria-live="polite"')
+    expect(panel).toContain('<i /><i /><i />')
+    expect(panel).not.toContain("message.role === 'user' && message.id === runUserMessageId")
     expect(panel).not.toContain('<span v-if="running" role="status">正在生成回复</span>')
   })
 
@@ -337,6 +339,16 @@ describe('global chat store', () => {
 
     expect(store.state.messages.c1).toEqual([{ id: 'm1', role: 'assistant', content: 'complete content', state: 'complete' }])
     expect(store.state.runs.c1).toBeNull()
+  })
+
+  it('clears transient progress as soon as streamed assistant output begins', () => {
+    const store = createGlobalChatStore(api())
+    store.beginRun('c1', 'r1')
+    store.apply({ kind: 'chat:progress', chatId: 'c1', runId: 'r1', stage: 'thinking' })
+    store.apply({ kind: 'chat:delta', chatId: 'c1', runId: 'r1', messageId: 'm1', content: '开始输出' })
+
+    expect(store.state.progress.c1).toBeNull()
+    expect(store.state.messages.c1?.[0]).toMatchObject({ content: '开始输出', role: 'assistant' })
   })
 
   it('rejects ordinary stale events after hydration invalidates a run', () => {

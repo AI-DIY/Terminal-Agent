@@ -21,11 +21,11 @@ describe('SkillsView SSO restrictions', () => {
     const preferences = enabledPreferences()
     const update = vi.fn((id: BuiltInSkillId, enabled: boolean) => { preferences[id] = enabled })
 
-    const changed = toggleBuiltInSkill(false, 'security-review', preferences, update)
+    const changed = toggleBuiltInSkill(false, 'ssh-troubleshooting', preferences, update)
 
     expect(changed).toBe(false)
     expect(update).not.toHaveBeenCalled()
-    expect(preferences['security-review']).toBe(true)
+    expect(preferences['ssh-troubleshooting']).toBe(true)
   })
 
   it('keeps enabled controls interactive when the SSO capability is available', () => {
@@ -35,7 +35,7 @@ describe('SkillsView SSO restrictions', () => {
 
     expect(controls.enabledCount).toBe(BUILT_IN_SKILLS.length)
     expect(controls.controls.every(control => !control.disabled && control.enabled)).toBe(true)
-    expect(toggleBuiltInSkill(true, 'security-review', preferences, update)).toBe(true)
-    expect(update).toHaveBeenCalledWith('security-review', false)
+    expect(toggleBuiltInSkill(true, 'ssh-troubleshooting', preferences, update)).toBe(true)
+    expect(update).toHaveBeenCalledWith('ssh-troubleshooting', false)
   })
 })

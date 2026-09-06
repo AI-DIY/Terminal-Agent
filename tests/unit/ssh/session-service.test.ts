@@ -277,6 +277,17 @@ describe('SessionService', () => {
     await expect(service.executeReadOnly(session.id, 'hostname')).rejects.toThrow('Read-only observation is unavailable')
   })
 
+  it('refuses to inject a shell completion probe into a Raw TCP session', async () => {
+    const shell = createShell()
+    const rawClient = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService({ connect: vi.fn() }, { load: vi.fn() }, rawClient)
+    const session = await service.connectRaw({ host: '127.0.0.1', port: 22022 })
+
+    expect(service.supportsCommandCompletion(session.id)).toBe(false)
+    await expect(service.writeAndWaitForCompletion(session.id, 'raw payload', 25)).rejects.toThrow('Command completion is unavailable')
+    expect(shell.write).not.toHaveBeenCalled()
+  })
+
   it('updates the snapshot mode only when the main process sets it for an active session', async () => {
     const shell = createShell()
     const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
@@ -405,6 +416,185 @@ describe('SessionService', () => {
       { sessionId: session.id, data: 'hostname\n' },
     ])
     expect(shell.resize).toHaveBeenCalledWith(120, 40)
+  })
+
+  it('waits for the private completion probe, streams ordinary output, and audits only the reviewed command', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const received: Array<{ sessionId: string; data: string }> = []
+    const audited: Array<{ sessionId: string; data: string }> = []
+    service.onData(event => received.push(event))
+    service.onWrite(event => audited.push(event))
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    const completion = service.writeAndWaitForCompletion(session.id, 'long-running-check', 1_000)
+    const probeInput = shell.write.mock.calls.at(-1)?.[0] as string
+    const marker = probeInput.match(/echo (__TA_COMMAND_COMPLETE_[^\r\n]+__)\r?\n$/)?.[1]
+    expect(marker).toBeTruthy()
+    expect(audited).toEqual([{ sessionId: session.id, data: 'long-running-check\n' }])
+
+    // Ordinary completed lines remain live in the terminal while the plan
+    // waits. The marker is deliberately split across transport chunks and
+    // must never become visible terminal or AI context.
+    shell.emitData(Buffer.from('result-line\n'))
+    expect(received).toEqual([{ sessionId: session.id, data: 'result-line\n' }])
+    shell.emitData(Buffer.from(`${marker!.slice(0, 9)}`))
+    expect(received).toEqual([{ sessionId: session.id, data: 'result-line\n' }])
+    shell.emitData(Buffer.from(`${marker!.slice(9)}\n`))
+
+    await expect(completion).resolves.toEqual({ completed: true, timedOut: false })
+    expect(received).toEqual([{ sessionId: session.id, data: 'result-line\n' }])
+    expect(service.recentLines(session.id)).toEqual(['result-line'])
+    expect(JSON.stringify(received)).not.toContain(marker!)
+    expect(audited).toEqual([{ sessionId: session.id, data: 'long-running-check\n' }])
+  })
+
+  it('terminates POSIX, cmd, and PowerShell line continuations before sending its completion probe', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    for (const command of ['printf result \\', 'echo result ^', 'Write-Output result`']) {
+      const completion = service.writeAndWaitForCompletion(session.id, command, 1_000)
+      const probeInput = shell.write.mock.calls.at(-1)?.[0] as string
+      expect(probeInput.startsWith(`${command}\n\necho `)).toBe(true)
+      const marker = probeInput.match(/echo (__TA_COMMAND_COMPLETE_[^\r\n]+__)\r?\n$/)?.[1]
+      expect(marker).toBeTruthy()
+      shell.emitData(Buffer.from(`${marker}\n`))
+      await expect(completion).resolves.toEqual({ completed: true, timedOut: false })
+    }
+  })
+
+  it('recognizes a completion marker appended to output without a trailing newline', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const received: Array<{ sessionId: string; data: string }> = []
+    service.onData(event => received.push(event))
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    const completion = service.writeAndWaitForCompletion(session.id, 'printf result', 1_000)
+    const probeInput = shell.write.mock.calls.at(-1)?.[0] as string
+    const marker = probeInput.match(/echo (__TA_COMMAND_COMPLETE_[^\r\n]+__)\r?\n$/)?.[1]
+    expect(marker).toBeTruthy()
+
+    // A PTY can echo the injected command directly after `printf result`,
+    // then emit the probe value on that same output line. The input echo must
+    // not resolve the wait; the actual token must be consumed instead.
+    shell.emitData(Buffer.from(`resultecho ${marker}\r\n`))
+    expect(received).toEqual([{ sessionId: session.id, data: 'result' }])
+    shell.emitData(Buffer.from(`${marker}\r\n`))
+
+    await expect(completion).resolves.toEqual({ completed: true, timedOut: false })
+    expect(received).toEqual([{ sessionId: session.id, data: 'result' }])
+    expect(service.recentLines(session.id)).toEqual(['result'])
+    expect(JSON.stringify(received)).not.toContain(marker!)
+  })
+
+  it('filters ANSI-wrapped completion probes without leaving terminal control sequences behind', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const received: Array<{ sessionId: string; data: string }> = []
+    service.onData(event => received.push(event))
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    const completion = service.writeAndWaitForCompletion(session.id, 'hostname', 1_000)
+    const probeInput = shell.write.mock.calls.at(-1)?.[0] as string
+    const marker = probeInput.match(/echo (__TA_COMMAND_COMPLETE_[^\r\n]+__)\r?\n$/)?.[1]
+    expect(marker).toBeTruthy()
+    shell.emitData(Buffer.from(`\u001b[?25l${marker}\u001b[?25h\r\n`))
+
+    await expect(completion).resolves.toEqual({ completed: true, timedOut: false })
+    expect(received).toEqual([])
+    expect(service.recentLines(session.id)).toEqual([])
+  })
+
+  it('holds a split CRLF marker until its line ending is complete', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const received: Array<{ sessionId: string; data: string }> = []
+    service.onData(event => received.push(event))
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    const completion = service.writeAndWaitForCompletion(session.id, 'hostname', 1_000)
+    const probeInput = shell.write.mock.calls.at(-1)?.[0] as string
+    const marker = probeInput.match(/echo (__TA_COMMAND_COMPLETE_[^\r\n]+__)\r?\n$/)?.[1]
+    expect(marker).toBeTruthy()
+    shell.emitData(Buffer.from(`${marker}\r`))
+    expect(received).toEqual([])
+    shell.emitData(Buffer.from('\n'))
+
+    await expect(completion).resolves.toEqual({ completed: true, timedOut: false })
+    expect(received).toEqual([])
+  })
+
+  it('does not expose a partial private completion token when the shell closes', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const received: Array<{ sessionId: string; data: string }> = []
+    service.onData(event => received.push(event))
+    const session = await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    const completion = service.writeAndWaitForCompletion(session.id, 'hostname', 1_000)
+    const probeInput = shell.write.mock.calls.at(-1)?.[0] as string
+    const marker = probeInput.match(/echo (__TA_COMMAND_COMPLETE_[^\r\n]+__)\r?\n$/)?.[1]
+    expect(marker).toBeTruthy()
+    shell.emitData(Buffer.from(marker!.slice(0, 18)))
+    shell.emitClose()
+
+    await expect(completion).resolves.toEqual({ completed: false, timedOut: false })
+    expect(received).toEqual([])
+  })
+
+  it('resolves a bounded completion wait as timed out and flushes held output', async () => {
+    vi.useFakeTimers()
+    try {
+      const shell = createShell()
+      const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+      const service = new SessionService(client, { load: vi.fn() })
+      const received: Array<{ sessionId: string; data: string }> = []
+      service.onData(event => received.push(event))
+      const session = await service.connect({
+        host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+      })
+
+      const completion = service.writeAndWaitForCompletion(session.id, 'silent-check', 25)
+      const probeInput = shell.write.mock.calls.at(-1)?.[0] as string
+      const marker = probeInput.match(/echo (__TA_COMMAND_COMPLETE_[^\r\n]+__)\r?\n$/)?.[1]
+      expect(marker).toBeTruthy()
+      shell.emitData(Buffer.from('partial output'))
+      expect(received).toEqual([])
+      await vi.advanceTimersByTimeAsync(25)
+
+      await expect(completion).resolves.toEqual({ completed: false, timedOut: true })
+      expect(received).toEqual([{ sessionId: session.id, data: 'partial output' }])
+
+      // A delayed marker after the timeout must still be private. The plan
+      // itself has already failed conservatively, but it must not pollute a
+      // subsequent terminal/AI context.
+      shell.emitData(Buffer.from(`${marker}\n`))
+      expect(received).toEqual([{ sessionId: session.id, data: 'partial output' }])
+      expect(JSON.stringify(received)).not.toContain(marker!)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('forwards shell output with its session id and removes a remotely closed session', async () => {

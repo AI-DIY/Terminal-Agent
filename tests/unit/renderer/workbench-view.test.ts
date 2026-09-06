@@ -24,4 +24,10 @@ describe('WorkbenchView SSO identity and skill gate', () => {
     expect(handler).toContain("if (skillsAvailable.value) emit('showSkills', chatStore.state.selectedId)")
     expect(panelBinding).toContain(':skills-available="skillsAvailable"')
   })
+
+  it('keeps SSH connection creation in the SSH workspace only', () => {
+    const panel = source.slice(source.indexOf('<GlobalChatPanel'), source.indexOf('/>', source.indexOf('<GlobalChatPanel')))
+    expect(panel).not.toContain('new-connection')
+    expect(panel).not.toContain('新建 SSH 连接')
+  })
 })

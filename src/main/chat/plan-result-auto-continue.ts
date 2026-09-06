@@ -7,7 +7,12 @@ export type PlanResultOutputWatchRequest = ChatPlanResultContinuationRequest & {
 
 export type PlanResultOutputWatch = {
   /** Register a Shell immediately before its approved command is written. */
-  expect(sessionId: string): void
+  expect(sessionId: string, options?: { waitForCompletion?: boolean }): void
+  /**
+   * Mark one command as completed by the transport. This remains optional on
+   * the adapter type so older/lightweight adapters can use output fallback.
+   */
+  settle?(sessionId: string): void
   /** Remove a Shell whose write failed before a command could be sent. */
   forget(sessionId: string): void
   /** Declare that all plan writes have either succeeded or failed. */
@@ -44,6 +49,10 @@ type PendingPlanResult = {
    * successfully sent command from the output watch.
    */
   expectedSessionCounts: Map<string, number>
+  /** Registrations that must receive an explicit transport completion signal. */
+  completionExpectedCounts: Map<string, number>
+  /** Explicit completion signals received for completion-aware registrations. */
+  settledSessionCounts: Map<string, number>
   observedSessionIds: Set<string>
   writesComplete: boolean
   settleTimer?: ReturnType<typeof setTimeout>
@@ -100,24 +109,62 @@ export class PlanResultAutoContinue implements PlanResultOutputWatcher {
     const pending: PendingPlanResult = {
       request: cloneRequest(request),
       expectedSessionCounts: new Map(),
+      completionExpectedCounts: new Map(),
+      settledSessionCounts: new Map(),
       observedSessionIds: new Set(),
       writesComplete: false,
     }
     pending.expiryTimer = setTimeout(() => this.clearIfCurrent(key, pending), this.timeoutMs)
     this.pending.set(key, pending)
     return {
-      expect: sessionId => {
+      expect: (sessionId, options = {}) => {
         if (this.pending.get(key) !== pending) return
         pending.expectedSessionCounts.set(sessionId, (pending.expectedSessionCounts.get(sessionId) ?? 0) + 1)
+        if (options.waitForCompletion) {
+          pending.completionExpectedCounts.set(sessionId, (pending.completionExpectedCounts.get(sessionId) ?? 0) + 1)
+        }
+      },
+      settle: sessionId => {
+        if (this.pending.get(key) !== pending) return
+        const registered = pending.expectedSessionCounts.get(sessionId) ?? 0
+        if (registered === 0) return
+        // A caller using the small legacy `expect(sessionId)` API may still
+        // provide an explicit settle signal. Promote those registrations to
+        // completion-aware ones so the signal remains useful and cannot be
+        // preceded by an output-driven continuation.
+        let expected = pending.completionExpectedCounts.get(sessionId) ?? 0
+        if (expected === 0) {
+          expected = registered
+          pending.completionExpectedCounts.set(sessionId, expected)
+          if (pending.partialResultTimer) {
+            clearTimeout(pending.partialResultTimer)
+            pending.partialResultTimer = undefined
+          }
+        }
+        const settled = pending.settledSessionCounts.get(sessionId) ?? 0
+        if (settled < expected) pending.settledSessionCounts.set(sessionId, settled + 1)
+        this.scheduleIfReady(key, pending)
       },
       forget: sessionId => {
         if (this.pending.get(key) !== pending) return
         const expectedWrites = pending.expectedSessionCounts.get(sessionId) ?? 0
         if (expectedWrites <= 1) {
           pending.expectedSessionCounts.delete(sessionId)
+          pending.completionExpectedCounts.delete(sessionId)
+          pending.settledSessionCounts.delete(sessionId)
           pending.observedSessionIds.delete(sessionId)
         } else {
           pending.expectedSessionCounts.set(sessionId, expectedWrites - 1)
+          const expectedCompletions = pending.completionExpectedCounts.get(sessionId) ?? 0
+          if (expectedCompletions > 0) {
+            // A failed write is registered before it is attempted. Remove one
+            // completion obligation while retaining earlier signals.
+            if (expectedCompletions <= 1) pending.completionExpectedCounts.delete(sessionId)
+            else pending.completionExpectedCounts.set(sessionId, expectedCompletions - 1)
+            const settled = pending.settledSessionCounts.get(sessionId) ?? 0
+            const remainingCompletions = Math.max(0, expectedCompletions - 1)
+            if (settled > remainingCompletions) pending.settledSessionCounts.set(sessionId, remainingCompletions)
+          }
         }
         this.scheduleIfReady(key, pending)
       },
@@ -164,8 +211,25 @@ export class PlanResultAutoContinue implements PlanResultOutputWatcher {
   }
 
   private scheduleIfReady(key: string, pending: PendingPlanResult): void {
-    if (this.pending.get(key) !== pending || !pending.writesComplete || pending.observedSessionIds.size === 0) return
-    const allExpectedSessionsReturned = [...pending.expectedSessionCounts.keys()].every(sessionId => pending.observedSessionIds.has(sessionId))
+    if (this.pending.get(key) !== pending || !pending.writesComplete || pending.expectedSessionCounts.size === 0) return
+
+    // Completion-aware registrations are authoritative. In particular, do
+    // not let an early output chunk start the partial-result timer while a
+    // command is still running; a command may stream output for a long time.
+    const completionPending = [...pending.completionExpectedCounts.keys()].some(sessionId => (
+      (pending.settledSessionCounts.get(sessionId) ?? 0)
+      < (pending.completionExpectedCounts.get(sessionId) ?? 0)
+    ))
+    if (completionPending) return
+
+    const allExpectedSessionsReturned = [...pending.expectedSessionCounts.keys()].every(sessionId => {
+      const expectedCompletions = pending.completionExpectedCounts.get(sessionId) ?? 0
+      const settledCompletions = pending.settledSessionCounts.get(sessionId) ?? 0
+      const completionReady = expectedCompletions === 0 || settledCompletions >= expectedCompletions
+      const outputReady = expectedCompletions >= (pending.expectedSessionCounts.get(sessionId) ?? 0)
+        || pending.observedSessionIds.has(sessionId)
+      return completionReady && outputReady
+    })
     if (allExpectedSessionsReturned) {
       if (pending.partialResultTimer) {
         clearTimeout(pending.partialResultTimer)
@@ -178,7 +242,7 @@ export class PlanResultAutoContinue implements PlanResultOutputWatcher {
     // A Shell command can legitimately remain silent or run for much longer
     // than a sibling command. Continue with the returned data after a bounded
     // window rather than retaining a plan watcher until its global expiry.
-    if (!pending.partialResultTimer) {
+    if (pending.observedSessionIds.size > 0 && !pending.partialResultTimer) {
       pending.partialResultTimer = setTimeout(() => this.flush(key, pending), this.partialResultWaitMs)
     }
   }
@@ -199,6 +263,7 @@ export class PlanResultAutoContinue implements PlanResultOutputWatcher {
 
 const inertWatch: PlanResultOutputWatch = {
   expect: () => undefined,
+  settle: () => undefined,
   forget: () => undefined,
   complete: () => undefined,
   cancel: () => undefined,

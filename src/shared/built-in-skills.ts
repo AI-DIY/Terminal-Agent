@@ -1,50 +1,59 @@
+import { z } from 'zod'
+
 /**
- * Product-owned AI skills. These are static, reviewable instructions rather
- * than user-authored prompt text, so enabling a skill cannot inject arbitrary
- * instructions into an AI request.
+ * Product-owned AI skills shown in the Skills view.
+ *
+ * The v3.2.6 entries are deliberately catalogue-only. They describe the
+ * planned operations-platform capabilities but are not wired to a data source
+ * yet, so enabling one must not alter an AI request.
  */
 export const BUILT_IN_SKILLS = [
   {
     id: 'teleagent-operations',
-    name: 'TeleAgent 运维协作',
-    source: 'TeleAgent 内置技能',
-    description: '把多主机巡检、状态汇总和执行前确认整理成可复用的运维流程。',
-    detail: '适合跨主机查看服务状态、日志和资源使用情况。',
-    defaultEnabled: true,
-    instruction: '采用运维协作方式：先归纳各在线主机的观察结果和差异；涉及执行时按主机拆分步骤，并清楚说明每一步的目的和影响范围。',
+    name: '系统告警分析',
+    source: 'Terminal-Agent 演示技能',
+    description: '汇总系统告警并识别异常模式，帮助快速定位需要优先处理的问题。',
+    detail: '适合分析告警级别、发生时间和关联主机。',
+    defaultEnabled: false,
+    demoOnly: true,
+    instruction: '采用系统告警分析方式：按严重程度、时间和影响范围归纳告警，区分已确认事实与待验证假设，并优先指出需要人工确认的异常。',
   },
   {
     id: 'codex-development',
-    name: 'Codex 开发助手',
-    source: 'Codex 内置技能',
-    description: '辅助阅读代码、拆解任务、生成补丁并在执行前展示变更计划。',
-    detail: '适合代码审查、故障定位和小范围工程修改。',
-    defaultEnabled: true,
-    instruction: '采用开发协作方式：先区分已确认事实、待验证假设和建议操作；对于代码或配置变更，先给出可审查的计划，避免把推测表述为事实。',
+    name: '系统日报周报月报分析',
+    source: 'Terminal-Agent 演示技能',
+    description: '分析系统日报、周报和月报，提炼运行趋势、重复问题和待跟进事项。',
+    detail: '适合对比不同周期的运行数据和工作记录。',
+    defaultEnabled: false,
+    demoOnly: true,
+    instruction: '采用系统日报周报月报分析方式：按报告周期整理关键指标、变化趋势和重复问题，明确数据来源与统计范围，并将待跟进事项单独列出。',
   },
   {
     id: 'ssh-troubleshooting',
-    name: 'SSH 故障排查',
-    source: 'Terminal-Agent 内置技能',
-    description: '根据终端输出梳理连接、权限、进程和网络问题的排查路径。',
-    detail: '会优先引用当前选中的 SSH 上下文，不读取未选择的主机。',
-    defaultEnabled: true,
-    instruction: '采用 SSH 故障排查方式：按连接、认证、权限、进程与网络的顺序提出最小风险的验证步骤；只根据当前任务明确提供的 Shell 上下文下结论。',
-  },
-  {
-    id: 'security-review',
-    name: '安全审查',
-    source: 'Terminal-Agent 内置技能',
-    description: '在执行高风险命令前提示影响范围、回滚方式和常见安全隐患。',
-    detail: '默认关闭；启用后仍需手动确认计划，技能不会绕过安全围栏。',
+    name: '系统知识库检索',
+    source: 'Terminal-Agent 演示技能',
+    description: '从系统知识库中检索相关资料，为故障分析和日常运维提供参考依据。',
+    detail: '适合按关键词、主机和问题现象查找知识条目。',
     defaultEnabled: false,
-    instruction: '对可能修改、删除、重启、暴露凭据或扩大网络访问的步骤，明确提示影响范围、前置确认和可行的回滚方式；这不会绕过任何既有安全围栏或人工确认。',
+    demoOnly: true,
+    instruction: '采用系统知识库检索方式：根据关键词、主机和问题现象查找相关条目，标注资料来源和适用范围，并区分知识库建议与当前 Shell 已验证的事实。',
   },
 ] as const
 
-export type BuiltInSkill = (typeof BUILT_IN_SKILLS)[number]
-export type BuiltInSkillId = BuiltInSkill['id']
+/** IDs accepted at trust boundaries for backwards-compatible old requests. */
+export const LEGACY_BUILT_IN_SKILL_IDS = ['security-review'] as const
+export const BUILT_IN_SKILL_IDS = [
+  ...BUILT_IN_SKILLS.map(skill => skill.id),
+  ...LEGACY_BUILT_IN_SKILL_IDS,
+] as const
 
+export type BuiltInSkill = (typeof BUILT_IN_SKILLS)[number]
+export type VisibleBuiltInSkillId = BuiltInSkill['id']
+export type BuiltInSkillId = (typeof BUILT_IN_SKILL_IDS)[number]
+
+export const builtInSkillIdSchema = z.enum(BUILT_IN_SKILL_IDS)
+
+const knownSkillIds = new Set<string>(BUILT_IN_SKILL_IDS)
 const skillsById = new Map<string, BuiltInSkill>(BUILT_IN_SKILLS.map(skill => [skill.id, skill]))
 
 /** Ignore unknown/repeated ids at the trust boundary. */
@@ -53,7 +62,7 @@ export function normalizeBuiltInSkillIds(ids: readonly string[] | undefined): Bu
   const normalized: BuiltInSkillId[] = []
   const seen = new Set<string>()
   for (const id of ids) {
-    if (seen.has(id) || !skillsById.has(id)) continue
+    if (seen.has(id) || !knownSkillIds.has(id)) continue
     seen.add(id)
     normalized.push(id as BuiltInSkillId)
   }
@@ -61,8 +70,11 @@ export function normalizeBuiltInSkillIds(ids: readonly string[] | undefined): Bu
 }
 
 export function builtInSkillInstructions(ids: readonly string[] | undefined): string[] {
+  // v3.2.6 skills are presentation-only until their platform integrations
+  // are implemented. Legacy IDs are accepted above but intentionally have
+  // no effect either.
   return normalizeBuiltInSkillIds(ids).flatMap(id => {
     const skill = skillsById.get(id)
-    return skill ? [skill.instruction] : []
+    return skill && !skill.demoOnly ? [skill.instruction] : []
   })
 }

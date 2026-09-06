@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ArrowLeft, Bot, Braces, Check, ShieldCheck, Sparkles, Terminal } from '@lucide/vue'
+import { ArrowLeft, Bot, Braces, Check, ShieldCheck, Sparkles } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
-import { BUILT_IN_SKILLS, type BuiltInSkillId } from '../../../shared/built-in-skills'
+import { BUILT_IN_SKILLS, type VisibleBuiltInSkillId } from '../../../shared/built-in-skills'
 import { DISPLAY_NAME_MAX_LENGTH, getUserPreferencesStore } from '../stores/user-preferences'
 import { getSsoStore } from '../stores/sso'
 import { resolveBuiltInSkillControls, toggleBuiltInSkill } from '../stores/skill-capability'
@@ -12,11 +12,10 @@ const sso = getSsoStore()
 
 type SkillDefinition = (typeof BUILT_IN_SKILLS)[number] & { icon: Component }
 
-const SKILL_ICONS: Record<BuiltInSkillId, Component> = {
+const SKILL_ICONS: Record<VisibleBuiltInSkillId, Component> = {
   'teleagent-operations': Bot,
   'codex-development': Braces,
-  'ssh-troubleshooting': Terminal,
-  'security-review': ShieldCheck,
+  'ssh-troubleshooting': ShieldCheck,
 }
 
 const SKILLS: readonly SkillDefinition[] = BUILT_IN_SKILLS.map(skill => ({ ...skill, icon: SKILL_ICONS[skill.id] }))
@@ -32,7 +31,7 @@ watch(() => preferences.state.displayName, value => {
 const skillControls = computed(() => resolveBuiltInSkillControls(sso.skillsAvailable.value, preferences.state.skills))
 const enabledCount = computed(() => skillControls.value.enabledCount)
 
-function skillControl(id: BuiltInSkillId): (typeof skillControls.value.controls)[number] {
+function skillControl(id: VisibleBuiltInSkillId): (typeof skillControls.value.controls)[number] {
   return skillControls.value.controls.find(control => control.id === id) ?? {
     id,
     enabled: false,
@@ -96,9 +95,9 @@ onBeforeUnmount(() => {
         <div class="section-heading">
           <div>
             <h2 id="catalog-title">内置技能</h2>
-            <p>技能会为 AI 工作区提供对应的工作方法和提示，可随时启用或停用。</p>
+            <p>以下为运维平台内置技能的界面演示，当前暂未接入实际数据源。</p>
           </div>
-          <span class="catalog-badge">无需联网</span>
+          <span class="catalog-badge">演示</span>
         </div>
         <div class="skill-grid">
           <article v-for="skill in SKILLS" :key="skill.id" class="skill-card" :class="{ enabled: skillControl(skill.id).enabled }">
@@ -112,7 +111,7 @@ onBeforeUnmount(() => {
             </div>
             <p>{{ skill.description }}</p>
             <small><Check :size="12" aria-hidden="true" />{{ skill.detail }}</small>
-            <span class="skill-status">{{ skillControl(skill.id).enabled ? '已启用' : '已停用' }}</span>
+            <span class="skill-status">演示 · {{ skillControl(skill.id).enabled ? '已选中' : '未启用' }}</span>
           </article>
         </div>
       </section>

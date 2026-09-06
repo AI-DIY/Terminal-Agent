@@ -140,7 +140,7 @@ export function createGlobalChatStore(api: Api) {
       if (state.runs[event.chatId]) return
       cancelledRuns.delete(event.chatId)
       state.runs[event.chatId] = event.runId
-      state.progress[event.chatId] = null
+      state.progress[event.chatId] = 'thinking'
       state.activeMessageIds[event.chatId] = null
       state.runUserMessageIds[event.chatId] = null
       state.errors[event.chatId] = ''
@@ -161,6 +161,9 @@ export function createGlobalChatStore(api: Api) {
 
     if (event.kind === 'chat:delta') {
       state.runs[event.chatId] = event.runId
+      // A streamed assistant delta is the first visible response content;
+      // keep the transient thinking indicator from appearing beside it.
+      state.progress[event.chatId] = null
       state.activeMessageIds[event.chatId] = event.messageId
       const message = list.find(item => item.id === event.messageId)
       if (message) message.content += event.content
@@ -212,7 +215,7 @@ export function createGlobalChatStore(api: Api) {
     beginRun(chatId: string, runId: string): void {
       cancelledRuns.delete(chatId)
       state.runs[chatId] = runId
-      state.progress[chatId] = null
+      state.progress[chatId] = 'thinking'
       state.activeMessageIds[chatId] = null
       state.runUserMessageIds[chatId] = latestUserMessageId(state.messages[chatId])
     },
@@ -323,7 +326,7 @@ export function createGlobalChatStore(api: Api) {
       delete state.drafts[chatId]
       state.pendingImages[chatId] = []
       state.runs[chatId] = runId
-      state.progress[chatId] = null
+      state.progress[chatId] = 'thinking'
       state.activeMessageIds[chatId] = null
       const userId = `user:${runId}`
       ;(state.messages[chatId] ?? (state.messages[chatId] = [])).push({ id: userId, role: 'user', content: value, state: 'complete' })
@@ -346,7 +349,7 @@ export function createGlobalChatStore(api: Api) {
       const runId = crypto.randomUUID()
       cancelledRuns.delete(chatId)
       state.runs[chatId] = runId
-      state.progress[chatId] = null
+      state.progress[chatId] = 'thinking'
       state.errors[chatId] = ''
       state.retryableErrors[chatId] = false
       state.activeMessageIds[chatId] = null

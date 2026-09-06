@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { chatMessageContentSchema } from './chat-content'
 import { chatExecutionPlanSchema } from './chat-plan'
-import { BUILT_IN_SKILLS, type BuiltInSkillId } from './built-in-skills'
+import { BUILT_IN_SKILL_IDS, builtInSkillIdSchema } from './built-in-skills'
 import { containsSensitiveHostMemoryData, normalizeSafeHostMemoryConnectionIp, normalizeSafeHostMemoryConnectionLabel, normalizeSafeHostMemoryIdentity } from './host-memory-safety'
 import { modelEndpointSchema, modelProfileIdSchema } from './validation'
 
@@ -325,7 +325,7 @@ export const chatRunRequestSchema = z.object({
   sshContextSessionIds: z.array(chatIdentifierSchema).max(128).superRefine((ids, context) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'sshContextSessionIds must be unique' })
   }).optional(),
-  skillIds: z.array(z.enum(BUILT_IN_SKILLS.map(skill => skill.id) as [BuiltInSkillId, ...BuiltInSkillId[]])).max(BUILT_IN_SKILLS.length).superRefine((ids, context) => {
+  skillIds: z.array(builtInSkillIdSchema).max(BUILT_IN_SKILL_IDS.length).superRefine((ids, context) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'skillIds must be unique' })
   }).optional(),
 }).strict()
@@ -338,7 +338,7 @@ export const chatSshContextSessionIdsSchema = z.array(chatIdentifierSchema).max(
   if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'sshContextSessionIds must be unique' })
 })
 
-export const chatSkillIdsSchema = z.array(z.enum(BUILT_IN_SKILLS.map(skill => skill.id) as [BuiltInSkillId, ...BuiltInSkillId[]])).max(BUILT_IN_SKILLS.length).superRefine((ids, context) => {
+export const chatSkillIdsSchema = z.array(builtInSkillIdSchema).max(BUILT_IN_SKILL_IDS.length).superRefine((ids, context) => {
   if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'skillIds must be unique' })
 })
 

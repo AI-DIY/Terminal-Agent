@@ -10,7 +10,13 @@ import { BUILT_IN_SKILLS, type BuiltInSkillId } from '../../../shared/built-in-s
  */
 export const DISPLAY_NAME_STORAGE_KEY = 'terminal-agent.display-name'
 export const SKILLS_STORAGE_KEY = 'terminal-agent.skills'
+export const SKILLS_STORAGE_VERSION_KEY = 'terminal-agent.skills-version'
 export const DISPLAY_NAME_MAX_LENGTH = 40
+
+// Bump this when the visible catalogue changes. The first read after an
+// upgrade starts the new catalogue from its declared defaults; subsequent
+// reads preserve toggles made by the user in this version.
+const SKILLS_STORAGE_VERSION = '3.2.6'
 
 export { type BuiltInSkillId } from '../../../shared/built-in-skills'
 
@@ -37,11 +43,18 @@ function readSkills(): Record<BuiltInSkillId, boolean> {
   try {
     const raw = globalThis.localStorage?.getItem(SKILLS_STORAGE_KEY)
     if (!raw) return defaults
+    const storedVersion = globalThis.localStorage?.getItem(SKILLS_STORAGE_VERSION_KEY)
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return defaults
     for (const id of Object.keys(defaults) as BuiltInSkillId[]) {
       const value = (parsed as Record<string, unknown>)[id]
       if (typeof value === 'boolean') defaults[id] = value
+    }
+    if (storedVersion !== SKILLS_STORAGE_VERSION) {
+      // Do not carry enabled flags from an older catalogue into the new demo
+      // entries. Persist a version marker so a toggle survives later reloads.
+      for (const skill of BUILT_IN_SKILLS) defaults[skill.id] = false
+      globalThis.localStorage?.setItem(SKILLS_STORAGE_VERSION_KEY, SKILLS_STORAGE_VERSION)
     }
   } catch {
     // A blocked or malformed localStorage entry should never prevent startup.
@@ -64,7 +77,10 @@ function persistDisplayName(value: string): void {
 }
 
 function persistSkills(value: Record<BuiltInSkillId, boolean>): void {
-  try { globalThis.localStorage?.setItem(SKILLS_STORAGE_KEY, JSON.stringify(value)) } catch {
+  try {
+    globalThis.localStorage?.setItem(SKILLS_STORAGE_KEY, JSON.stringify(value))
+    globalThis.localStorage?.setItem(SKILLS_STORAGE_VERSION_KEY, SKILLS_STORAGE_VERSION)
+  } catch {
     // localStorage is an optional convenience; keep the in-memory value.
   }
 }

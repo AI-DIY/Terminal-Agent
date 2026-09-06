@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { BUILT_IN_SKILLS, type BuiltInSkillId } from './built-in-skills'
+import { BUILT_IN_SKILL_IDS, builtInSkillIdSchema } from './built-in-skills'
 
 const chatIdentifierSchema = z.string().trim().min(1).max(128)
 const hostnameSchema = z.string().trim().min(1).max(255)
@@ -83,7 +83,7 @@ const planExecutionContextSchema = {
   sshContextSessionIds: z.array(chatIdentifierSchema).max(128).superRefine((ids, context) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'sshContextSessionIds must be unique' })
   }).optional(),
-  skillIds: z.array(z.enum(BUILT_IN_SKILLS.map(skill => skill.id) as [BuiltInSkillId, ...BuiltInSkillId[]])).max(BUILT_IN_SKILLS.length).superRefine((ids, context) => {
+  skillIds: z.array(builtInSkillIdSchema).max(BUILT_IN_SKILL_IDS.length).superRefine((ids, context) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'skillIds must be unique' })
   }).optional(),
 }
