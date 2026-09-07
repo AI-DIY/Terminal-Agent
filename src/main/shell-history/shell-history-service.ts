@@ -13,8 +13,10 @@ import {
   REDACTED_SHELL_HISTORY_CONTENT,
   SHELL_HISTORY_MAX_OUTPUT_BYTES,
   SHELL_HISTORY_MAX_AUDIT_BYTES,
+  SHELL_HISTORY_MAX_FILE_TRANSFER_LOGS,
   ShellHistoryTerminalControlSanitizer,
   sanitizeShellHistoryDisplay,
+  sanitizeShellHistoryFileTransferLog,
   sanitizeShellHistoryText,
   stripShellHistoryTerminalControlSequences,
   shellHistoryAppendSchema,
@@ -22,14 +24,17 @@ import {
   shellHistoryAssociateSchema,
   shellHistoryAttachSchema,
   shellHistoryCloseSchema,
+  shellHistoryFileTransferRecordSchema,
   truncateShellHistoryText,
   type ShellHistoryAppend,
   type ShellHistoryAudit,
   type ShellHistoryAssociate,
   type ShellHistoryAttach,
   type ShellHistoryClose,
+  type ShellHistoryFileTransferRecord,
 } from './shell-history-contracts'
 import { chatIdentifierSchema } from '../../shared/contracts'
+import type { ShellHistoryFileTransferLog } from '../../shared/contracts'
 import type { ShellHistoryRecord, ShellHistoryRepositoryPort } from './shell-history-repository'
 
 type Collector = ShellHistoryAttach & {
@@ -44,7 +49,22 @@ type Collector = ShellHistoryAttach & {
   sensitiveInputPending: boolean
   sensitivePromptMarkerPending: boolean
   sensitiveOutputPending: boolean
+  fileTransferLogs: ShellHistoryFileTransferLog[]
 }
+
+/**
+ * A closed SSH session may still have an in-flight SFTP promise settling
+ * after SessionService has emitted its close event.  Keep only a small,
+ * bounded reference to the persisted history id so that final transfer
+ * results can be appended without retaining the full terminal transcript in
+ * memory.
+ */
+type ClosedSessionReference = {
+  historyId: string
+  writeTail: Promise<void>
+}
+
+const MAX_CLOSED_SESSION_REFERENCES = 256
 
 type ShellHistoryServiceOptions = {
   createId?: () => string
@@ -60,6 +80,7 @@ export type ShellHistoryConnectionOpener = {
 
 export class ShellHistoryService {
   private readonly collectors = new Map<string, Collector>()
+  private readonly closedSessions = new Map<string, ClosedSessionReference>()
   private readonly changedListeners = new Set<(event: ShellHistoryChangedEvent) => void>()
   private readonly createId: () => string
   private readonly now: () => Date
@@ -75,6 +96,9 @@ export class ShellHistoryService {
     const parsed = shellHistoryAttachSchema.parse(input)
     const existing = this.collectors.get(parsed.sessionId)
     if (existing) return
+    // Session ids are normally unique, but dropping a stale closed reference
+    // makes a reused id unambiguously refer to the newly opened session.
+    this.closedSessions.delete(parsed.sessionId)
     this.collectors.set(parsed.sessionId, {
       ...parsed,
       output: '',
@@ -88,6 +112,7 @@ export class ShellHistoryService {
       sensitiveInputPending: false,
       sensitivePromptMarkerPending: false,
       sensitiveOutputPending: false,
+      fileTransferLogs: [],
     })
   }
 
@@ -131,6 +156,57 @@ export class ShellHistoryService {
     collectCommandInput(collector, parsed.data)
   }
 
+  /**
+   * Record a completed/cancelled/failed SFTP action without allowing transfer
+   * persistence to interfere with a live SSH operation.  The main process
+   * supplies only display-safe metadata, and the bounded collector is later
+   * written together with the corresponding closed Shell history record.
+   */
+  async recordFileTransfer(input: ShellHistoryFileTransferRecord): Promise<void> {
+    const parsed = shellHistoryFileTransferRecordSchema.parse(input)
+    const collector = this.collectors.get(parsed.sessionId)
+    const log = sanitizeShellHistoryFileTransferLog({
+      id: parsed.id,
+      direction: parsed.direction,
+      fileName: parsed.fileName,
+      remotePath: parsed.remotePath,
+      status: parsed.status,
+      transferredBytes: parsed.transferredBytes,
+      ...(parsed.totalBytes === undefined ? {} : { totalBytes: parsed.totalBytes }),
+      ...(parsed.message === undefined ? {} : { message: parsed.message }),
+      startedAt: parsed.startedAt,
+      endedAt: parsed.endedAt,
+    })
+
+    if (collector) {
+      updateFileTransferLogs(collector.fileTransferLogs, log)
+      return
+    }
+
+    // Do not silently discard a result merely because the connection closed
+    // while SFTP was resolving.  Its ordered tail waits for close()'s initial
+    // save, then applies the same idempotent log update to the closed record.
+    const closed = this.closedSessions.get(parsed.sessionId)
+    if (!closed) return
+    await this.enqueueClosedSessionWrite(closed, async () => {
+      if (this.repository.appendFileTransferLog) {
+        const updated = await this.repository.appendFileTransferLog(closed.historyId, log)
+        if (updated) this.publish({ kind: 'saved', record: this.toSummary(updated) })
+        return
+      }
+      // Compatibility fallback for repository adapters predating the atomic
+      // append API. Production uses appendFileTransferLog so a concurrent
+      // history update cannot overwrite a trailing transfer audit row.
+      const record = await this.repository.get(closed.historyId)
+      if (!record) return
+      const fileTransferLogs = [...(record.fileTransferLogs ?? [])]
+      updateFileTransferLogs(fileTransferLogs, log)
+      const updated: ShellHistoryRecord = { ...record, fileTransferLogs }
+      await this.repository.save(updated)
+      this.publish({ kind: 'saved', record: this.toSummary(updated) })
+    })
+  }
+
   async close(input: ShellHistoryClose): Promise<void> {
     const parsed = shellHistoryCloseSchema.parse(input)
     const collector = this.collectors.get(parsed.sessionId)
@@ -149,13 +225,15 @@ export class ShellHistoryService {
       status: 'closed',
       output: sanitizeShellHistoryText(collector.output),
       commandAudit: { input: sanitizeShellHistoryText(collector.commandInputChunks.join('')) },
+      fileTransferLogs: collector.fileTransferLogs.map(sanitizeShellHistoryFileTransferLog),
       reconnectable: Boolean(collector.reconnectReference && this.connectionOpener?.canReconnect(collector.reconnectReference)),
       ...(collector.reconnectReference ? { reconnectReference: collector.reconnectReference } : {}),
       reconnectAudit: { count: 0 },
       connectionType: collector.connectionType,
     }
+    const closed = this.rememberClosedSession(parsed.sessionId, record.id)
     try {
-      await this.repository.save(record)
+      await this.enqueueClosedSessionWrite(closed, () => this.repository.save(record))
       this.publish({ kind: 'saved', record: this.toSummary(record) })
     } catch {
       this.publish({ kind: 'error', message: 'Shell 历史保存失败，实时连接未受影响。' })
@@ -178,7 +256,12 @@ export class ShellHistoryService {
       throw new Error('Shell 历史暂不可用。')
     }
     if (!record) throw new Error('Shell 历史记录不存在。')
-    return { ...this.toSummary(record), output: sanitizeShellHistoryText(record.output) }
+    return {
+      ...this.toSummary(record),
+      output: sanitizeShellHistoryText(record.output),
+      commandAudit: { input: sanitizeShellHistoryText(record.commandAudit?.input ?? '') },
+      fileTransferLogs: (record.fileTransferLogs ?? []).map(sanitizeShellHistoryFileTransferLog),
+    }
   }
 
   async duplicate(sessionId: string, chatId?: string): Promise<ConnectedSession> {
@@ -242,6 +325,15 @@ export class ShellHistoryService {
     return []
   }
 
+  /** Wait for any final SFTP audit writes queued after a Shell closes. */
+  async drain(): Promise<void> {
+    while (true) {
+      const tails = [...this.closedSessions.values()].map(reference => reference.writeTail)
+      await Promise.all(tails)
+      if ([...this.closedSessions.values()].every(reference => tails.includes(reference.writeTail))) return
+    }
+  }
+
   private publish(event: ShellHistoryChangedEvent): void {
     const parsed = shellHistoryChangedEventSchema.parse(event)
     for (const listener of this.changedListeners) listener(parsed)
@@ -249,6 +341,41 @@ export class ShellHistoryService {
 
   private toSummary(record: ShellHistoryRecord): ShellHistorySummary {
     return toSummary(record, Boolean(record.reconnectReference && this.connectionOpener?.canReconnect(record.reconnectReference)))
+  }
+
+  private rememberClosedSession(sessionId: string, historyId: string): ClosedSessionReference {
+    this.closedSessions.delete(sessionId)
+    const reference: ClosedSessionReference = { historyId, writeTail: Promise.resolve() }
+    this.closedSessions.set(sessionId, reference)
+    while (this.closedSessions.size > MAX_CLOSED_SESSION_REFERENCES) {
+      const oldestSessionId = this.closedSessions.keys().next().value as string | undefined
+      if (!oldestSessionId) break
+      this.closedSessions.delete(oldestSessionId)
+    }
+    return reference
+  }
+
+  private enqueueClosedSessionWrite(
+    reference: ClosedSessionReference,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const queued = reference.writeTail.then(operation)
+    // Later transfer logs must still get an opportunity to persist if an
+    // earlier best-effort write failed.  The caller receives the original
+    // error, while the serial tail deliberately continues.
+    reference.writeTail = queued.then(() => undefined, () => undefined)
+    return queued
+  }
+}
+
+function updateFileTransferLogs(logs: ShellHistoryFileTransferLog[], log: ShellHistoryFileTransferLog): void {
+  const priorIndex = logs.findIndex(item => item.id === log.id)
+  if (priorIndex >= 0) logs.splice(priorIndex, 1, log)
+  else {
+    logs.push(log)
+    if (logs.length > SHELL_HISTORY_MAX_FILE_TRANSFER_LOGS) {
+      logs.splice(0, logs.length - SHELL_HISTORY_MAX_FILE_TRANSFER_LOGS)
+    }
   }
 }
 

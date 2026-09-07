@@ -1,4 +1,6 @@
-import { join } from 'node:path'
+import { readFile as readFileFromDisk } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { TextDecoder } from 'node:util'
 import {
   createDefaultSsoConfiguration,
   ssoConfigurationSchema,
@@ -14,15 +16,31 @@ import { withUserConfigPathLock } from './user-config-lock'
 
 export { createDefaultSsoConfiguration }
 
+/** Canonical portable user configuration shared by SSO and model profiles. */
 export function getSsoConfigPath(homeDirectory: string): string {
+  return join(homeDirectory, '.terminal-agent', 'user-config')
+}
+
+/** The pre-v3.2 location retained as a one-time migration source. */
+export function getLegacySsoConfigPath(homeDirectory: string): string {
   return join(homeDirectory, '.ta', 'user-config')
+}
+
+export type SsoConfigServiceOptions = Pick<AtomicJsonStoreOptions, 'fileSystem' | 'createId'> & {
+  /** Optional legacy file to import when the canonical path is absent. */
+  legacyPath?: string
 }
 
 export class SsoConfigService {
   private readonly store: AtomicJsonStore<SsoDocument>
   private recoveryRequired = false
 
-  constructor(private readonly path: string, options: Pick<AtomicJsonStoreOptions, 'fileSystem' | 'createId'> = {}) {
+  private readonly legacyPath: string | undefined
+  private readonly legacyReadFile: (path: string) => Promise<Buffer>
+
+  constructor(private readonly path: string, options: SsoConfigServiceOptions = {}) {
+    this.legacyPath = options.legacyPath
+    this.legacyReadFile = options.fileSystem?.readFile ?? (async path => Buffer.from(await readFileFromDisk(path)))
     this.store = new AtomicJsonStore(path, ssoDocumentSchema, () => ({
       version: 1,
       sso: createDefaultSsoConfiguration(),
@@ -41,11 +59,37 @@ export class SsoConfigService {
     // cross-adapter lock here: another initializer must be able to observe and
     // join a publication that is currently waiting on its filesystem link.
     try {
-      return (await this.store.createIfMissing()).sso
+      return (await this.store.createIfMissing(() => this.readLegacyOrDefault())).sso
     } catch (error) {
       if (isAtomicJsonStoreInvalidDataError(error)) this.recoveryRequired = true
       throw error
     }
+  }
+
+  /**
+   * Seed a missing canonical file from the legacy location.  The store checks
+   * the canonical path first and publishes with an exclusive link, so an
+   * existing canonical file is never overwritten—even when another process
+   * creates it while the legacy file is being read.
+   */
+  private async readLegacyOrDefault(): Promise<SsoDocument> {
+    const empty = (): SsoDocument => ({ version: 1, sso: createDefaultSsoConfiguration() })
+    if (!this.legacyPath || samePath(this.path, this.legacyPath)) return empty()
+
+    let source: Buffer
+    try {
+      source = await this.legacyReadFile(this.legacyPath)
+    } catch (error) {
+      if (isMissingFile(error)) return empty()
+      throw error
+    }
+
+    // Keep the legacy source untouched.  Parsing and schema validation happen
+    // before publication; unknown top-level fields are retained by the
+    // passthrough user-config envelope below.
+    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(source)
+    const persisted = JSON.parse(decoded) as unknown
+    return ssoDocumentSchema.parse(migrateSsoDocument(persisted).value)
   }
 
   async get(): Promise<SsoConfiguration> {
@@ -111,4 +155,16 @@ function isStandaloneModelProfileDocument(persisted: Record<string, unknown>): b
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string): string => {
+    const resolved = resolve(value)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+  return normalize(left) === normalize(right)
+}
+
+function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }

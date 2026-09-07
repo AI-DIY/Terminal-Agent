@@ -3,15 +3,19 @@ import {
   chatIdentifierSchema,
   chatTimestampSchema,
   hostnameSchema,
+  shellHistoryFileTransferLogSchema,
   shellHistoryIdSchema,
   shellHistoryStatusSchema,
   terminalSessionIdSchema,
+  type ShellHistoryFileTransferLog,
 } from '../../shared/contracts'
 import { redactSensitiveText } from '../agent/sensitive-data'
 
 export const SHELL_HISTORY_MAX_RECORDS_PER_HOST = 50
 export const SHELL_HISTORY_MAX_OUTPUT_BYTES = 256 * 1024
 export const SHELL_HISTORY_MAX_AUDIT_BYTES = 256 * 1024
+/** Keep a bounded audit trail without allowing a long-lived Shell to grow indefinitely. */
+export const SHELL_HISTORY_MAX_FILE_TRANSFER_LOGS = 200
 
 export const REDACTED_SHELL_HISTORY_CONTENT = '[REDACTED SENSITIVE CONTENT]'
 const ESCAPE = String.fromCharCode(27)
@@ -42,6 +46,12 @@ const shellHistoryReconnectAuditSchema = z.object({
   lastReconnectedAt: chatTimestampSchema.optional(),
 }).strict()
 
+/** A final SFTP result associated with an open Shell history collector. */
+export const shellHistoryFileTransferRecordSchema = shellHistoryFileTransferLogSchema.extend({
+  sessionId: terminalSessionIdSchema,
+}).strict()
+export type ShellHistoryFileTransferRecord = z.infer<typeof shellHistoryFileTransferRecordSchema>
+
 export const shellHistoryRecordSchema = z.object({
   id: shellHistoryIdSchema,
   chatId: chatIdentifierSchema,
@@ -53,6 +63,7 @@ export const shellHistoryRecordSchema = z.object({
   status: shellHistoryStatusSchema,
   output: shellHistoryOutputSchema,
   commandAudit: shellHistoryCommandAuditSchema.default({ input: '' }),
+  fileTransferLogs: z.array(shellHistoryFileTransferLogSchema).max(SHELL_HISTORY_MAX_FILE_TRANSFER_LOGS).default([]),
   reconnectable: z.boolean(),
   reconnectReference: shellHistoryReconnectReferenceSchema.optional(),
   reconnectAudit: shellHistoryReconnectAuditSchema.default({ count: 0 }),
@@ -117,6 +128,20 @@ export const shellHistoryCloseSchema = z.object({
   endedAt: chatTimestampSchema,
 }).strict()
 export type ShellHistoryClose = z.infer<typeof shellHistoryCloseSchema>
+
+/**
+ * Keep transfer-log values subject to the same sensitive-data boundary as
+ * Shell history.  The caller never supplies a local path, so this records
+ * only the friendly file name and remote location required for audit display.
+ */
+export function sanitizeShellHistoryFileTransferLog(value: ShellHistoryFileTransferLog): ShellHistoryFileTransferLog {
+  return {
+    ...value,
+    fileName: sanitizeShellHistoryDisplay(value.fileName),
+    remotePath: sanitizeShellHistoryDisplay(value.remotePath),
+    ...(value.message === undefined ? {} : { message: sanitizeShellHistoryText(value.message, 4_000) }),
+  }
+}
 
 export function sanitizeShellHistoryText(value: string, maximumBytes = SHELL_HISTORY_MAX_OUTPUT_BYTES): string {
   const terminalControls = new ShellHistoryTerminalControlSanitizer()

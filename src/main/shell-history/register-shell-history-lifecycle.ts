@@ -15,7 +15,10 @@ type ChatLifecycleSource = {
   ensureClosedHistoryAssociation?(session: HistoryConnectedSession): Promise<{ chatId: string; historyId: string }>
 }
 
-type ShellHistoryLifecycleSink = Pick<ShellHistoryService, 'attach' | 'append' | 'audit' | 'associate' | 'close' | 'reportError'>
+type ShellHistoryLifecycleSink = Pick<ShellHistoryService, 'attach' | 'append' | 'audit' | 'associate' | 'close' | 'reportError'> & {
+  /** Optional for compatibility with lightweight history sinks in tests. */
+  drain?: () => Promise<void>
+}
 
 type ShellHistoryLifecycleOptions = {
   now?: () => Date
@@ -109,6 +112,7 @@ export function registerShellHistoryLifecycle(
   }) as ShellHistoryLifecycleRegistration
   dispose.drain = async () => {
     while (pendingCloses.size > 0) await Promise.all([...pendingCloses])
+    await history.drain?.()
   }
   return dispose
 }

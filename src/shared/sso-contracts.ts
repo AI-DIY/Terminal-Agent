@@ -30,7 +30,9 @@ export const ssoDocumentSchema = z.object({
   // intentionally treat this section as opaque; the main-process model
   // repository validates and updates it with its own schema.
   models: z.unknown().optional(),
-}).strict()
+  // Keep forward-compatible settings (and vendor/application metadata) when
+  // SSO updates only its own section of the shared user-config document.
+}).passthrough()
 export type SsoDocument = z.infer<typeof ssoDocumentSchema>
 
 export const ssoIdentitySchema = z.object({

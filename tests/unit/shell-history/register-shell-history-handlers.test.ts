@@ -23,6 +23,7 @@ describe('registerShellHistoryHandlers', () => {
         id: 'history-a', chatId: 'chat-a', hostname: 'web-01', title: 'web-01',
         startedAt: '2026-08-16T08:00:00.000Z', endedAt: '2026-08-16T08:01:00.000Z',
         status: 'closed', preview: 'ready', output: 'ready', reconnectable: false,
+        commandAudit: { input: '' }, fileTransferLogs: [],
       } satisfies ShellHistoryDetail),
       duplicate: vi.fn(),
       reconnect: vi.fn(),

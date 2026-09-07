@@ -40,7 +40,7 @@ test('opens real settings with the user-facing panels and preserves drafts on re
 
     await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '外观', exact: true }).click()
     const themeGroup = page.getByRole('group', { name: '工作台主题', exact: true })
-    await expect(themeGroup.getByRole('button')).toHaveCount(3)
+    await expect(themeGroup.getByRole('button')).toHaveCount(5)
     const themeColumns = await themeGroup.evaluate(node => getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/).length)
     expect(themeColumns).toBe(3)
 

@@ -16,6 +16,8 @@ describe('renderer layout preferences', () => {
     const html = readFileSync(new URL('../../../src/renderer/index.html', import.meta.url), 'utf8')
     expect(html).toContain(':root[data-theme="pearl"]')
     expect(html).toContain(':root[data-theme="graphite"]')
+    expect(html).toContain(':root[data-theme="imperial-gold"]')
+    expect(html).toContain(':root[data-theme="sakura-pink"]')
     expect(html).toContain('color-scheme: dark')
   })
 

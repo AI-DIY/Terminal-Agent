@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AtomicJsonStoreFileSystem } from '../../../src/main/persistence/atomic-json-store'
-import { SsoConfigService, createDefaultSsoConfiguration, getSsoConfigPath } from '../../../src/main/settings/sso-config-service'
+import { SsoConfigService, createDefaultSsoConfiguration, getLegacySsoConfigPath, getSsoConfigPath } from '../../../src/main/settings/sso-config-service'
 
 const temporaryDirectories: string[] = []
 
@@ -18,18 +18,66 @@ async function createRoot(): Promise<string> {
 }
 
 describe('SsoConfigService', () => {
-  it('uses the .ta/user-config path and creates an enabled default document', async () => {
+  it('uses the .terminal-agent/user-config path and creates an enabled default document', async () => {
     const root = await createRoot()
-    const path = join(root, '.ta', 'user-config')
+    const path = join(root, '.terminal-agent', 'user-config')
     expect(getSsoConfigPath(root)).toBe(path)
+    expect(getLegacySsoConfigPath(root)).toBe(join(root, '.ta', 'user-config'))
     const service = new SsoConfigService(path)
     await expect(service.ensureInitialized()).resolves.toEqual(createDefaultSsoConfiguration())
     await expect(readFile(path, 'utf8')).resolves.toContain('"version":1')
   })
 
+  it('migrates a legacy .ta file into the canonical path without modifying the source', async () => {
+    const root = await createRoot()
+    const path = join(root, '.terminal-agent', 'user-config')
+    const legacyPath = join(root, '.ta', 'user-config')
+    const legacy = {
+      version: 1,
+      sso: { ...createDefaultSsoConfiguration(), enabled: false },
+      models: { preserved: true },
+      futureSetting: { keep: 'yes' },
+    }
+    await mkdir(dirname(legacyPath), { recursive: true })
+    await writeFile(legacyPath, JSON.stringify(legacy), 'utf8')
+
+    const service = new SsoConfigService(path, { legacyPath })
+    await expect(service.ensureInitialized()).resolves.toEqual(legacy.sso)
+    await expect(readFile(path, 'utf8')).resolves.toBe(JSON.stringify(legacy))
+    await expect(readFile(legacyPath, 'utf8')).resolves.toBe(JSON.stringify(legacy))
+  })
+
+  it('prefers an existing canonical file and never overwrites it with legacy data', async () => {
+    const root = await createRoot()
+    const path = join(root, '.terminal-agent', 'user-config')
+    const legacyPath = join(root, '.ta', 'user-config')
+    const canonical = { version: 1, sso: { ...createDefaultSsoConfiguration(), enabled: false }, future: 'canonical' }
+    const legacy = { version: 1, sso: { ...createDefaultSsoConfiguration(), enabled: true }, future: 'legacy' }
+    await mkdir(dirname(path), { recursive: true })
+    await mkdir(dirname(legacyPath), { recursive: true })
+    await writeFile(path, JSON.stringify(canonical), 'utf8')
+    await writeFile(legacyPath, JSON.stringify(legacy), 'utf8')
+
+    const service = new SsoConfigService(path, { legacyPath })
+    await expect(service.ensureInitialized()).resolves.toEqual(canonical.sso)
+    await expect(readFile(path, 'utf8')).resolves.toBe(JSON.stringify(canonical))
+    await expect(readFile(legacyPath, 'utf8')).resolves.toBe(JSON.stringify(legacy))
+  })
+
+  it('retains unknown top-level fields when SSO updates only its own section', async () => {
+    const root = await createRoot()
+    const path = join(root, '.terminal-agent', 'user-config')
+    const future = { enabled: false, nested: { flag: true } }
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, JSON.stringify({ version: 1, sso: createDefaultSsoConfiguration(), future }), 'utf8')
+    const service = new SsoConfigService(path)
+    await service.save({ ...createDefaultSsoConfiguration(), enabled: false })
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ future })
+  })
+
   it('preserves an existing draft during initialization and trims saves', async () => {
     const root = await createRoot()
-    const service = new SsoConfigService(join(root, '.ta', 'user-config'))
+    const service = new SsoConfigService(join(root, '.terminal-agent', 'user-config'))
     await service.ensureInitialized()
     const draft = await service.save({ enabled: true, loginPageUrl: ' https://login.example ', platformUrlMatcher: { mode: 'exact', value: '' }, userInfoUrlMatcher: { mode: 'exact', value: '' }, employeeIdField: '', nameField: '' })
     await service.ensureInitialized()
@@ -39,7 +87,7 @@ describe('SsoConfigService', () => {
 
   it('classifies complete and incomplete configurations', async () => {
     const root = await createRoot()
-    const service = new SsoConfigService(join(root, '.ta', 'user-config'))
+    const service = new SsoConfigService(join(root, '.terminal-agent', 'user-config'))
     const incomplete = await service.save(createDefaultSsoConfiguration())
     expect(service.isComplete(incomplete)).toBe(false)
     const complete = await service.save({ enabled: true, loginPageUrl: 'https://login.example', platformUrlMatcher: { mode: 'exact', value: 'https://platform.example/home' }, userInfoUrlMatcher: { mode: 'regex', value: '^https://platform\\.example/api/userinfo$' }, employeeIdField: 'data.employeeId', nameField: '$.data.name' })
@@ -48,7 +96,7 @@ describe('SsoConfigService', () => {
 
   it('leaves a competing creator document untouched when initialization loses the create race', async () => {
     const root = await createRoot()
-    const path = join(root, '.ta', 'user-config')
+    const path = join(root, '.terminal-agent', 'user-config')
     const competing = {
       version: 1,
       sso: { ...createDefaultSsoConfiguration(), enabled: false },
@@ -82,7 +130,7 @@ describe('SsoConfigService', () => {
 
   it('backs up corrupt content and never replaces it during initialization', async () => {
     const root = await createRoot()
-    const path = join(root, '.ta', 'user-config')
+    const path = join(root, '.terminal-agent', 'user-config')
     await mkdir(dirname(path), { recursive: true })
     const corrupt = '{ not valid json'
     await writeFile(path, corrupt, 'utf8')
@@ -96,7 +144,7 @@ describe('SsoConfigService', () => {
 
   it('does not enter recovery for a same-message initialization read failure', async () => {
     const root = await createRoot()
-    const path = join(root, '.ta', 'user-config')
+    const path = join(root, '.terminal-agent', 'user-config')
     const failure = new Error('AtomicJsonStore could not read valid JSON data')
     const fileSystem: AtomicJsonStoreFileSystem = {
       mkdir,
@@ -114,7 +162,7 @@ describe('SsoConfigService', () => {
 
   it('requires an explicit save to replace corrupt content after preserving its diagnostic backup', async () => {
     const root = await createRoot()
-    const path = join(root, '.ta', 'user-config')
+    const path = join(root, '.terminal-agent', 'user-config')
     await mkdir(dirname(path), { recursive: true })
     const corrupt = '{ corrupt configuration bytes'
     await writeFile(path, corrupt, 'utf8')
@@ -136,7 +184,7 @@ describe('SsoConfigService', () => {
 
   it('does not expose a partial default while another initializer is publishing', async () => {
     const root = await createRoot()
-    const path = join(root, '.ta', 'user-config')
+    const path = join(root, '.terminal-agent', 'user-config')
     let firstLinkStarted!: () => void
     const firstLink = new Promise<void>(resolve => { firstLinkStarted = resolve })
     let releaseFirstLink!: () => void
@@ -176,7 +224,7 @@ describe('SsoConfigService', () => {
 
   it('retries a colliding init temp name without deleting another writer temp', async () => {
     const root = await createRoot()
-    const path = join(root, '.ta', 'user-config')
+    const path = join(root, '.terminal-agent', 'user-config')
     const firstId = '11111111-1111-4111-8111-111111111111'
     const secondId = '22222222-2222-4222-8222-222222222222'
     const collidingPath = `${path}.init-${firstId}`
@@ -192,7 +240,7 @@ describe('SsoConfigService', () => {
 
   it('does not fail after publication when init temp cleanup fails', async () => {
     const root = await createRoot()
-    const path = join(root, '.ta', 'user-config')
+    const path = join(root, '.terminal-agent', 'user-config')
     let published = false
     const service = new SsoConfigService(path, {
       fileSystem: {

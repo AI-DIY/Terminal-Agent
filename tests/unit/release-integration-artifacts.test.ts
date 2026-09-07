@@ -30,18 +30,18 @@ function releaseArtifactGuard(): ReleaseArtifactGuard {
 }
 
 describe('release integration artifact guard', () => {
-  it('keeps v3.2.6 package metadata, installer artifact naming, and release notes synchronized', () => {
+  it('keeps v3.2.7 package metadata, installer artifact naming, and release notes synchronized', () => {
     const packageJson = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'))
     const packageLock = JSON.parse(readFileSync(join(process.cwd(), 'package-lock.json'), 'utf8'))
     const releaseNotes = readFileSync(join(process.cwd(), 'RELEASE_NOTES.md'), 'utf8')
     const v3Section = releaseNotes.slice(0, releaseNotes.indexOf('# Terminal-Agent v2.1.1'))
 
-    expect(packageJson.version).toBe('3.2.6')
-    expect(packageLock.version).toBe('3.2.6')
-    expect(packageLock.packages[''].version).toBe('3.2.6')
-    expect(packageJson.build.nsis.artifactName.replace('${version}', packageJson.version).replace('${ext}', 'exe')).toBe('Terminal-Agent-Setup-3.2.6.exe')
-    expect(releaseNotes.startsWith('# Terminal-Agent v3.2.6')).toBe(true)
-    expect(releaseNotes).toContain('Terminal-Agent-Quick-Install-3.2.6.zip')
+    expect(packageJson.version).toBe('3.2.7')
+    expect(packageLock.version).toBe('3.2.7')
+    expect(packageLock.packages[''].version).toBe('3.2.7')
+    expect(packageJson.build.nsis.artifactName.replace('${version}', packageJson.version).replace('${ext}', 'exe')).toBe('Terminal-Agent-Setup-3.2.7.exe')
+    expect(releaseNotes.startsWith('# Terminal-Agent v3.2.7')).toBe(true)
+    expect(releaseNotes).toContain('Terminal-Agent-Quick-Install-3.2.7.zip')
     expect(v3Section).toMatch(/SSO|单点登录/)
     expect(v3Section).toMatch(/被动|自然回复|passive/i)
     expect(v3Section).toMatch(/多层级|Object Path|JSONPath/i)

@@ -47,14 +47,14 @@ describe('settings panels', () => {
     expect(canvas).toContain('SSH 字体大小')
   })
 
-  it('keeps all three appearance choices in one row at desktop width', () => {
+  it('keeps the five appearance choices in the existing three-column layout', () => {
     const appearance = readFileSync(new URL('../../../src/renderer/src/components/settings/AppearanceSettings.vue', import.meta.url), 'utf8')
     const themeRule = /\.theme-options\s*\{([^}]*)\}/.exec(appearance)?.[1] ?? ''
 
     expect(themeRule).toContain('grid-template-columns: repeat(3')
     expect(themeRule).toContain('max-width: 860px')
     expect(appearance).toContain('.theme-options { grid-template-columns: 1fr; }')
-    for (const label of ['珍珠白', '石墨黑', '高贵紫']) expect(appearance).toContain(label)
+    for (const label of ['珍珠白', '石墨黑', '高贵紫', '帝王金', '樱花粉']) expect(appearance).toContain(label)
   })
 
   it('themes the settings and host-memory surfaces through shared tokens', () => {

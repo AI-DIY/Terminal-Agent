@@ -6,7 +6,8 @@ type SsoConfigHomeEnvironment = {
 /**
  * Keeps the production configuration location anchored to Electron's home
  * directory.  Electron E2E launches opt into an isolated home explicitly so
- * Windows tests never write the real user's `.ta/user-config` file.
+ * Windows tests never write the real user's `.terminal-agent/user-config`
+ * file.
  */
 export function resolveSsoConfigHomeDirectory(
   electronHomeDirectory: string,

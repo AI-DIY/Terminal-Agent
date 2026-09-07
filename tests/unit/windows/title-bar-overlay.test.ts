@@ -6,6 +6,8 @@ describe('title bar overlay', () => {
     expect(TITLE_BAR_OVERLAY_HEIGHT).toBe(48)
     expect(titleBarOverlayForTheme('pearl')).toEqual({ color: '#f0f3f6', symbolColor: '#1d242c', height: 48 })
     expect(titleBarOverlayForTheme('graphite')).toEqual({ color: '#25292e', symbolColor: '#f0f3f6', height: 48 })
+    expect(titleBarOverlayForTheme('imperial-gold')).toEqual({ color: '#4b3512', symbolColor: '#fff5d6', height: 48 })
+    expect(titleBarOverlayForTheme('sakura-pink')).toEqual({ color: '#5b2d42', symbolColor: '#fff0f5', height: 48 })
   })
 
   it('rejects an unknown theme before it reaches BrowserWindow', () => {

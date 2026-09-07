@@ -2,15 +2,19 @@ import {
   shellHistoryDocumentSchema,
   shellHistoryRecordSchema,
   SHELL_HISTORY_MAX_AUDIT_BYTES,
+  SHELL_HISTORY_MAX_FILE_TRANSFER_LOGS,
   SHELL_HISTORY_MAX_OUTPUT_BYTES,
   SHELL_HISTORY_MAX_RECORDS_PER_HOST,
   sanitizeShellHistoryDisplay,
+  sanitizeShellHistoryFileTransferLog,
   sanitizeShellHistoryText,
   type ShellHistoryDocument,
 } from './shell-history-contracts'
 import {
   shellHistoryIdSchema,
+  shellHistoryFileTransferLogSchema,
   shellHistoryListRequestSchema,
+  type ShellHistoryFileTransferLog,
   type ShellHistoryListRequest,
 } from '../../shared/contracts'
 import { AtomicJsonStore, type AtomicJsonStoreOptions } from '../persistence/atomic-json-store'
@@ -21,6 +25,8 @@ export type ShellHistoryRepositoryPort = {
   save(record: ShellHistoryRecord): Promise<void>
   list(filter: ShellHistoryListRequest): Promise<ShellHistoryRecord[]>
   get(historyId: string): Promise<ShellHistoryRecord | undefined>
+  /** Atomically append or replace a final SFTP audit row for one closed Shell. */
+  appendFileTransferLog?(historyId: string, log: ShellHistoryFileTransferLog): Promise<ShellHistoryRecord | undefined>
 }
 
 export type ShellHistoryRepositoryOptions = Pick<AtomicJsonStoreOptions, 'fileSystem'>
@@ -39,17 +45,44 @@ export class ShellHistoryRepository implements ShellHistoryRepositoryPort {
   async save(record: ShellHistoryRecord): Promise<void> {
     const parsed = shellHistoryRecordSchema.parse(sanitizeRecord(record))
     await this.store.update(document => {
+      const existing = document.records.find(item => item.id === parsed.id)
+      // A disconnect can race with the final SFTP result.  Retain any audit
+      // rows that landed through appendFileTransferLog while another history
+      // operation (for example, a reconnect audit) saves a stale snapshot.
+      const persisted = existing
+        ? { ...parsed, fileTransferLogs: mergeFileTransferLogs(existing.fileTransferLogs, parsed.fileTransferLogs) }
+        : parsed
       const withoutExisting = document.records.filter(item => item.id !== parsed.id)
-      const hostRecords = [...withoutExisting.filter(item => item.hostname === parsed.hostname), parsed]
+      const hostRecords = [...withoutExisting.filter(item => item.hostname === persisted.hostname), persisted]
         .sort(compareOldestFirst)
       const discard = new Set(hostRecords
         .slice(0, Math.max(0, hostRecords.length - SHELL_HISTORY_MAX_RECORDS_PER_HOST))
         .map(item => item.id))
       return {
         version: 1,
-        records: [...withoutExisting.filter(item => !discard.has(item.id)), ...(discard.has(parsed.id) ? [] : [parsed])],
+        records: [...withoutExisting.filter(item => !discard.has(item.id)), ...(discard.has(persisted.id) ? [] : [persisted])],
       }
     })
+  }
+
+  async appendFileTransferLog(historyId: string, log: ShellHistoryFileTransferLog): Promise<ShellHistoryRecord | undefined> {
+    const id = shellHistoryIdSchema.parse(historyId)
+    const parsedLog = shellHistoryFileTransferLogSchema.parse(sanitizeShellHistoryFileTransferLog(log))
+    const document = await this.store.update(current => {
+      const index = current.records.findIndex(record => record.id === id)
+      if (index < 0) return current
+      const previous = current.records[index]!
+      const updated: ShellHistoryRecord = {
+        ...previous,
+        fileTransferLogs: mergeFileTransferLogs(previous.fileTransferLogs, [parsedLog]),
+      }
+      return {
+        ...current,
+        records: current.records.map((record, recordIndex) => recordIndex === index ? updated : record),
+      }
+    })
+    const record = document.records.find(candidate => candidate.id === id)
+    return record ? { ...record } : undefined
   }
 
   async list(filter: ShellHistoryListRequest): Promise<ShellHistoryRecord[]> {
@@ -95,6 +128,22 @@ function migrateShellHistoryDocument(persisted: unknown): { value: unknown; chan
       if (safeInput !== record.commandAudit.input) changed = true
       migrated.commandAudit = { ...record.commandAudit, input: safeInput }
     }
+    if (record.fileTransferLogs === undefined) {
+      migrated.fileTransferLogs = []
+      changed = true
+    } else if (Array.isArray(record.fileTransferLogs)) {
+      // Transfer metadata was added after the original Shell-history format.
+      // Treat an existing file as untrusted too: a previous build or a
+      // manually edited history file may contain a temporary/local path or a
+      // credential in the remote path/message.  Sanitize and bound valid
+      // entries before the strict document schema is applied, then let the
+      // schema continue to reject malformed entries rather than silently
+      // inventing audit data.
+      const boundedLogs = record.fileTransferLogs.slice(-SHELL_HISTORY_MAX_FILE_TRANSFER_LOGS)
+      const safeLogs = boundedLogs.map(migrateFileTransferLog)
+      if (boundedLogs.length !== record.fileTransferLogs.length || safeLogs.some((log, index) => log !== boundedLogs[index])) changed = true
+      migrated.fileTransferLogs = safeLogs
+    }
     return migrated
   })
   const boundedRecords = evictExcessHostRecords(records)
@@ -131,7 +180,32 @@ function sanitizeRecord(record: ShellHistoryRecord): ShellHistoryRecord {
     title: sanitizeShellHistoryDisplay(record.title),
     output: sanitizeShellHistoryText(record.output),
     commandAudit: { input: sanitizeShellHistoryText(record.commandAudit?.input ?? '') },
+    fileTransferLogs: (record.fileTransferLogs ?? [])
+      .slice(-SHELL_HISTORY_MAX_FILE_TRANSFER_LOGS)
+      .map(sanitizeShellHistoryFileTransferLog),
   }
+}
+
+function migrateFileTransferLog(value: unknown): unknown {
+  if (!isObject(value)) return value
+  const migrated = { ...value }
+  if (typeof value.fileName === 'string') migrated.fileName = sanitizeShellHistoryDisplay(value.fileName)
+  if (typeof value.remotePath === 'string') migrated.remotePath = sanitizeShellHistoryDisplay(value.remotePath)
+  if (typeof value.message === 'string') migrated.message = sanitizeShellHistoryText(value.message, 4_000)
+  return migrated
+}
+
+function mergeFileTransferLogs(
+  current: readonly ShellHistoryFileTransferLog[],
+  incoming: readonly ShellHistoryFileTransferLog[],
+): ShellHistoryFileTransferLog[] {
+  const merged = [...current]
+  for (const log of incoming) {
+    const index = merged.findIndex(candidate => candidate.id === log.id)
+    if (index >= 0) merged[index] = log
+    else merged.push(log)
+  }
+  return merged.slice(-SHELL_HISTORY_MAX_FILE_TRANSFER_LOGS)
 }
 
 function compareNewestFirst(left: ShellHistoryRecord, right: ShellHistoryRecord): number {

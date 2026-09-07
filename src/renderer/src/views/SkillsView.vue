@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ArrowLeft, Bot, Braces, Check, ShieldCheck, Sparkles } from '@lucide/vue'
-import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
+import { computed, type Component } from 'vue'
 import { BUILT_IN_SKILLS, type VisibleBuiltInSkillId } from '../../../shared/built-in-skills'
-import { DISPLAY_NAME_MAX_LENGTH, getUserPreferencesStore } from '../stores/user-preferences'
+import { getUserPreferencesStore } from '../stores/user-preferences'
 import { getSsoStore } from '../stores/sso'
 import { resolveBuiltInSkillControls, toggleBuiltInSkill } from '../stores/skill-capability'
 
@@ -20,14 +20,6 @@ const SKILL_ICONS: Record<VisibleBuiltInSkillId, Component> = {
 
 const SKILLS: readonly SkillDefinition[] = BUILT_IN_SKILLS.map(skill => ({ ...skill, icon: SKILL_ICONS[skill.id] }))
 
-const draftDisplayName = ref(preferences.state.displayName)
-const savedNotice = ref('')
-let savedNoticeTimer: ReturnType<typeof setTimeout> | undefined
-
-watch(() => preferences.state.displayName, value => {
-  if (value !== draftDisplayName.value) draftDisplayName.value = value
-})
-
 const skillControls = computed(() => resolveBuiltInSkillControls(sso.skillsAvailable.value, preferences.state.skills))
 const enabledCount = computed(() => skillControls.value.enabledCount)
 
@@ -39,29 +31,13 @@ function skillControl(id: VisibleBuiltInSkillId): (typeof skillControls.value.co
   }
 }
 
-function saveDisplayName(): void {
-  preferences.setDisplayName(draftDisplayName.value)
-  draftDisplayName.value = preferences.state.displayName
-  savedNotice.value = preferences.state.displayName ? '欢迎语已保存' : '已恢复默认称呼'
-  if (savedNoticeTimer) clearTimeout(savedNoticeTimer)
-  savedNoticeTimer = setTimeout(() => { savedNotice.value = '' }, 2200)
-}
-
 function toggleSkill(skill: SkillDefinition): void {
   toggleBuiltInSkill(sso.skillsAvailable.value, skill.id, preferences.state.skills, preferences.setSkillEnabled)
 }
 
 function closeSkills(): void {
-  // Persist an edit even when the user clicks Back before the input's blur
-  // event has fired (for example with a touchpad or keyboard shortcut).
-  if (draftDisplayName.value !== preferences.state.displayName) saveDisplayName()
-  if (savedNoticeTimer) clearTimeout(savedNoticeTimer)
   emit('close')
 }
-
-onBeforeUnmount(() => {
-  if (savedNoticeTimer) clearTimeout(savedNoticeTimer)
-})
 </script>
 
 <template>
@@ -73,31 +49,13 @@ onBeforeUnmount(() => {
     </header>
 
     <section class="skills-content" aria-label="技能设置">
-      <section class="welcome-panel" aria-labelledby="welcome-title">
-        <div class="section-heading">
-          <div>
-            <h2 id="welcome-title">欢迎语</h2>
-            <p>设置工作台顶部显示的姓名，内容仅保存在本机。</p>
-          </div>
-          <span class="local-badge">本地保存</span>
-        </div>
-        <label class="display-name-field">
-          <span>显示姓名</span>
-          <input v-model="draftDisplayName" type="text" :maxlength="DISPLAY_NAME_MAX_LENGTH" autocomplete="nickname" placeholder="例如：小明" aria-label="工作台显示姓名" @blur="saveDisplayName" @keydown.enter.prevent="saveDisplayName">
-        </label>
-        <div class="welcome-preview" aria-live="polite">
-          <span>预览</span><strong>欢迎回来，{{ preferences.state.displayName || '朋友' }}</strong><em v-if="savedNotice">{{ savedNotice }}</em>
-        </div>
-      </section>
-
       <section class="catalog-panel" aria-labelledby="catalog-title">
         <p v-if="!sso.skillsAvailable" class="skills-restriction" role="alert">未登录状态不能使用技能</p>
         <div class="section-heading">
           <div>
             <h2 id="catalog-title">内置技能</h2>
-            <p>以下为运维平台内置技能的界面演示，当前暂未接入实际数据源。</p>
+            <p>选择需要在 AI 工作区中使用的内置能力。</p>
           </div>
-          <span class="catalog-badge">演示</span>
         </div>
         <div class="skill-grid">
           <article v-for="skill in SKILLS" :key="skill.id" class="skill-card" :class="{ enabled: skillControl(skill.id).enabled }">
@@ -111,7 +69,7 @@ onBeforeUnmount(() => {
             </div>
             <p>{{ skill.description }}</p>
             <small><Check :size="12" aria-hidden="true" />{{ skill.detail }}</small>
-            <span class="skill-status">演示 · {{ skillControl(skill.id).enabled ? '已选中' : '未启用' }}</span>
+            <span class="skill-status">{{ skillControl(skill.id).enabled ? '已启用' : '未启用' }}</span>
           </article>
         </div>
       </section>
@@ -127,18 +85,11 @@ onBeforeUnmount(() => {
 .back-button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
 .skills-summary { margin-left: auto; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .skills-content { min-width: 0; min-height: 0; overflow-y: auto; padding: 28px 34px 38px; background: var(--surface); }
-.welcome-panel,.catalog-panel { display: grid; gap: 14px; width: 100%; max-width: 1120px; margin: 0 auto 26px; }
+.catalog-panel { display: grid; gap: 14px; width: 100%; max-width: 1120px; margin: 0 auto; }
 .catalog-panel { margin-bottom: 0; }
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; min-width: 0; }
 .section-heading h2 { margin: 0; color: var(--text-strong); font-size: 19px; font-weight: 700; }
 .section-heading p { max-width: 720px; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
-.local-badge,.catalog-badge { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 9px; font-weight: 650; }
-.display-name-field { display: grid; grid-template-columns: 92px minmax(180px, 420px); align-items: center; gap: 10px; color: var(--text); font-size: 11px; }
-.display-name-field input { width: 100%; height: 32px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--text-strong); font-size: 11px; }
-.display-name-field input:focus { border-color: var(--focus); outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }
-.welcome-preview { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 7px 10px; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--surface-soft); color: var(--muted); font-size: 10px; }
-.welcome-preview strong { color: var(--text-strong); font-size: 11px; font-weight: 680; }
-.welcome-preview em { margin-left: auto; color: var(--green); font-size: 10px; font-style: normal; }
 .skill-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; min-width: 0; }
 .skill-card { position: relative; display: grid; gap: 9px; min-width: 0; min-height: 164px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); transition: border-color .15s ease, background .15s ease; }
 .skill-card.enabled { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 28%, var(--surface-soft)); }
@@ -159,5 +110,5 @@ onBeforeUnmount(() => {
 .toggle-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 20%); transition: transform .15s ease; }
 .skill-toggle input:checked + .toggle-track { background: var(--accent); }
 .skill-toggle input:checked + .toggle-track .toggle-thumb { transform: translateX(14px); }
-@media (max-width: 760px) { .skills-content { padding: 22px 18px 30px; }.display-name-field { grid-template-columns: 1fr; gap: 5px; }.section-heading { display: grid; gap: 8px; }.skills-summary { margin-left: 0; } }
+@media (max-width: 760px) { .skills-content { padding: 22px 18px 30px; }.section-heading { display: grid; gap: 8px; }.skills-summary { margin-left: 0; } }
 </style>

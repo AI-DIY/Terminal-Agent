@@ -135,6 +135,14 @@ onBeforeUnmount(widthSaver.flush)
   color-scheme: dark;
   box-shadow: none;
 }
+.workbench-shell.theme-imperial-gold {
+  color-scheme: dark;
+  box-shadow: none;
+}
+.workbench-shell.theme-sakura-pink {
+  color-scheme: light;
+  box-shadow: none;
+}
 .app-header { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 calc(14px + var(--window-controls-inset)) 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); -webkit-app-region: drag; }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 176px; flex: 0 0 auto; }.brand strong { color: var(--text-strong); font-size: 13px; font-weight: 700; }.app-version { align-self: flex-end; margin: 0 0 8px -4px; color: var(--faint); font-size: 9px; font-weight: 600; letter-spacing: .02em; }.brand-mark { display: grid; place-items: center; box-sizing: border-box; width: 28px; height: 28px; border: 1px solid #535e6a; border-radius: 0; background: #1d242c; color: #fff; font-size: 10px; font-weight: 800; }
 .current-chat { display: flex; align-items: center; min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }

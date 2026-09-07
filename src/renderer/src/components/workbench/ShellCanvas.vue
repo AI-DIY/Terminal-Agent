@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { History, LayoutGrid, Plus, X } from '@lucide/vue'
+import { Files, History, LayoutGrid, Plus, X } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import SessionTabs from '../SessionTabs.vue'
 import TerminalPane from '../TerminalPane.vue'
+import FileTransferPanel from './FileTransferPanel.vue'
 import { sessionDisplayLabel, sessionDisplayParts, sessionHasDuplicateHost, sessionLabel, type SessionView } from '../../stores/sessions'
 import {
   getLayoutPreferencesStore,
@@ -17,7 +18,6 @@ type HistoryHost = {
   hostname: string
   recordCount: number
   representativeHistoryId: string
-  reconnectable: boolean
 }
 
 const props = defineProps<{
@@ -37,7 +37,6 @@ const emit = defineEmits<{
   restoreLive: []
   history: [hostname: string, historyId?: string]
   historyMenu: [historyHostId: string]
-  reconnect: [historyId: string]
   reorder: [sessionIds: string[]]
   reorderHistory: [historyIds: string[]]
 }>()
@@ -50,6 +49,14 @@ const dragOverSessionId = ref<string | null>(null)
 const draggingHistoryId = ref<string | null>(null)
 const dragOverHistoryId = ref<string | null>(null)
 const activeHistoryId = ref<string | null>(null)
+const fileTransferOpen = ref(false)
+const fileTransferSessionId = ref<string | null>(null)
+const fileTransferPanelSessionIds = ref<string[]>([])
+const fileTransferBusySessionIds = ref(new Set<string>())
+const broadcastEnabled = ref(false)
+const broadcastInput = ref('')
+const broadcastSending = ref(false)
+const broadcastStatus = ref('')
 const orderedCurrentSessions = computed(() => {
   const sessionsById = new Map(props.currentSessions.map(session => [session.id, session]))
   const ordered: SessionView[] = []
@@ -76,6 +83,12 @@ const layoutSummary = computed(() => {
   const columns = Math.max(1, Math.min(layout.state.columns, count || 1))
   return count === 0 ? '尚未接入 SSH' : `${count} 个 SSH · ${Math.ceil(count / columns)} 行`
 })
+const fileTransferPanelSessions = computed(() => {
+  const mounted = new Set(fileTransferPanelSessionIds.value)
+  return orderedCurrentSessions.value.filter(session => mounted.has(session.id))
+})
+const canUseWorkspaceControls = computed(() => props.isLive && orderedCurrentSessions.value.length > 0)
+const fileTransferBusy = computed(() => fileTransferBusySessionIds.value.size > 0)
 
 function selectSession(sessionId: string): void {
   emit('select', sessionId)
@@ -90,6 +103,64 @@ function updateLayout(field: 'columns' | 'rowHeightPercent' | 'fontSize', event:
 
 function closeSession(sessionId: string): void {
   emit('close', sessionId)
+}
+
+function mountFileTransferSession(sessionId: string): void {
+  if (!fileTransferPanelSessionIds.value.includes(sessionId)) {
+    fileTransferPanelSessionIds.value = [...fileTransferPanelSessionIds.value, sessionId]
+  }
+  fileTransferSessionId.value = sessionId
+}
+
+function toggleFileTransfer(): void {
+  if (!canUseWorkspaceControls.value) return
+  const target = orderedCurrentSessions.value.find(session => session.id === props.activeSessionId)
+    ?? orderedCurrentSessions.value[0]
+  if (!target) return
+  if (fileTransferOpen.value && fileTransferSessionId.value === target.id) {
+    fileTransferOpen.value = false
+    return
+  }
+  mountFileTransferSession(target.id)
+  fileTransferOpen.value = true
+  layoutMenuOpen.value = false
+  menuHistoryId.value = null
+}
+
+function closeFileTransfer(): void {
+  fileTransferOpen.value = false
+}
+
+function setFileTransferBusy(sessionId: string, busy: boolean): void {
+  const next = new Set(fileTransferBusySessionIds.value)
+  if (busy) next.add(sessionId)
+  else next.delete(sessionId)
+  fileTransferBusySessionIds.value = next
+}
+
+function sendBroadcast(): void {
+  if (!broadcastEnabled.value || broadcastSending.value || !canUseWorkspaceControls.value) return
+  const value = broadcastInput.value
+  if (!value.trim()) return
+  const targets = orderedCurrentSessions.value.map(session => session.id)
+  if (!targets.length) return
+  broadcastSending.value = true
+  broadcastStatus.value = `正在发送到 ${targets.length} 个 SSH…`
+  // A one-line field represents a command-like keystroke.  Append Enter so
+  // the same input can be executed immediately in every shell; callers may
+  // still paste control sequences through the terminal itself when needed.
+  const data = `${value}\r`
+  void Promise.allSettled(targets.map(sessionId => Promise.resolve().then(() => window.terminalAgent.sessions.write(sessionId, data))))
+    .then(results => {
+      const failed = results.filter(result => result.status === 'rejected').length
+      const succeeded = results.length - failed
+      broadcastStatus.value = failed
+        ? `已发送到 ${succeeded} 个 SSH，${failed} 个会话发送失败。`
+        : `已发送到 ${succeeded} 个 SSH。`
+      if (!failed) broadcastInput.value = ''
+    })
+    .catch(() => { broadcastStatus.value = '发送失败，请检查 SSH 连接。' })
+    .finally(() => { broadcastSending.value = false })
 }
 
 function beginSessionDrag(sessionId: string, event: DragEvent): void {
@@ -147,11 +218,6 @@ function openHistoryMenu(historyId: string): void {
 }
 
 defineExpose({ openHistoryMenu })
-
-function reconnectHistory(historyId: string): void {
-  menuHistoryId.value = null
-  emit('reconnect', historyId)
-}
 
 function openSessionHistory(session: SessionView): void {
   menuHistoryId.value = null
@@ -239,8 +305,26 @@ function historyHostActionLabel(host: HistoryHost): string {
 
 watch(
   () => props.currentSessions.map(session => session.id),
-  () => {
+  sessionIds => {
     layoutMenuOpen.value = false
+    const available = new Set(sessionIds)
+    fileTransferPanelSessionIds.value = fileTransferPanelSessionIds.value.filter(sessionId => available.has(sessionId))
+    fileTransferBusySessionIds.value = new Set([...fileTransferBusySessionIds.value].filter(sessionId => available.has(sessionId)))
+    if (!sessionIds.length) {
+      fileTransferOpen.value = false
+      fileTransferSessionId.value = null
+      broadcastStatus.value = ''
+    } else if (fileTransferOpen.value) {
+      const activeId = props.activeSessionId && available.has(props.activeSessionId) ? props.activeSessionId : sessionIds[0]
+      mountFileTransferSession(activeId)
+    }
+  },
+)
+watch(
+  [() => props.activeSessionId, () => fileTransferOpen.value],
+  ([activeId, open]) => {
+    if (!open || !activeId || !props.currentSessions.some(session => session.id === activeId)) return
+    mountFileTransferSession(activeId)
   },
 )
 watch(
@@ -283,6 +367,16 @@ watch(
           :aria-expanded="layoutMenuOpen"
           @click="layoutMenuOpen = !layoutMenuOpen"
         ><LayoutGrid :size="13" aria-hidden="true" /><span>SSH 窗口布局</span></button>
+        <button
+          v-if="isLive && currentSessions.length"
+          type="button"
+          class="file-transfer-button"
+          :class="{ busy: fileTransferBusy }"
+          :aria-label="fileTransferOpen ? '隐藏文件传输' : '显示文件传输'"
+          :aria-expanded="fileTransferOpen"
+          :title="fileTransferBusy ? '文件传输中' : (fileTransferOpen ? '隐藏文件传输' : '显示文件传输')"
+          @click="toggleFileTransfer"
+        ><Files :size="14" aria-hidden="true" /><span v-if="fileTransferBusy">文件传输中</span><span v-else>文件传输</span></button>
       </div>
     </header>
     <section v-if="layoutMenuOpen && isLive && currentSessions.length" class="layout-menu" aria-label="SSH 窗口布局设置">
@@ -329,13 +423,6 @@ watch(
             @contextmenu.prevent="emit('historyMenu', host.id)"
           ><span class="host-status" aria-hidden="true" /><strong>{{ historyHostLabel(host) }}</strong></button>
           <section v-if="menuHistoryId === host.id" class="history-context-menu" role="menu" :aria-label="`历史 SSH 操作 ${historyHostLabel(host)}`">
-            <button
-              type="button"
-              role="menuitem"
-              :disabled="!host.reconnectable"
-              title="重新连接：仅仍保留安全连接描述的历史 SSH 可以重连"
-              @click="reconnectHistory(host.representativeHistoryId)"
-            >重连</button>
             <button type="button" role="menuitem" @click="openHistoricalSessionHistory(host.hostname, host.representativeHistoryId, host.id)">查看 SSH 历史</button>
           </section>
         </div>
@@ -379,11 +466,48 @@ watch(
 
       <section v-if="currentSessions.length === 0" class="empty-slot"><slot name="empty" /></section>
     </div>
+
+    <section v-if="isLive && currentSessions.length" class="broadcast-bar" aria-label="发送键输入到所有会话">
+      <label class="broadcast-toggle">
+        <input v-model="broadcastEnabled" type="checkbox" aria-label="启用发送键输入到所有会话" />
+        <span>发送键输入到所有会话</span>
+      </label>
+      <input
+        v-model="broadcastInput"
+        class="broadcast-input"
+        type="text"
+        autocomplete="off"
+        placeholder="输入要发送到所有在线 SSH 的命令"
+        :disabled="!broadcastEnabled"
+        @keydown.enter.prevent="sendBroadcast"
+      />
+      <button
+        type="button"
+        class="broadcast-send-button"
+        :disabled="!broadcastEnabled || !broadcastInput.trim() || broadcastSending || !currentSessions.length"
+        @click="sendBroadcast"
+      >{{ broadcastSending ? '发送中…' : '发送所有窗口执行' }}</button>
+      <span class="broadcast-status" role="status" aria-live="polite">{{ broadcastStatus }}</span>
+    </section>
+
+    <!-- v-show deliberately keeps every opened panel alive while hidden.  A
+         transfer therefore survives switching terminals or collapsing the
+         dock; only closing/removing that SSH session destroys its panel. -->
+    <section v-if="isLive && fileTransferPanelSessions.length" v-show="fileTransferOpen" class="file-transfer-dock" aria-label="SSH 文件传输面板">
+      <div v-for="session in fileTransferPanelSessions" :key="session.id" v-show="session.id === fileTransferSessionId" class="file-transfer-session-panel">
+        <FileTransferPanel
+          :session-id="session.id"
+          :hostname="sessionDisplayLabel(session, orderedCurrentSessions)"
+          @close="closeFileTransfer"
+          @busy-change="setFileTransferBusy(session.id, $event)"
+        />
+      </div>
+    </section>
   </section>
 </template>
 
 <style scoped>
-.shell-canvas { position: relative; display: grid; grid-template-rows: 42px auto minmax(0, 1fr); width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
+.shell-canvas { position: relative; display: grid; grid-template-rows: 42px auto minmax(0, 1fr) auto auto; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
 .shell-canvas.empty { grid-template-rows: minmax(0, 1fr); }
 .shell-canvas.empty .canvas-content { grid-row: 1; }
 .shell-toolbar-content { position: relative; display: flex; align-items: stretch; min-width: 0; height: 42px; overflow: hidden; border-bottom: 1px solid var(--line); background: var(--panel); }
@@ -396,6 +520,7 @@ watch(
 .hostbar-tools button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 29px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 10px; font-weight: 650; white-space: nowrap; }
 .hostbar-tools button:hover { border-color: var(--focus); background: var(--hover); }
 .hostbar-tools .connect-button { border-color: var(--accent); background: var(--accent); color: #fff; }
+.hostbar-tools .file-transfer-button.busy { border-color: var(--amber-line); background: var(--amber-soft); color: var(--amber); }
 .layout-menu { position: absolute; z-index: 8; top: 46px; right: 8px; display: grid; grid-template-columns: minmax(120px, 1fr) 86px; gap: 9px 12px; width: 264px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
 .layout-menu > strong,.layout-menu > span { grid-column: 1 / -1; color: var(--text-strong); font-size: 11px; }
 .layout-menu > span { color: var(--muted); }
@@ -426,7 +551,7 @@ watch(
 .history-context-menu { position: absolute; z-index: 9; top: 25px; right: auto; left: 0; display: grid; min-width: 154px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
 .history-context-menu button { min-height: 29px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 11px; text-align: left; }.history-context-menu button:hover,.history-context-menu button:focus-visible { background: var(--surface-soft); outline: 1px solid var(--accent); }.history-context-menu button:disabled { color: var(--muted); cursor: not-allowed; }
 .empty-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
-.history-shell-toolbar { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: 32px; padding: 3px 8px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 86%, var(--surface)); }
+.history-shell-toolbar { position: relative; display: grid; grid-row: 2; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: 32px; padding: 3px 8px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 86%, var(--surface)); }
 .history-shell-heading { display: flex; align-items: center; gap: 5px; white-space: nowrap; }.history-shell-heading strong { color: var(--text-strong); font-size: 9px; }.history-shell-heading span { color: var(--muted); font-size: 8px; }
 .history-session-tabs { display: flex; min-width: 0; min-height: 0; height: 25px; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: transparent transparent; }
 .history-session-tabs:hover,.history-session-tabs:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }
@@ -436,6 +561,13 @@ watch(
 .history-session-tab > .history-shell-tab { display: flex; min-width: 0; align-items: center; gap: 5px; height: 100%; padding: 0 6px 0 8px; border: 0; background: transparent; color: inherit; font-size: 9px; text-align: left; white-space: nowrap; }
 .history-session-tab > .history-shell-tab:hover,.history-session-tab > .history-shell-tab:focus-visible { outline: 0; }.history-session-tab > .history-shell-tab strong { max-width: 112px; overflow: hidden; color: var(--text-strong); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .host-status { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }.history-session-tab.active .host-status { background: var(--accent); }
+.broadcast-bar { display: grid; grid-row: 4; grid-template-columns: auto minmax(180px, 1fr) auto minmax(0, 220px); align-items: center; gap: 7px; min-width: 0; min-height: 42px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--panel); }
+.broadcast-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--text-strong); font-size: 10px; font-weight: 650; white-space: nowrap; cursor: pointer; }.broadcast-toggle input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.broadcast-input { box-sizing: border-box; width: 100%; min-width: 0; height: 27px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 10px; }.broadcast-input:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 22%, transparent); }.broadcast-input:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }
+.broadcast-send-button { height: 27px; padding: 0 9px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 680; white-space: nowrap; }.broadcast-send-button:disabled { cursor: not-allowed; border-color: var(--line); background: var(--surface-soft); color: var(--faint); }
+.broadcast-status { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.file-transfer-dock { display: block; grid-row: 5; min-width: 0; max-height: min(300px, 48vh); overflow: hidden; background: var(--panel); }
+.file-transfer-session-panel { min-width: 0; min-height: 0; }
 @media (max-width: 1180px) {
   .shell-title { display: none; }
   .history-shell-heading span { display: none; }
@@ -444,5 +576,14 @@ watch(
 @media (max-width: 980px) {
   .hostbar-tools button span { display: none; }
   .hostbar-tools button { width: 29px; padding: 0; }
+  .hostbar-tools .file-transfer-button.busy { width: auto; padding-inline: 7px; }
+  .hostbar-tools .file-transfer-button.busy span { display: inline; }
+  .broadcast-bar { grid-template-columns: auto minmax(120px, 1fr) auto; }
+  .broadcast-status { grid-column: 2 / -1; }
+}
+@media (max-width: 680px) {
+  .broadcast-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .broadcast-toggle { grid-column: 1 / -1; }
+  .broadcast-status { grid-column: 1 / -1; }
 }
 </style>

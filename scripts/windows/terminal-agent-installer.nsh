@@ -1,9 +1,14 @@
 !macro customInstall
   ReadEnvStr $0 "USERPROFILE"
   StrCmp $0 "" done_config
-  StrCpy $1 "$0\.ta"
-  CreateDirectory "$1"
+  StrCpy $1 "$0\.terminal-agent"
+  StrCpy $4 "$0\.ta\user-config"
   IfFileExists "$1\user-config" done_config
+  ; Leave the legacy file in place so the app can migrate it into the
+  ; canonical location on first launch.  Creating a fresh canonical file here
+  ; would otherwise hide the user's existing configuration.
+  IfFileExists "$4" done_config
+  CreateDirectory "$1"
   GetTempFileName $2 "$1"
   FileOpen $3 "$2" w
   IfErrors cleanup_temp

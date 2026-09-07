@@ -12,9 +12,9 @@ export const WORKBENCH_RIGHT_WIDTH_MAX = 520
 
 // Keep the theme identifiers deliberately small and stable: they are persisted
 // in the user's workbench preferences and mirrored to the document root.
-// `noble-purple` is the high-contrast purple theme requested for v3.2 while
-// retaining the existing pearl/graphite values for backwards compatibility.
-export const workbenchThemeSchema = z.enum(['pearl', 'graphite', 'noble-purple'])
+// Theme identifiers are persisted in user preferences; keep them stable and
+// explicit so the renderer and native title-bar overlay always agree.
+export const workbenchThemeSchema = z.enum(['pearl', 'graphite', 'noble-purple', 'imperial-gold', 'sakura-pink'])
 export type WorkbenchTheme = z.infer<typeof workbenchThemeSchema>
 
 // The original four presets remain valid for existing preference files.  The
@@ -525,8 +525,31 @@ export const shellHistorySummarySchema = z.object({
 }).strict()
 export type ShellHistorySummary = z.infer<typeof shellHistorySummarySchema>
 
+/**
+ * A completed SFTP action associated with one closed SSH connection.  Only
+ * display-safe file metadata is retained: neither local absolute paths nor
+ * file contents are ever persisted in Shell history.
+ */
+export const shellHistoryFileTransferLogSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  direction: z.enum(['upload', 'download']),
+  fileName: z.string().trim().min(1).max(255),
+  remotePath: z.string().trim().min(1).max(4_096),
+  status: z.enum(['completed', 'canceled', 'failed']),
+  transferredBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  totalBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  message: z.string().trim().min(1).max(4_000).optional(),
+  startedAt: chatTimestampSchema,
+  endedAt: chatTimestampSchema,
+}).strict()
+export type ShellHistoryFileTransferLog = z.infer<typeof shellHistoryFileTransferLogSchema>
+
 export const shellHistoryDetailSchema = shellHistorySummarySchema.extend({
   output: z.string().max(256 * 1024),
+  /** Input that was actually sent to the closed SSH shell, after redaction. */
+  commandAudit: z.object({ input: z.string().max(256 * 1024) }).strict().default({ input: '' }),
+  /** Completed/cancelled/failed SFTP actions for this exact SSH connection. */
+  fileTransferLogs: z.array(shellHistoryFileTransferLogSchema).max(200).default([]),
 }).strict()
 export type ShellHistoryDetail = z.infer<typeof shellHistoryDetailSchema>
 

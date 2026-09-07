@@ -142,7 +142,7 @@ const version1ModelProfileDocumentSchema = z.object({
 
 export type ModelProfileDocument = z.infer<typeof modelProfileDocumentSchema>
 export type ModelProfileRepositoryOptions = Pick<AtomicJsonStoreOptions, 'fileSystem' | 'createId' | 'now'> & {
-  /** Store the model document under the `models` section of `.ta/user-config`. */
+  /** Store the model document under the `models` section of the shared user-config file. */
   userConfig?: boolean
 }
 

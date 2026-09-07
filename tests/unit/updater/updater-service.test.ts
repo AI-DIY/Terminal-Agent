@@ -21,6 +21,7 @@ describe('UpdaterService', () => {
     const digest = createHash('sha256').update(payload).digest('hex')
     const calls: Array<{ url: string; init: Parameters<UpdaterFetch>[1] }> = []
     let exited: number | undefined
+    let launchCount = 0
     try {
       const service = new UpdaterService({
         currentVersion: '2.0.5',
@@ -48,13 +49,17 @@ describe('UpdaterService', () => {
           }
           return response(200, payload, { 'content-length': String(payload.length) })
         },
-        launchInstaller: async () => ({ pid: 42 }),
+        launchInstaller: async () => { launchCount += 1; return { pid: 42 } },
         exit: code => { exited = code },
       })
 
       await expect(service.check()).resolves.toMatchObject({ currentVersion: '2.0.5', updateAvailable: true, release: { version: '2.0.6' } })
       await expect(service.download()).resolves.toMatchObject({ version: '2.0.6', integrityVerified: true, size: payload.length })
       await expect(service.install()).resolves.toMatchObject({ launched: true, version: '2.0.6' })
+      // A repeated IPC request after the first launch must not start another
+      // NSIS process while the initial installer is replacing the app.
+      await expect(service.install()).resolves.toMatchObject({ launched: true, version: '2.0.6' })
+      expect(launchCount).toBe(1)
       service.restart()
       expect(exited).toBe(0)
       expect(calls).toHaveLength(2)
@@ -128,6 +133,45 @@ describe('UpdaterService', () => {
     finally {
       await rm(directory, { recursive: true, force: true })
     }
+  })
+
+  it('coalesces concurrent install requests into one installer launch', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-updater-install-dedupe-test-'))
+    const payload = Buffer.from('concurrent installer')
+    const digest = createHash('sha256').update(payload).digest('hex')
+    const installerUrl = 'https://github.com/AI-DIY/Terminal-Agent/releases/download/v2.0.6/Terminal-Agent-Setup-2.0.6.exe'
+    let launchCount = 0
+    try {
+      const service = new UpdaterService({
+        currentVersion: '2.0.5',
+        tempDirectory: directory,
+        platform: 'win32',
+        architecture: 'x64',
+        fetch: async url => url.includes('/releases/latest')
+          ? response(200, JSON.stringify({
+            tag_name: 'v2.0.6',
+            html_url: 'https://github.com/AI-DIY/Terminal-Agent/releases/tag/v2.0.6',
+            assets: [{ name: 'Terminal-Agent-Setup-2.0.6.exe', browser_download_url: installerUrl, size: payload.length, digest: `sha256:${digest}` }],
+          }))
+          : response(200, payload, { 'content-length': String(payload.length), 'content-disposition': 'attachment; filename="Terminal-Agent-Setup-2.0.6.exe"' }),
+        launchInstaller: async () => {
+          launchCount += 1
+          await new Promise<void>(resolve => setTimeout(resolve, 1))
+          return { pid: 77 }
+        },
+      })
+
+      await service.check()
+      await service.download()
+      const first = service.install()
+      const second = service.install()
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        { launched: true, version: '2.0.6', fileName: 'Terminal-Agent-Setup-2.0.6.exe' },
+        { launched: true, version: '2.0.6', fileName: 'Terminal-Agent-Setup-2.0.6.exe' },
+      ])
+      expect(launchCount).toBe(1)
+    }
+    finally { await rm(directory, { recursive: true, force: true }) }
   })
 
   it('follows a GitHub release asset redirect to the official CDN', async () => {
@@ -477,6 +521,78 @@ describe('UpdaterService', () => {
       await expect(service.download()).resolves.toMatchObject({ size: bytes.length })
       expect(rangeAttempts).toBeGreaterThan(0)
       expect(fullDownloads).toBe(1)
+    }
+    finally { await rm(directory, { recursive: true, force: true }) }
+  })
+
+  it('settles a fetcher that ignores AbortSignal when the request timeout expires', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-updater-timeout-test-'))
+    let requestSignal: AbortSignal | undefined
+    try {
+      const service = new UpdaterService({
+        currentVersion: '2.0.5',
+        tempDirectory: directory,
+        platform: 'win32',
+        architecture: 'x64',
+        requestTimeoutMs: 10,
+        fetch: async (_url, init) => {
+          requestSignal = init.signal
+          // Deliberately ignore the signal.  The updater must still reject
+          // on its own bounded timeout instead of retaining a pending turn.
+          return new Promise<UpdaterHttpResponse>(() => undefined)
+        },
+      })
+
+      await expect(service.check()).rejects.toThrow('更新请求超时。')
+      expect(requestSignal?.aborted).toBe(true)
+      expect(service.getState()).toMatchObject({ phase: 'error', error: '更新请求超时。' })
+    }
+    finally { await rm(directory, { recursive: true, force: true }) }
+  })
+
+  it('cancels sibling Range requests immediately after a fatal worker failure', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-updater-range-abort-test-'))
+    const bytes = Buffer.alloc(5 * 1024 * 1024, 3)
+    const version = '3.2.0'
+    const installerUrl = `https://github.com/AI-DIY/Terminal-Agent/releases/download/v${version}/Terminal-Agent-Setup-${version}.exe`
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    const abortedSignals: AbortSignal[] = []
+    try {
+      const service = new UpdaterService({
+        currentVersion: '3.1.1',
+        tempDirectory: directory,
+        platform: 'win32',
+        architecture: 'x64',
+        feedUrl: 'http://ta.ai-diy.me/update/win32',
+        downloadConcurrency: 3,
+        downloadTimeoutMs: 5_000,
+        fetch: async (url, init) => {
+          if (url.includes('/update/win32/')) return response(200, JSON.stringify({ name: version }))
+          if (url.includes(`/releases/tags/v${version}`)) return response(200, JSON.stringify({
+            tag_name: `v${version}`,
+            html_url: `https://github.com/AI-DIY/Terminal-Agent/releases/tag/v${version}`,
+            assets: [{ name: `Terminal-Agent-Setup-${version}.exe`, browser_download_url: installerUrl, size: bytes.length, digest: `sha256:${digest}` }],
+          }))
+          if (url !== installerUrl) throw new Error(`Unexpected updater request: ${url}`)
+          abortedSignals.push(init.signal)
+          const range = init.headers.Range
+          if (!range) return response(200, bytes, { 'content-length': String(bytes.length) })
+          const match = /bytes=(\d+)-(\d+)/.exec(range)
+          if (!match) throw new Error('Invalid range')
+          const start = Number(match[1]); const end = Number(match[2])
+          if (start === 0) return response(206, bytes.subarray(start, end + 1), { 'content-length': String(end - start + 1), 'content-range': `bytes ${start}-${end}/${bytes.length}` })
+          if (start === 1 * 1024 * 1024) throw new Error('simulated range worker failure')
+          // Leave sibling workers pending; the service must abort them rather
+          // than waiting for the five-second per-request timeout.
+          return new Promise<UpdaterHttpResponse>(() => undefined)
+        },
+      })
+
+      await service.check()
+      const startedAt = Date.now()
+      await expect(service.download()).rejects.toThrow('无法连接GitHub服务')
+      expect(Date.now() - startedAt).toBeLessThan(1_000)
+      expect(abortedSignals.some(signal => signal.aborted)).toBe(true)
     }
     finally { await rm(directory, { recursive: true, force: true }) }
   })

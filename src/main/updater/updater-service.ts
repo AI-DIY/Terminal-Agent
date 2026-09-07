@@ -189,6 +189,10 @@ export class UpdaterService {
   private installerPath: string | undefined
   private release: UpdateRelease | null = null
   private downloaded: UpdaterDownloadInfo | null = null
+  /** Result retained after a successful launch so a second click cannot
+   * start another installer process while the first one is replacing files. */
+  private installedResult: UpdaterInstallResult | null = null
+  private restartRequested = false
   private disposed = false
   private state: UpdaterState
 
@@ -312,6 +316,10 @@ export class UpdaterService {
   async install(): Promise<UpdaterInstallResult> {
     if (this.disposed) throw new UpdaterError('更新服务已关闭。', 'DISPOSED')
     if (this.installPromise) return this.installPromise
+    // IPC callers are independently authenticated but not necessarily
+    // serialized by the renderer.  Once NSIS has been launched, return the
+    // same result instead of spawning a second installer process.
+    if (this.installedResult) return { ...this.installedResult }
     const operation = this.enqueue(() => this.performInstall())
     this.installPromise = operation
     try {
@@ -324,6 +332,7 @@ export class UpdaterService {
 
   private async performInstall(): Promise<UpdaterInstallResult> {
     this.assertActive()
+    if (this.installedResult) return { ...this.installedResult }
     if (this.platform !== 'win32') {
       return this.fail('当前平台暂不支持安装更新。', 'UNSUPPORTED_PLATFORM')
     }
@@ -340,8 +349,10 @@ export class UpdaterService {
       this.assertActive()
       await this.launchInstaller(this.installerPath)
       this.emitProgress({ phase: 'install', percent: 100, version: this.release.version })
+      const result: UpdaterInstallResult = { launched: true, version: this.release.version, fileName: this.downloaded.fileName }
+      this.installedResult = result
       this.setState({ phase: 'installed', error: null })
-      return { launched: true, version: this.release.version, fileName: this.downloaded.fileName }
+      return { ...result }
     }
     catch (error) {
       return this.fail(publicUpdaterError(error), 'INSTALL_FAILED')
@@ -361,8 +372,10 @@ export class UpdaterService {
   restart(): void {
     if (this.disposed) throw new UpdaterError('更新服务已关闭。', 'DISPOSED')
     if (this.state.phase !== 'installed') throw new UpdaterError('请先启动安装程序。', 'UPDATE_NOT_INSTALLED')
+    if (this.restartRequested) return
     if (!this.exit) throw new UpdaterError('应用关闭功能不可用。', 'RESTART_UNAVAILABLE')
     this.exit(0)
+    this.restartRequested = true
   }
 
   /** Alias used by some renderer integrations. */
@@ -387,6 +400,8 @@ export class UpdaterService {
   private async performCheck(): Promise<UpdaterCheckResult> {
     this.release = null
     this.downloaded = null
+    this.installedResult = null
+    this.restartRequested = false
     await this.removeUpdateDirectory()
     this.assertActive()
     this.setState({ phase: 'checking', error: null, progress: null, release: null, downloaded: null })
@@ -672,25 +687,43 @@ export class UpdaterService {
     this.emitProgress({ phase: 'download', percent: Math.min(99, (transferred / total) * 100), transferredBytes: transferred, totalBytes: total, version: release.version })
 
     let cursor = 1
+    let firstFailure: unknown
+    let fatalFailure: unknown
     const workerCount = Math.min(this.downloadConcurrency, Math.max(1, ranges.length - 1))
     const worker = async (): Promise<void> => {
-      while (true) {
-        this.assertActive()
-        const index = cursor
-        cursor += 1
-        if (index >= ranges.length) return
-        const range = ranges[index]
-        const result = await this.fetchRange(url, range, total, source)
-        await writeAt(fileHandle, result.start, result.bytes)
-        transferred += result.bytes.byteLength
-        this.emitProgress({ phase: 'download', percent: Math.min(99, (transferred / total) * 100), transferredBytes: transferred, totalBytes: total, version: release.version })
+      try {
+        while (true) {
+          this.assertActive()
+          const index = cursor
+          cursor += 1
+          if (index >= ranges.length) return
+          const range = ranges[index]
+          const result = await this.fetchRange(url, range, total, source)
+          await writeAt(fileHandle, result.start, result.bytes)
+          transferred += result.bytes.byteLength
+          this.emitProgress({ phase: 'download', percent: Math.min(99, (transferred / total) * 100), transferredBytes: transferred, totalBytes: total, version: release.version })
+        }
+      }
+      catch (error) {
+        // A RangeUnsupportedError is an expected capability signal; all
+        // workers must settle so the caller can safely reuse the original
+        // full response for sequential fallback.  Any other failure should
+        // cancel sibling requests immediately instead of waiting for each
+        // worker's full network timeout (which previously looked like a UI
+        // freeze on a stalled connection).
+        firstFailure ??= error
+        if (!(error instanceof RangeUnsupportedError)) {
+          fatalFailure ??= error
+          for (const active of [...this.activeRequests]) this.abortRequest(active)
+        }
+        throw error
       }
     }
     // Wait for every worker to settle before falling back. This prevents a
     // late range response from racing the sequential rewrite of the file.
-    const workerResults = await Promise.allSettled(Array.from({ length: workerCount }, () => worker()))
-    const failed = workerResults.find((result): result is PromiseRejectedResult => result.status === 'rejected')
-    if (failed) throw failed.reason
+    await Promise.allSettled(Array.from({ length: workerCount }, () => worker()))
+    if (fatalFailure !== undefined) throw fatalFailure
+    if (firstFailure !== undefined) throw firstFailure
     if (transferred !== total) throw new UpdaterError('更新安装包大小校验失败。', 'SIZE_MISMATCH')
     return transferred
   }
@@ -936,7 +969,12 @@ export class UpdaterService {
         const isMetadataRequest = source === 'nuts'
           ? isNutsMetadataUrl(currentUrl, this.feedPath)
           : isGithubMetadataUrl(currentUrl, this.owner, this.repository)
-        const response = await this.fetcher(currentUrl, {
+        // Race the fetch itself against the request signal.  Chromium's
+        // fetch normally rejects on abort, but injected/older fetchers may
+        // ignore AbortSignal and leave their promise pending forever.  The
+        // updater must still settle on its bounded timeout so an unavailable
+        // Nuts/GitHub endpoint cannot hold the main process or renderer UI.
+        const response = await awaitWithAbort(this.fetcher(currentUrl, {
           method: 'GET',
           headers: {
             Accept: isMetadataRequest ? (source === 'nuts' ? 'application/json' : 'application/vnd.github+json') : 'application/octet-stream',
@@ -946,7 +984,7 @@ export class UpdaterService {
           },
           redirect: 'manual',
           signal: controller.signal,
-        })
+        }), controller.signal)
         // Fetch implementations supplied by tests or embedders may not honor
         // AbortSignal.  The explicit check keeps the timeout contract intact
         // even when such a fetcher resolves after the timer fired.

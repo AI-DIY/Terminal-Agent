@@ -46,6 +46,33 @@ describe('ShellHistoryRepository', () => {
     }
   })
 
+  it('atomically appends a late transfer audit without a stale history save erasing it', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-shell-history-transfer-race-'))
+    const path = join(directory, 'shell-history.json')
+    try {
+      const repository = new ShellHistoryRepository(path)
+      const initial = record({ id: 'history-transfer-race', fileTransferLogs: [] })
+      await repository.save(initial)
+
+      // Reconnect/other history operations can retain a snapshot while an
+      // SFTP promise settles after its SSH session has closed.
+      const stale = await repository.get(initial.id)
+      await repository.appendFileTransferLog(initial.id, {
+        id: 'transfer-late', direction: 'download', fileName: 'audit.log', remotePath: '/srv/audit.log',
+        status: 'failed', transferredBytes: 0, message: '连接已关闭。',
+        startedAt: '2026-09-07T10:00:00.000Z', endedAt: '2026-09-07T10:00:01.000Z',
+      })
+      await repository.save({ ...stale!, reconnectAudit: { count: 1, lastReconnectedAt: '2026-09-07T10:00:02.000Z' } })
+
+      await expect(repository.get(initial.id)).resolves.toMatchObject({
+        reconnectAudit: { count: 1 },
+        fileTransferLogs: [expect.objectContaining({ id: 'transfer-late', status: 'failed' })],
+      })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('redacts standard AccessClient temporary paths before they reach shell-history.json', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-shell-history-temp-path-'))
     const path = join(directory, 'shell-history.json')
@@ -159,6 +186,41 @@ describe('ShellHistoryRepository', () => {
     }
   })
 
+  it('sanitizes transfer metadata from an existing history file during migration', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-shell-history-transfer-migration-'))
+    const path = join(directory, 'shell-history.json')
+    const secret = 'TRANSFER_METADATA_SECRET_PLACEHOLDER'
+    try {
+      await writeFile(path, JSON.stringify({
+        version: 1,
+        records: [record({
+          fileTransferLogs: [{
+            id: 'legacy-transfer', direction: 'download', fileName: 'report.txt',
+            remotePath: `tmp:C:\\Temp\\access-client\\${secret}.txt`,
+            status: 'failed', transferredBytes: 0, message: `password=${secret}`,
+            startedAt: '2026-08-16T08:00:00.000Z', endedAt: '2026-08-16T08:01:00.000Z',
+          }],
+        })],
+      }), 'utf8')
+
+      const repository = new ShellHistoryRepository(path)
+      const detail = await repository.get('history-default')
+      const rewritten = await readFile(path, 'utf8')
+
+      expect(JSON.stringify(detail)).not.toContain(secret)
+      expect(JSON.stringify(rewritten)).not.toContain(secret)
+      expect(detail?.fileTransferLogs).toEqual([
+        expect.objectContaining({
+          id: 'legacy-transfer',
+          remotePath: '[REDACTED SENSITIVE CONTENT]',
+          message: '[REDACTED SENSITIVE CONTENT]',
+        }),
+      ])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('safely migrates oversized secret-bearing records and deterministically evicts legacy host overflow without corrupt backups', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-shell-history-legacy-bounds-'))
     const path = join(directory, 'shell-history.json')
@@ -242,5 +304,6 @@ function record(overrides: Partial<ShellHistoryRecord> = {}): ShellHistoryRecord
     connectionType: 'direct-ssh',
     ...overrides,
     commandAudit: overrides.commandAudit ?? { input: '' },
+    fileTransferLogs: overrides.fileTransferLogs ?? [],
   }
 }

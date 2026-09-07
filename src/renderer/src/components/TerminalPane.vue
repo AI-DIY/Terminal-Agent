@@ -4,10 +4,12 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { MAX_SESSION_BUFFER_CHARS, type SessionView } from '../stores/sessions'
+import { getLayoutPreferencesStore } from '../stores/layout-preferences'
 import type { ShellFontSize } from '../../../shared/contracts'
 
 const props = defineProps<{ session: SessionView; active: boolean; fontSize: ShellFontSize }>()
 const emit = defineEmits<{ activate: [] }>()
+const layout = getLayoutPreferencesStore()
 const paneElement = ref<HTMLElement>()
 const terminalElement = ref<HTMLElement>()
 const contextMenuOpen = ref(false)
@@ -21,6 +23,7 @@ let unsubscribe: (() => void) | undefined
 let inputSubscription: { dispose(): void } | undefined
 let selectionSubscription: { dispose(): void } | undefined
 let initialBufferFrame: number | undefined
+let themeFrame: number | undefined
 let renderedBuffer = ''
 
 /**
@@ -134,20 +137,39 @@ function resize(): void {
   void window.terminalAgent.sessions.resize(props.session.id, terminal.cols, terminal.rows)
 }
 
+function readTerminalTheme(): { background: string; foreground: string; cursor: string; selectionBackground: string } {
+  const styles = getComputedStyle(terminalElement.value ?? document.documentElement)
+  return {
+    background: styles.getPropertyValue('--terminal').trim() || '#151a20',
+    foreground: styles.getPropertyValue('--terminal-text').trim() || '#d8dade',
+    cursor: styles.getPropertyValue('--focus').trim() || '#eef2f7',
+    selectionBackground: styles.getPropertyValue('--selected').trim() || '#35577a',
+  }
+}
+
+function applyTerminalTheme(): void {
+  if (!terminal) return
+  terminal.options.theme = readTerminalTheme()
+}
+
+function scheduleTerminalTheme(): void {
+  if (themeFrame !== undefined) window.cancelAnimationFrame(themeFrame)
+  // Theme selection persists before the appearance screen writes the document
+  // data attribute.  Sampling on the next frame ensures xterm observes the
+  // freshly applied CSS variables rather than the previous palette.
+  themeFrame = window.requestAnimationFrame(() => {
+    themeFrame = undefined
+    applyTerminalTheme()
+  })
+}
+
 onMounted(() => {
-  const styles = getComputedStyle(terminalElement.value!)
-  const background = styles.getPropertyValue('--terminal').trim() || '#151a20'
   terminal = new Terminal({
     convertEol: true,
     cursorBlink: true,
     fontFamily: '"Cascadia Mono", Consolas, "Courier New", monospace',
     fontSize: props.fontSize,
-    theme: {
-      background,
-      foreground: '#d8dade',
-      cursor: '#eef2f7',
-      selectionBackground: '#35577a',
-    },
+    theme: readTerminalTheme(),
   })
   fit = new FitAddon()
   terminal.loadAddon(fit)
@@ -174,6 +196,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (initialBufferFrame !== undefined) window.cancelAnimationFrame(initialBufferFrame)
   initialBufferFrame = undefined
+  if (themeFrame !== undefined) window.cancelAnimationFrame(themeFrame)
+  themeFrame = undefined
   unsubscribe?.()
   inputSubscription?.dispose()
   selectionSubscription?.dispose()
@@ -191,6 +215,11 @@ watch(
     terminal.options.fontSize = fontSize
     resize()
   },
+)
+
+watch(
+  () => layout.state.theme,
+  scheduleTerminalTheme,
 )
 </script>
 

@@ -22,7 +22,9 @@ describe('Terminal-Agent NSIS bridge registration lifecycle', () => {
 
     expect(install).toContain('ReadEnvStr')
     expect(install).toContain('"USERPROFILE"')
-    expect(install).toContain('.ta')
+    expect(install).toContain('.terminal-agent')
+    expect(install).toContain('.ta\\user-config')
+    expect(install).toMatch(/IfFileExists\s+"\$1\\user-config"\s+done_config[\s\S]*IfFileExists\s+"\$4"\s+done_config[\s\S]*CreateDirectory\s+"\$1"/)
     expect(install).toContain('user-config')
     expect(install).toContain('CreateDirectory')
     expect(install).toMatch(/GetTempFileName\s+\$2\s+"\$1"/)

@@ -6,11 +6,11 @@ import { ModelProfileRepository } from '../../../src/main/settings/model-profile
 import { ModelProfileService } from '../../../src/main/settings/model-profile-service'
 import { SsoConfigService, createDefaultSsoConfiguration } from '../../../src/main/settings/sso-config-service'
 
-describe('shared .ta/user-config model storage', () => {
+describe('shared .terminal-agent/user-config model storage', () => {
   it('keeps SSO and model profiles together and stores the API key as plain JSON', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-models-'))
     try {
-      const path = join(directory, '.ta', 'user-config')
+      const path = join(directory, '.terminal-agent', 'user-config')
       const repository = new ModelProfileRepository(path, { userConfig: true })
       const secrets = {
         load: vi.fn(async () => null),
@@ -46,10 +46,53 @@ describe('shared .ta/user-config model storage', () => {
     }
   })
 
+  it('serializes concurrent SSO and model writes without dropping either section', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-concurrent-writes-'))
+    try {
+      const path = join(directory, '.terminal-agent', 'user-config')
+      const sso = new SsoConfigService(path)
+      const secrets = {
+        load: vi.fn(async () => null),
+        save: vi.fn(async () => undefined),
+        remove: vi.fn(async () => undefined),
+      }
+      const models = new ModelProfileService(
+        new ModelProfileRepository(path, { userConfig: true }),
+        secrets,
+        { plaintextApiKeys: true, createId: () => 'concurrent-profile' },
+      )
+
+      await sso.ensureInitialized()
+      await Promise.all([
+        sso.save({ ...createDefaultSsoConfiguration(), enabled: false }),
+        models.save({
+          name: 'Concurrent',
+          kind: 'llm',
+          provider: 'openai',
+          model: 'gpt-5',
+          endpoint: 'https://api.openai.com/v1/chat/completions',
+          contextLimit: 12_000,
+          apiKey: 'sk-concurrent-write-test',
+        }),
+      ])
+
+      const persisted = JSON.parse(await readFile(path, 'utf8')) as {
+        sso: { enabled: boolean }
+        models: { profiles: Array<{ id: string; apiKey?: string }> }
+      }
+      expect(persisted.sso.enabled).toBe(false)
+      expect(persisted.models.profiles).toEqual([
+        expect.objectContaining({ id: 'concurrent-profile', apiKey: 'sk-concurrent-write-test' }),
+      ])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it('imports profiles and their legacy credentials from the previous userData file', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-profile-migration-'))
     try {
-      const path = join(directory, '.ta', 'user-config')
+      const path = join(directory, '.terminal-agent', 'user-config')
       const repository = new ModelProfileRepository(path, { userConfig: true })
       const secrets = {
         load: vi.fn(async (key: string) => key === 'model-profile.legacy.apiKey' ? 'legacy-key' : null),
@@ -78,8 +121,8 @@ describe('shared .ta/user-config model storage', () => {
   it('wraps a standalone version-1 model document before SSO and model reads', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-v1-wrap-'))
     try {
-      const path = join(directory, '.ta', 'user-config')
-      await mkdir(join(directory, '.ta'), { recursive: true })
+      const path = join(directory, '.terminal-agent', 'user-config')
+      await mkdir(join(directory, '.terminal-agent'), { recursive: true })
       await writeFile(path, JSON.stringify({
         version: 1,
         profiles: [{
@@ -108,7 +151,7 @@ describe('shared .ta/user-config model storage', () => {
   it('strips an embedded legacy API key when importing into protected storage', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-protected-import-'))
     try {
-      const path = join(directory, '.ta', 'user-config')
+      const path = join(directory, '.terminal-agent', 'user-config')
       const repository = new ModelProfileRepository(path, { userConfig: true })
       const secrets = {
         load: vi.fn(async (key: string) => key === 'model-profile.embedded.apiKey' ? 'protected-key' : null),

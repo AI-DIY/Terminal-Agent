@@ -11,7 +11,7 @@ export const BUILT_IN_SKILLS = [
   {
     id: 'teleagent-operations',
     name: '系统告警分析',
-    source: 'Terminal-Agent 演示技能',
+    source: 'Terminal-Agent 内置技能',
     description: '汇总系统告警并识别异常模式，帮助快速定位需要优先处理的问题。',
     detail: '适合分析告警级别、发生时间和关联主机。',
     defaultEnabled: false,
@@ -21,7 +21,7 @@ export const BUILT_IN_SKILLS = [
   {
     id: 'codex-development',
     name: '系统日报周报月报分析',
-    source: 'Terminal-Agent 演示技能',
+    source: 'Terminal-Agent 内置技能',
     description: '分析系统日报、周报和月报，提炼运行趋势、重复问题和待跟进事项。',
     detail: '适合对比不同周期的运行数据和工作记录。',
     defaultEnabled: false,
@@ -31,7 +31,7 @@ export const BUILT_IN_SKILLS = [
   {
     id: 'ssh-troubleshooting',
     name: '系统知识库检索',
-    source: 'Terminal-Agent 演示技能',
+    source: 'Terminal-Agent 内置技能',
     description: '从系统知识库中检索相关资料，为故障分析和日常运维提供参考依据。',
     detail: '适合按关键词、主机和问题现象查找知识条目。',
     defaultEnabled: false,

@@ -1309,17 +1309,10 @@ describe('durable chat workbench components', () => {
     expect(attached).toEqual([{ chatId: 'chat-a', isCurrent: false }])
   })
 
-  it('guards a direct reconnect continuation with the chat captured before awaiting', () => {
+  it('keeps the workbench free of the removed direct reconnect UI continuation', () => {
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
-    const reconnect = view.slice(view.indexOf('async function reconnectShell'), view.indexOf('async function refreshHistoryPlayback'))
-
-    expect(reconnect).toContain('const targetChatId = chatStore.state.selectedId')
-    expect(reconnect).toContain('const isTargetCurrent = () => chatStore.state.selectedId === targetChatId')
-    expect(reconnect).toContain('await runWorkbenchSessionReconnect({')
-    expect(reconnect).toContain('workbenchReconnectAttachmentTarget(session.chatId, chatId)')
-    expect(reconnect).toContain('attach: (session, chatId, isCurrent) => attachSession(session, true, isCurrent, workbenchReconnectAttachmentTarget(session.chatId, chatId))')
-    expect(reconnect).toContain('if (isTargetCurrent()) closeShellHistory()')
-    expect(reconnect).not.toContain('attachSession(session, true, () => true, session.chatId)')
+    expect(view).not.toContain('async function reconnectShell')
+    expect(view).not.toContain('@reconnect="reconnectShell"')
   })
 
   it('keeps the workbench free of obsolete Bastion catalog and launch plumbing', () => {

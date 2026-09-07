@@ -4,6 +4,7 @@ import {
   shellHistoryConnectedSessionSchema,
   shellHistoryDuplicateRequestSchema,
   shellHistoryDetailSchema,
+  type ShellHistoryFileTransferLog,
   shellHistoryIdSchema,
   shellHistoryListRequestSchema,
   shellHistorySummarySchema,
@@ -45,7 +46,7 @@ export function registerShellHistoryHandlers(service: ShellHistorySource, truste
     const parsedId = shellHistoryIdSchema.parse(historyId)
     return service.get(parsedId).then(result => {
       const parsed = shellHistoryDetailSchema.parse(result)
-      return shellHistoryDetailSchema.parse({ ...sanitizeSummary(parsed), output: sanitizeOutboundText(parsed.output, 256 * 1024) })
+      return sanitizeDetail(parsed)
     })
   })
   ipcMain.handle('shell-history:duplicate', (event, sessionId: unknown) => {
@@ -84,6 +85,31 @@ function sanitizeSummary(summary: ShellHistorySummary): ShellHistorySummary {
     hostname: sanitizeShellHistoryDisplay(summary.hostname),
     title: sanitizeShellHistoryDisplay(summary.title),
     preview: sanitizeOutboundText(summary.preview, 512),
+  }
+}
+
+/**
+ * The service and repository already sanitize history defensively.  Repeat
+ * the boundary check for every detail-only field because this IPC adapter is
+ * also exercised with alternate service implementations in tests and future
+ * integrations.  File-transfer metadata deliberately has no local path, but
+ * remote paths and error text can still contain terminal controls or secrets.
+ */
+function sanitizeDetail(detail: ShellHistoryDetail): ShellHistoryDetail {
+  return shellHistoryDetailSchema.parse({
+    ...sanitizeSummary(detail),
+    output: sanitizeOutboundText(detail.output, 256 * 1024),
+    commandAudit: { input: sanitizeOutboundText(detail.commandAudit.input, 256 * 1024) },
+    fileTransferLogs: detail.fileTransferLogs.map(sanitizeFileTransferLog),
+  })
+}
+
+function sanitizeFileTransferLog(log: ShellHistoryFileTransferLog): ShellHistoryFileTransferLog {
+  return {
+    ...log,
+    fileName: sanitizeShellHistoryDisplay(log.fileName),
+    remotePath: sanitizeShellHistoryDisplay(log.remotePath),
+    ...(log.message === undefined ? {} : { message: sanitizeOutboundText(log.message, 4_000) }),
   }
 }
 

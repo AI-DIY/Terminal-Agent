@@ -167,6 +167,29 @@ describe('Shell history lifecycle', () => {
     expect(finished).toBe(true)
   })
 
+  it('also drains transfer-log writes queued after the close record', async () => {
+    const events = createEventSources()
+    const transferAudit = deferred<void>()
+    const history = {
+      attach: vi.fn(), append: vi.fn(), audit: vi.fn(), associate: vi.fn(), close: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(),
+      drain: vi.fn(() => transferAudit.promise),
+    }
+    const lifecycle = registerShellHistoryLifecycle(events.sessions, events.chats, history)
+
+    events.historyOpened?.({ id: 'session-transfer-shutdown', hostname: 'files-01', mode: 'copilot', connectionType: 'direct-ssh' })
+    events.closed?.({ sessionId: 'session-transfer-shutdown' })
+    const drained = lifecycle.drain()
+    let finished = false
+    void drained.then(() => { finished = true })
+
+    await vi.waitFor(() => expect(history.close).toHaveBeenCalledOnce())
+    expect(history.drain).toHaveBeenCalledOnce()
+    expect(finished).toBe(false)
+    transferAudit.resolve()
+    await drained
+    expect(finished).toBe(true)
+  })
+
   it('persists the observed hostname instead of a bastion address when the session closes', async () => {
     const events = createEventSources()
     const history = {

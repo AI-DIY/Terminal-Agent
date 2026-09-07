@@ -126,8 +126,13 @@ export class AtomicJsonStore<T> {
     return operation
   }
 
-  /** Create the target exactly once; a competing creator's document wins unchanged. */
-  createIfMissing(): Promise<T> {
+  /**
+   * Create the target exactly once; a competing creator's document wins
+   * unchanged.  An optional factory lets callers seed a newly-created file
+   * from a legacy location while retaining the same exclusive publication
+   * guarantees as the default empty document.
+   */
+  createIfMissing(initializer?: () => T | Promise<T>): Promise<T> {
     const operation = this.queue.then(async () => {
       try {
         const current = await this.readCurrent(true)
@@ -136,7 +141,7 @@ export class AtomicJsonStore<T> {
         if (!isNodeError(error) || error.code !== 'ENOENT') throw error
       }
 
-      const empty = this.schema.parse(this.empty())
+      const empty = this.schema.parse(await (initializer ? initializer() : this.empty()))
       await this.fileSystem.mkdir(dirname(this.path), { recursive: true })
       const serialized = JSON.stringify(empty)
       const attemptedPaths = new Set<string>()

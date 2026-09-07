@@ -21,7 +21,7 @@ import { createSessionsStore, uniqueSessionHostCount, type SessionView } from '.
 import { getLayoutPreferencesStore } from '../stores/layout-preferences'
 import { createShellHistoryStore } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
-import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionOpen, runWorkbenchSessionReconnect, workbenchReconnectAttachmentTarget, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
+import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionOpen, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 import { getUserPreferencesStore } from '../stores/user-preferences'
 import { getSsoStore } from '../stores/sso'
 import { consumeWorkbenchNavigationHandoff } from '../stores/workbench-navigation-handoff'
@@ -106,7 +106,6 @@ type HistoryHost = {
   hostname: string
   recordCount: number
   representativeHistoryId: string
-  reconnectable: boolean
 }
 
 function formatHistoryConnectionTime(startedAt: string): string {
@@ -156,15 +155,14 @@ function groupHistoryRecords(records: readonly ShellHistorySummary[]): HistoryHo
       existing.recordCount += 1
       continue
     }
-    // Keep one representative record for the existing reconnect action.  The
-    // complete per-connection list, including timestamps, remains available
-    // after opening this hostname in the existing history dialog.
+    // Keep one representative record for opening the read-only history
+    // dialog. The complete per-connection list, including timestamps, remains
+    // available after opening this hostname.
     hosts.set(record.hostname, {
       id: historyHostId(record.hostname),
       hostname: record.hostname,
       recordCount: 1,
       representativeHistoryId: record.id,
-      reconnectable: record.reconnectable,
     })
   }
   return [...hosts.values()]
@@ -636,26 +634,6 @@ function closeShellHistory(): void {
   else restoreFocus()
 }
 
-async function reconnectShell(historyId: string): Promise<void> {
-  const targetChatId = chatStore.state.selectedId
-  if (!targetChatId) return
-  const isTargetCurrent = () => chatStore.state.selectedId === targetChatId
-  connectionError.value = ''
-  try {
-    await runWorkbenchSessionReconnect({
-      targetChatId,
-      reconnect: () => shellHistory.reconnect(historyId),
-      attach: (session, chatId, isCurrent) => attachSession(session, true, isCurrent, workbenchReconnectAttachmentTarget(session.chatId, chatId)),
-      isCurrent: isTargetCurrent,
-    })
-    if (isTargetCurrent()) closeShellHistory()
-  } catch (error) {
-    if (!isTargetCurrent()) return
-    connectionError.value = error instanceof Error ? error.message : '无法重新连接 SSH。'
-    void shellHistory.refresh()
-  }
-}
-
 async function refreshHistoryPlayback(): Promise<void> {
   const chatId = chatStore.state.selectedId
   if (!chatId) {
@@ -1036,7 +1014,6 @@ onBeforeUnmount(() => {
         @restore-live="chatStore.state.liveChatId ? selectChat(chatStore.state.liveChatId) : undefined"
         @history="openShellHistory"
         @history-menu="openHistoricalShellMenu"
-        @reconnect="reconnectShell"
         @reorder="reorderSessions"
         @reorder-history="reorderHistory"
       >
@@ -1098,7 +1075,6 @@ onBeforeUnmount(() => {
         :font-size="layoutPreferences.state.fontSize"
         @close="closeShellHistory"
         @select="shellHistory.select"
-        @reconnect="reconnectShell"
       />
       <UpgradeDialog :open="showUpgrade" :current-version="appVersion || '—'" @close="showUpgrade = false" />
       <HostMemoryConsentDialog v-if="pendingHostMemoryDisclosure" :host-identity="pendingHostMemoryDisclosure.hostIdentity" :submitting="hostMemorySubmitting" @close="dismissHostMemory" @acknowledge="acknowledgeHostMemory" />

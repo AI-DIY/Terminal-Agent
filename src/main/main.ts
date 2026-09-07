@@ -72,7 +72,7 @@ import { PlanResultAutoContinue } from './chat/plan-result-auto-continue'
 import { modelHostname, uniqueModelHostnames } from '../shared/model-context'
 import { normalizeChatContextSessionIds } from '../shared/chat-context-selection'
 import { normalizeBuiltInSkillIds } from '../shared/built-in-skills'
-import { SsoConfigService, getSsoConfigPath } from './settings/sso-config-service'
+import { SsoConfigService, getLegacySsoConfigPath, getSsoConfigPath } from './settings/sso-config-service'
 import { isAtomicJsonStoreInvalidDataError } from './persistence/atomic-json-store'
 import { resolveSsoConfigHomeDirectory } from './settings/sso-config-home'
 import { SsoAuthenticationService } from './sso/sso-authentication-service'
@@ -81,12 +81,16 @@ import { registerSsoHandlers } from './sso/register-sso-handlers'
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
 let diagnostics: DiagnosticsController | undefined
-// SSO and model settings intentionally share the user-scoped `.ta/user-config`
-// document.  Keeping one resolved path here prevents the two repositories from
+// SSO and model settings intentionally share the user-scoped
+// `.terminal-agent/user-config` document.  The prior `.ta/user-config` path is
+// supplied only as a one-time migration source and is never written after the
+// canonical path is available.
+// Keeping one resolved path here prevents the two repositories from
 // accidentally writing separate copies when packaged and development homes
 // differ.
-const userConfigPath = getSsoConfigPath(resolveSsoConfigHomeDirectory(app.getPath('home'), process.env, app.isPackaged))
-const ssoConfig = new SsoConfigService(userConfigPath)
+const userConfigHome = resolveSsoConfigHomeDirectory(app.getPath('home'), process.env, app.isPackaged)
+const userConfigPath = getSsoConfigPath(userConfigHome)
+const ssoConfig = new SsoConfigService(userConfigPath, { legacyPath: getLegacySsoConfigPath(userConfigHome) })
 const ssoAuth = new SsoAuthenticationService(ssoConfig)
 const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
 const keyMaterials = new KeyMaterialStore()
@@ -388,7 +392,10 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
   })
 
   unregisterSessionEvents = registerSessionHandlers(sessions, keyMaterials, mainWindow.webContents, directSessions)
-  unregisterFileTransferHandlers = registerFileTransferHandlers(sessions, mainWindow.webContents)
+  // Keep transfer audit records attached to the active Shell-history
+  // collector.  The handler treats this sink as best-effort, so a history
+  // persistence problem cannot interrupt an in-flight SFTP operation.
+  unregisterFileTransferHandlers = registerFileTransferHandlers(sessions, mainWindow.webContents, { history: shellHistory })
   unregisterAccessClientLaunchEvents = registerAccessClientLaunchHandlers(accessClientLaunches, mainWindow.webContents)
   unregisterBastionLaunchEvents = registerBastionLaunchHandlers(bastionLaunches, mainWindow.webContents)
   unregisterSessionModeHandlers = registerSessionModeHandlers(sessionModes, mainWindow.webContents)

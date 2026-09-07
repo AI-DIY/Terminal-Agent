@@ -40,6 +40,7 @@ async function loadState(): Promise<void> {
 }
 
 async function check(): Promise<void> {
+  if (busy.value) return
   busy.value = true
   message.value = ''
   checkResult.value = null
@@ -60,6 +61,7 @@ async function check(): Promise<void> {
 }
 
 async function download(): Promise<void> {
+  if (busy.value) return
   busy.value = true
   message.value = ''
   const updater = updaterBridge()
@@ -101,7 +103,10 @@ async function install(): Promise<void> {
 }
 
 function close(): void {
-  if (busy.value && (isChecking.value || isDownloading.value || isInstalling.value)) return
+  // Keep the dialog mounted until the in-flight IPC operation settles.  The
+  // phase can briefly lag the local busy flag while the main process publishes
+  // its first status event, so checking `busy` alone avoids a close race.
+  if (busy.value) return
   emit('close')
 }
 

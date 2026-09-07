@@ -1,18 +1,18 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-describe('ShellCanvas Task 7 reconnect actions', () => {
-  it('exposes reconnectable grouped history tabs through the same context menu', () => {
+describe('ShellCanvas Task 7 history actions', () => {
+  it('keeps grouped history tabs read-only and removes reconnect actions from the UI', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
 
     expect(canvas).toContain('historyHosts')
     expect(canvas).toContain("@contextmenu.prevent=\"emit('historyMenu', host.id)\"")
-    expect(canvas).toContain('host.reconnectable')
     expect(canvas).toContain('host.representativeHistoryId')
-    expect(canvas).toContain('重新连接')
+    expect(canvas).not.toContain('host.reconnectable')
+    expect(canvas).not.toContain('重新连接')
     expect(view).toContain(':history-hosts="historyHosts"')
-    expect(view).toContain('@reconnect="reconnectShell"')
+    expect(view).not.toContain('@reconnect="reconnectShell"')
   })
 
   it('keeps closed history associations available beside an active terminal after a fresh authority check', () => {

@@ -468,14 +468,15 @@ test('opens historical SSH dialogs without multi-select while closed SSH uses th
 
     await firstHost.click({ button: 'right' })
     const menu = page.getByRole('menu', { name: /^历史 SSH 操作 127\.0\.0\.1$/ })
-    await expect(menu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
+    await expect(menu.getByRole('menuitem', { name: '查看 SSH 历史', exact: true })).toBeEnabled()
+    await expect(menu.getByRole('menuitem', { name: '重连', exact: true })).toHaveCount(0)
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
   }
 })
 
-test('removes the per-terminal file-transfer entry, previews read-only history, and reconnects it into the selected history chat', async ({ launchApp }) => {
+test('keeps file transfer at workspace level and retains read-only history without reconnect controls', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -483,7 +484,7 @@ test('removes the per-terminal file-transfer entry, previews read-only history, 
     app = (await launchApp()).app
     const page = await app.firstWindow()
 
-    await createNamedChat(page, '历史重连')
+    await createNamedChat(page, '历史文件传输')
     await connect(page, sshServer.port, '127.0.0.1')
     const originalPane = page.locator('[data-testid^="terminal-pane-"]:visible').first()
     await sendCommand(originalPane, page, 'history-preview')
@@ -492,8 +493,26 @@ test('removes the per-terminal file-transfer entry, previews read-only history, 
     await expect(page.getByRole('button', { name: '终端操作 127.0.0.1', exact: true })).toHaveCount(0)
     await expect(page.getByRole('menu', { name: '终端操作 127.0.0.1', exact: true })).toHaveCount(0)
 
-    await expect(page.getByRole('button', { name: '文件传输 127.0.0.1', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '显示文件传输', exact: true })).toBeVisible()
     await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(0)
+    const broadcastInput = page.getByPlaceholder('输入要发送到所有在线 SSH 的命令', { exact: true })
+    const broadcastSend = page.getByRole('button', { name: '发送所有窗口执行', exact: true })
+    await expect(broadcastInput).toBeDisabled()
+    await expect(broadcastSend).toBeDisabled()
+    await page.getByRole('checkbox', { name: '启用发送键输入到所有会话', exact: true }).check()
+    await expect(broadcastInput).toBeEnabled()
+
+    await page.getByRole('button', { name: '显示文件传输', exact: true }).click()
+    const transferPanel = page.getByLabel('文件传输', { exact: true })
+    await expect(transferPanel).toBeVisible()
+    await expect(page.getByLabel('SSH 文件传输面板', { exact: true })).toBeVisible()
+    await expect(transferPanel.getByText('本地（左）', { exact: true })).toBeVisible()
+    await expect(transferPanel.getByText('远程（右）', { exact: true })).toBeVisible()
+    await transferPanel.getByRole('button', { name: '关闭文件传输', exact: true }).click()
+    await expect(transferPanel).toBeHidden()
+    // Closing the dock changes visibility only.  This is what keeps an active
+    // transfer mounted when a user collapses the workspace panel.
+    await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(1)
 
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.1', exact: true }).click()
     await expect(page.locator('.empty-state')).toBeVisible()
@@ -510,7 +529,7 @@ test('removes the per-terminal file-transfer entry, previews read-only history, 
 
     await historyTab.click({ button: 'right' })
     const historyMenu = page.getByRole('menu', { name: /^历史 SSH 操作 127\.0\.0\.1$/ })
-    await expect(historyMenu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
+    await expect(historyMenu.getByRole('menuitem', { name: '重连', exact: true })).toHaveCount(0)
     await historyMenu.getByRole('menuitem', { name: '查看 SSH 历史', exact: true }).click()
     await expect(page.getByRole('dialog', { name: 'Shell 历史', exact: true })).toBeVisible()
     await page.getByRole('dialog', { name: 'Shell 历史', exact: true }).getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
@@ -523,35 +542,14 @@ test('removes the per-terminal file-transfer entry, previews read-only history, 
     const dialogClose = dialog.getByRole('button', { name: '关闭 Shell 历史', exact: true })
     await dialogClose.focus()
     await page.keyboard.press('Shift+Tab')
-    await expect(dialog.getByRole('button', { name: '重新连接', exact: true })).toBeFocused()
+    await expect(dialog.getByRole('button', { name: '重新连接', exact: true })).toHaveCount(0)
     await firstHistoryRecord.focus()
     await page.keyboard.press('Escape')
     await expect(historyButton).toBeFocused()
 
     await historyButton.click()
-    await expect(dialog.getByRole('button', { name: '重新连接', exact: true })).toBeEnabled()
-    await dialog.getByRole('button', { name: '重新连接', exact: true }).click()
-    const reconnectedPane = page.locator('[data-testid^="terminal-pane-"]:visible')
-    await expect(reconnectedPane).toHaveCount(1)
-    await sendCommand(reconnectedPane, page, 'after-reconnect')
-    await expect(reconnectedPane).toContainText('echo:after-reconnect')
-
-    const retainedHistoryTab = page.locator('.history-shell-tab').first()
-    await expect(retainedHistoryTab).toBeVisible()
-    await retainedHistoryTab.click({ button: 'right' })
-    const hybridHistoryMenu = page.getByRole('menu', { name: /^历史 SSH 操作 127\.0\.0\.1$/ })
-    await expect(hybridHistoryMenu.getByRole('menuitem', { name: '重连', exact: true })).toBeEnabled()
-    await hybridHistoryMenu.getByRole('menuitem', { name: '查看 SSH 历史', exact: true }).click()
-    await expect(page.getByRole('dialog', { name: 'Shell 历史', exact: true })).toBeVisible()
-    await expect(page.locator('[data-testid^="terminal-pane-"]:visible')).toHaveCount(1)
-    await page.getByRole('dialog', { name: 'Shell 历史', exact: true }).getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
-
-    await createNamedChat(page, '另一实时聊天')
-    await connect(page, sshServer.port, '127.0.0.2')
-    await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.2', exact: true })).toBeVisible()
-    await page.getByRole('button', { name: '选择任务 历史重连', exact: true }).click()
-    await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.2', exact: true })).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: '重新连接', exact: true })).toHaveCount(0)
+    await dialog.getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
@@ -1040,7 +1038,7 @@ test('keeps the terminal input row visible when the history rail is collapsed', 
 })
 
 test('captures WebContents layouts across persisted themes with native-control safe-area checks', async ({ launchApp }, testInfo) => {
-  test.setTimeout(90_000)
+  test.setTimeout(120_000)
   let app: ElectronApplication | undefined
 
   try {
@@ -1055,6 +1053,8 @@ test('captures WebContents layouts across persisted themes with native-control s
         { id: 'pearl', control: '珍珠白' },
         { id: 'graphite', control: '石墨黑' },
         { id: 'noble-purple', control: '高贵紫' },
+        { id: 'imperial-gold', control: '帝王金' },
+        { id: 'sakura-pink', control: '樱花粉' },
       ] as const) {
         const continuingDraft = `切换设置后继续保留的聊天草稿 ${theme.id} ${viewport.width}`
         await globalChatInput.fill(continuingDraft)
@@ -1065,7 +1065,7 @@ test('captures WebContents layouts across persisted themes with native-control s
         await expect(page.locator('.settings')).toBeVisible()
         await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '外观', exact: true }).click()
         const themeGroup = page.getByRole('group', { name: '工作台主题', exact: true })
-        await expect(themeGroup.getByRole('button')).toHaveCount(3)
+        await expect(themeGroup.getByRole('button')).toHaveCount(5)
         const themeColumns = await themeGroup.evaluate(node => getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/).length)
         expect(themeColumns).toBe(3)
         await themeGroup.getByRole('button', { name: theme.control }).click()
@@ -1428,7 +1428,7 @@ test('renders two real SSH sessions in separate terminal panes with isolated out
     const panes = page.locator('[data-testid^="terminal-pane-"]')
     await expect(panes).toHaveCount(2)
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1' })).toHaveCount(2)
-    await expect(page.getByRole('button', { name: '文件传输 127.0.0.1' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '显示文件传输', exact: true })).toHaveCount(1)
     await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(0)
 
     await sendCommand(panes.nth(0), page, 'alpha')
@@ -2153,7 +2153,13 @@ async function startSshServer(
 ): Promise<{ server: Server; port: number; ptySizes: Array<{ columns: number; rows: number }> }> {
   const ptySizes: Array<{ columns: number; rows: number }> = []
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2_048 })
-  const server = new Server({ hostKeys: [privateKey.export({ type: 'pkcs1', format: 'pem' })] }, client => {
+  const server = new Server({
+    hostKeys: [privateKey.export({ type: 'pkcs1', format: 'pem' })],
+    // Keep the in-process E2E endpoint deterministic under concurrent workers.
+    // Node 24 + ssh2's AEAD/ETM paths can emit intermittent authentication
+    // failures when several Electron workers open sessions concurrently.
+    algorithms: { cipher: ['aes128-ctr'], hmac: ['hmac-sha2-256'] },
+  }, client => {
     client.on('authentication', context => {
       if (context.method === 'password' && context.username === 'ops' && context.password === 'secret') {
         if (beforeAuthenticationAccept) {

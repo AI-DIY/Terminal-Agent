@@ -473,7 +473,7 @@ describe('ShellHistoryService', () => {
     }
   })
 
-  it('persists a bounded redacted command audit without exposing it through renderer DTOs', async () => {
+  it('persists a bounded redacted command audit and exposes it only in the detail DTO', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-shell-history-command-audit-'))
     const path = join(directory, 'shell-history.json')
     const auditChunks = ['printf t', 'mp:relative folder\\session.conf .ssh/id_ed25519', '\r', 'x'.repeat(256 * 1024)]
@@ -499,9 +499,52 @@ describe('ShellHistoryService', () => {
       expect(document.records[0]?.commandAudit.input).not.toContain('tmp:relative folder\\session.conf')
       expect(document.records[0]?.commandAudit.input).not.toContain('.ssh/id_ed25519')
       expect(Buffer.byteLength(document.records[0]?.commandAudit.input ?? '', 'utf8')).toBeLessThanOrEqual(256 * 1024)
-      for (const value of [summary, detail, events]) {
-        expect(value).not.toHaveProperty('commandAudit')
-        expect(JSON.stringify(value)).not.toContain('tmp:relative folder\\session.conf')
+      expect(summary).not.toHaveProperty('commandAudit')
+      expect(detail).toHaveProperty('commandAudit', { input: expect.stringContaining('[REDACTED SENSITIVE CONTENT]') })
+      expect(JSON.stringify(detail)).not.toContain('tmp:relative folder\\session.conf')
+      expect(JSON.stringify(events)).not.toContain('tmp:relative folder\\session.conf')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('persists completed and late-settling file-transfer logs for the closed SSH history', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-shell-history-transfer-log-'))
+    const path = join(directory, 'shell-history.json')
+    try {
+      const service = new ShellHistoryService(new ShellHistoryRepository(path), { createId: () => 'history-transfer-log' })
+      service.attach({
+        sessionId: 'session-transfer-log', chatId: 'chat-transfer-log', hostname: 'files-01', title: 'files-01',
+        connectionType: 'direct-ssh', startedAt: '2026-09-07T10:00:00.000Z',
+      })
+
+      await service.recordFileTransfer({
+        sessionId: 'session-transfer-log', id: 'transfer-completed', direction: 'upload', fileName: 'release.zip', remotePath: '/srv/releases/release.zip',
+        status: 'completed', transferredBytes: 12, totalBytes: 12, message: '文件上传完成。',
+        startedAt: '2026-09-07T10:00:01.000Z', endedAt: '2026-09-07T10:00:02.000Z',
+      })
+      await service.close({ sessionId: 'session-transfer-log', endedAt: '2026-09-07T10:00:03.000Z' })
+
+      // Session close can precede a rejected SFTP promise.  The final result
+      // must still land on this exact historical connection rather than being
+      // dropped with the live collector.
+      await service.recordFileTransfer({
+        sessionId: 'session-transfer-log', id: 'transfer-late-failure', direction: 'download', fileName: 'audit.log',
+        remotePath: 'tmp:C:\\Temp\\access-client\\audit.log', status: 'failed', transferredBytes: 0,
+        message: 'password=TRANSFER_LOG_SECRET', startedAt: '2026-09-07T10:00:02.000Z', endedAt: '2026-09-07T10:00:04.000Z',
+      })
+
+      const persisted = await readFile(path, 'utf8')
+      const detail = await service.get('history-transfer-log')
+      expect(detail.fileTransferLogs).toHaveLength(2)
+      expect(detail.fileTransferLogs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'transfer-completed', status: 'completed', fileName: 'release.zip', transferredBytes: 12, totalBytes: 12 }),
+        expect.objectContaining({ id: 'transfer-late-failure', status: 'failed', transferredBytes: 0, remotePath: '[REDACTED SENSITIVE CONTENT]' }),
+      ]))
+      for (const value of [persisted, detail]) {
+        expect(JSON.stringify(value)).not.toContain('TRANSFER_LOG_SECRET')
+        expect(JSON.stringify(value)).not.toContain('C:\\Temp\\access-client\\audit.log')
+        expect(JSON.stringify(value)).toContain('[REDACTED SENSITIVE CONTENT]')
       }
     } finally {
       await rm(directory, { recursive: true, force: true })
