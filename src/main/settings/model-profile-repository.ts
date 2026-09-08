@@ -3,6 +3,7 @@ import { AtomicJsonStore, type AtomicJsonStoreOptions } from '../persistence/ato
 import { createDefaultSsoConfiguration, ssoConfigurationSchema } from '../../shared/sso-contracts'
 import { modelApiKeySchema, modelEndpointSchema, modelProfileKindSchema, modelProviderSchema, modelRoutingSchema } from '../../shared/validation'
 import { withUserConfigPathLock } from './user-config-lock'
+import { userConfigYamlCodec } from './user-config-yaml'
 
 const persistedModelProfileFields = {
   id: z.string().trim().min(1).max(128),
@@ -182,6 +183,7 @@ export class ModelProfileRepository implements ModelProfileRepositoryPort {
     if (options.userConfig) {
       this.userConfigStore = new AtomicJsonStore(path, userConfigDocumentSchema, emptyUserConfigDocument, {
         ...options,
+        codec: userConfigYamlCodec,
         migrate: migrateUserConfigDocument,
       })
     } else {

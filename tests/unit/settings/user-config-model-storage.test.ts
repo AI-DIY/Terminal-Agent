@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os'
 import { ModelProfileRepository } from '../../../src/main/settings/model-profile-repository'
 import { ModelProfileService } from '../../../src/main/settings/model-profile-service'
 import { SsoConfigService, createDefaultSsoConfiguration } from '../../../src/main/settings/sso-config-service'
+import { parse } from 'yaml'
 
-describe('shared .terminal-agent/user-config model storage', () => {
-  it('keeps SSO and model profiles together and stores the API key as plain JSON', async () => {
+describe('shared .terminal-agent/user-config.yml model storage', () => {
+  it('keeps SSO and model profiles together and stores the API key as plain YAML', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-models-'))
     try {
-      const path = join(directory, '.terminal-agent', 'user-config')
+      const path = join(directory, '.terminal-agent', 'user-config.yml')
       const repository = new ModelProfileRepository(path, { userConfig: true })
       const secrets = {
         load: vi.fn(async () => null),
@@ -32,12 +33,15 @@ describe('shared .terminal-agent/user-config model storage', () => {
       expect(secrets.save).not.toHaveBeenCalled()
       const sso = new SsoConfigService(path)
       await sso.save({ ...createDefaultSsoConfiguration(), enabled: false })
-      const persisted = JSON.parse(await readFile(path, 'utf8')) as {
+      const raw = await readFile(path, 'utf8')
+      const persisted = parse(raw) as {
         sso: { enabled: boolean }
         models: { profiles: Array<{ apiKey?: string }> }
       }
       expect(persisted.sso.enabled).toBe(false)
       expect(persisted.models.profiles[0]?.apiKey).toBe('sk-user-config-test')
+      expect(raw).toContain('# 模型配置唯一标识。')
+      expect(raw).toContain('# 模型服务 API 密钥，请妥善保管。')
 
       const restored = new ModelProfileService(new ModelProfileRepository(path, { userConfig: true }), secrets, { plaintextApiKeys: true })
       await expect(restored.resolveRoute({ hasImages: false })).resolves.toMatchObject({ apiKey: 'sk-user-config-test' })
@@ -49,7 +53,7 @@ describe('shared .terminal-agent/user-config model storage', () => {
   it('serializes concurrent SSO and model writes without dropping either section', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-concurrent-writes-'))
     try {
-      const path = join(directory, '.terminal-agent', 'user-config')
+      const path = join(directory, '.terminal-agent', 'user-config.yml')
       const sso = new SsoConfigService(path)
       const secrets = {
         load: vi.fn(async () => null),
@@ -76,7 +80,7 @@ describe('shared .terminal-agent/user-config model storage', () => {
         }),
       ])
 
-      const persisted = JSON.parse(await readFile(path, 'utf8')) as {
+      const persisted = parse(await readFile(path, 'utf8')) as {
         sso: { enabled: boolean }
         models: { profiles: Array<{ id: string; apiKey?: string }> }
       }
@@ -92,7 +96,7 @@ describe('shared .terminal-agent/user-config model storage', () => {
   it('imports profiles and their legacy credentials from the previous userData file', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-profile-migration-'))
     try {
-      const path = join(directory, '.terminal-agent', 'user-config')
+      const path = join(directory, '.terminal-agent', 'user-config.yml')
       const repository = new ModelProfileRepository(path, { userConfig: true })
       const secrets = {
         load: vi.fn(async (key: string) => key === 'model-profile.legacy.apiKey' ? 'legacy-key' : null),
@@ -112,7 +116,7 @@ describe('shared .terminal-agent/user-config model storage', () => {
       const service = new ModelProfileService(repository, secrets, { legacyProfiles, plaintextApiKeys: true })
       await service.list('llm')
       expect(legacyProfiles.load).toHaveBeenCalledOnce()
-      expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ models: { profiles: [{ id: 'legacy', apiKey: 'legacy-key' }] } })
+      expect(parse(await readFile(path, 'utf8'))).toMatchObject({ models: { profiles: [{ id: 'legacy', apiKey: 'legacy-key' }] } })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -121,7 +125,7 @@ describe('shared .terminal-agent/user-config model storage', () => {
   it('wraps a standalone version-1 model document before SSO and model reads', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-v1-wrap-'))
     try {
-      const path = join(directory, '.terminal-agent', 'user-config')
+      const path = join(directory, '.terminal-agent', 'user-config.yml')
       await mkdir(join(directory, '.terminal-agent'), { recursive: true })
       await writeFile(path, JSON.stringify({
         version: 1,
@@ -140,7 +144,7 @@ describe('shared .terminal-agent/user-config model storage', () => {
 
       const models = await new ModelProfileRepository(path, { userConfig: true }).load()
       expect(models).toMatchObject({ version: 2, activeLlmId: 'legacy-v1', profiles: [{ id: 'legacy-v1' }] })
-      const persisted = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+      const persisted = parse(await readFile(path, 'utf8')) as Record<string, unknown>
       expect(persisted).not.toHaveProperty('profiles')
       expect(persisted).toMatchObject({ version: 1, models: { version: 2, activeLlmId: 'legacy-v1' } })
     } finally {
@@ -151,7 +155,7 @@ describe('shared .terminal-agent/user-config model storage', () => {
   it('strips an embedded legacy API key when importing into protected storage', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-user-config-protected-import-'))
     try {
-      const path = join(directory, '.terminal-agent', 'user-config')
+      const path = join(directory, '.terminal-agent', 'user-config.yml')
       const repository = new ModelProfileRepository(path, { userConfig: true })
       const secrets = {
         load: vi.fn(async (key: string) => key === 'model-profile.embedded.apiKey' ? 'protected-key' : null),
@@ -174,7 +178,7 @@ describe('shared .terminal-agent/user-config model storage', () => {
       await expect(service.list('llm')).resolves.toEqual([
         expect.objectContaining({ id: 'embedded', hasApiKey: true, active: true }),
       ])
-      const persisted = JSON.parse(await readFile(path, 'utf8')) as {
+      const persisted = parse(await readFile(path, 'utf8')) as {
         models: { profiles: Array<Record<string, unknown>> }
       }
       expect(persisted.models.profiles[0]).not.toHaveProperty('apiKey')

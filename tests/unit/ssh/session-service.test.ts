@@ -691,7 +691,12 @@ describe('SessionService', () => {
     expect(shell.close).toHaveBeenCalledOnce()
     expect(connection.close).toHaveBeenCalledOnce()
     expect(closed).toEqual([{ sessionId: session.id }])
-    expect(() => service.close(session.id)).toThrow('Unknown terminal session')
+    // The transport may announce closure just before a user presses the close
+    // button. A stale close remains idempotent instead of escaping over IPC.
+    expect(() => service.close(session.id)).not.toThrow()
+    expect(shell.close).toHaveBeenCalledOnce()
+    expect(connection.close).toHaveBeenCalledOnce()
+    expect(closed).toEqual([{ sessionId: session.id }])
   })
 
   it('continues closing every session and announces closures when transport teardown throws', async () => {

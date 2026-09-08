@@ -1,3 +1,26 @@
+# Terminal-Agent v3.2.8
+
+Release date: 2026-09-08
+
+## 开源 TA 修改意见微调
+
+- 用户配置统一采用 `%USERPROFILE%\.terminal-agent\user-config.yml`；首次启动可兼容迁移旧版 JSON 配置，保留 API Key、单点登录、模型配置和未知扩展字段，并在 YAML 中提供中文配置注释。
+- 外观设置在桌面宽度下将五个主题并列展示；帝王金更新为高对比亮金工作界面，樱花粉同步适配原生最小化、最大化/还原和关闭窗口区域。
+- 文件传输入口调整为每个 SSH 卡片独立拥有的双栏本地/远程文件管理面板，支持目录浏览、双向右键和拖拽传输、实时进度，并在隐藏面板后继续保持已挂载连接和进行中的任务。
+- 文件传输记录与对应 Shell 历史绑定并持久保留；修复远端已断开时同时关闭会话导致的 `Unknown terminal session` 竞态错误。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-3.2.8.exe`
+- `putty.exe`
+- `快速安装脚本.cmd`
+- `快速安装手册.md`
+- `快速安装手册.pdf`
+- `Terminal-Agent-Quick-Install-3.2.8.zip`
+- `Terminal-Agent-Uninstall-Cleanup-3.2.8.zip`
+
+---
+
 # Terminal-Agent v3.2.7
 
 Release date: 2026-09-07

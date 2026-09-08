@@ -1,11 +1,16 @@
 import { dialog, ipcMain, type WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { dirname, isAbsolute, win32 } from 'node:path'
-import { lstat, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, relative, sep, win32 } from 'node:path'
+import { lstat, readdir, realpath, stat } from 'node:fs/promises'
 import {
   FILE_TRANSFER_MAX_BYTES,
+  FILE_TRANSFER_MAX_DIRECTORY_ENTRIES,
   fileTransferChannels,
   fileTransferDownloadRequestSchema,
+  fileTransferLocalDirectorySelectionSchema,
+  fileTransferLocalListRequestSchema,
+  fileTransferLocalListResultSchema,
   fileTransferListRequestSchema,
   fileTransferListResultSchema,
   fileTransferProgressSchema,
@@ -13,6 +18,8 @@ import {
   fileTransferUploadRequestSchema,
   type FileTransferDirection,
   type FileTransferDirectoryEntry,
+  type FileTransferLocalDirectorySelection,
+  type FileTransferLocalListResult,
   type FileTransferListResult,
   type FileTransferProgress,
   type FileTransferResult,
@@ -24,6 +31,7 @@ type TransferDialogResult = { canceled: boolean; filePath?: string }
 export type FileTransferDialogDependencies = {
   selectUploadFile: () => Promise<TransferDialogResult>
   selectDownloadPath: (defaultFileName: string) => Promise<TransferDialogResult>
+  selectLocalDirectory: () => Promise<TransferDialogResult>
 }
 
 /**
@@ -37,6 +45,8 @@ export type FileTransferHistorySink = {
 export type FileTransferHandlerOptions = Partial<FileTransferDialogDependencies> & {
   history?: FileTransferHistorySink
   now?: () => Date
+  /** Testable override for the stable first local-browser directory. */
+  localHomeDirectory?: string
 }
 
 type FileTransferSource = {
@@ -60,6 +70,13 @@ const defaultDialogDependencies: FileTransferDialogDependencies = {
     })
     return { canceled: result.canceled, filePath: result.filePath }
   },
+  selectLocalDirectory: async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择本地文件夹',
+      properties: ['openDirectory'],
+    })
+    return { canceled: result.canceled, filePath: result.filePaths[0] }
+  },
 }
 
 /**
@@ -77,8 +94,20 @@ export function registerFileTransferHandlers(
     ...defaultDialogDependencies,
     ...(options.selectUploadFile ? { selectUploadFile: options.selectUploadFile } : {}),
     ...(options.selectDownloadPath ? { selectDownloadPath: options.selectDownloadPath } : {}),
+    ...(options.selectLocalDirectory ? { selectLocalDirectory: options.selectLocalDirectory } : {}),
   }
   const now = options.now ?? (() => new Date())
+  // Explicit local paths are accepted only after the main-process picker has
+  // granted their containing directory.  This retains the existing boundary:
+  // a compromised renderer cannot turn file-transfer IPC into arbitrary local
+  // file system access merely by fabricating an absolute path.
+  const selectedLocalDirectoryRoots = new Set<string>()
+  const localHomeDirectory = options.localHomeDirectory ?? homedir()
+  let defaultLocalDirectory: Promise<string> | undefined
+  const ensureDefaultLocalDirectory = (): Promise<string> => {
+    defaultLocalDirectory ??= grantLocalDirectory(localHomeDirectory, selectedLocalDirectoryRoots)
+    return defaultLocalDirectory
+  }
 
   ipcMain.handle(fileTransferChannels.list, async (event, request: unknown): Promise<FileTransferListResult> => {
     assertTrustedSender(event, trustedSender)
@@ -93,6 +122,39 @@ export function registerFileTransferHandlers(
       })
     } catch (error) {
       throw new Error(publicDirectoryError(error), { cause: error })
+    }
+  })
+
+  ipcMain.handle(fileTransferChannels.selectLocalDirectory, async (event): Promise<FileTransferLocalDirectorySelection> => {
+    assertTrustedSender(event, trustedSender)
+    let selected: TransferDialogResult
+    try {
+      selected = await dialogs.selectLocalDirectory()
+    } catch (error) {
+      throw new Error('本地目录选择失败。', { cause: error })
+    }
+    if (selected.canceled || !selected.filePath) return fileTransferLocalDirectorySelectionSchema.parse({ canceled: true })
+    try {
+      const localPath = await grantLocalDirectory(selected.filePath, selectedLocalDirectoryRoots)
+      return fileTransferLocalDirectorySelectionSchema.parse({ canceled: false, localPath })
+    } catch (error) {
+      throw new Error(publicLocalDirectoryError(error), { cause: error })
+    }
+  })
+
+  ipcMain.handle(fileTransferChannels.listLocal, async (event, request: unknown): Promise<FileTransferLocalListResult> => {
+    assertTrustedSender(event, trustedSender)
+    const parsed = fileTransferLocalListRequestSchema.safeParse(request)
+    if (!parsed.success) throw new Error('本地目录请求无效。')
+    try {
+      const requestedPath = parsed.data.localPath ?? await ensureDefaultLocalDirectory()
+      const localPath = await resolveGrantedLocalDirectory(requestedPath, selectedLocalDirectoryRoots)
+      return fileTransferLocalListResultSchema.parse({
+        localPath,
+        entries: await listLocalDirectory(localPath),
+      })
+    } catch (error) {
+      throw new Error(publicLocalDirectoryError(error), { cause: error })
     }
   })
 
@@ -114,41 +176,46 @@ export function registerFileTransferHandlers(
       transferredBytes: 0,
     })
 
-    let selected: TransferDialogResult
-    try {
-      selected = await dialogs.selectUploadFile()
-    } catch (error) {
-      const failed = failTransfer(trustedSender, transferId, parsed.data.sessionId, direction, error)
-      await recordTransfer(options.history, {
-        sessionId: parsed.data.sessionId, id: transferId, direction, fileName, remotePath,
-        status: 'failed', transferredBytes: 0, message: failed.message, startedAt, endedAt: now().toISOString(),
-      })
-      throw failed
-    }
-    if (selected.canceled || !selected.filePath) {
-      emitProgress(trustedSender, {
-        transferId,
-        sessionId: parsed.data.sessionId,
-        direction,
-        phase: 'canceled',
-        transferredBytes: 0,
-        message: '已取消文件上传。',
-      })
-      await recordTransfer(options.history, {
-        sessionId: parsed.data.sessionId, id: transferId, direction, fileName, remotePath,
-        status: 'canceled', transferredBytes: 0, message: '已取消文件上传。', startedAt, endedAt: now().toISOString(),
-      })
-      return fileTransferResultSchema.parse({
-        transferId,
-        sessionId: parsed.data.sessionId,
-        direction,
-        status: 'canceled',
-        transferredBytes: 0,
-      })
+    let selected: TransferDialogResult | undefined
+    if (!parsed.data.localPath) {
+      try {
+        selected = await dialogs.selectUploadFile()
+      } catch (error) {
+        const failed = failTransfer(trustedSender, transferId, parsed.data.sessionId, direction, error)
+        await recordTransfer(options.history, {
+          sessionId: parsed.data.sessionId, id: transferId, direction, fileName, remotePath,
+          status: 'failed', transferredBytes: 0, message: failed.message, startedAt, endedAt: now().toISOString(),
+        })
+        throw failed
+      }
+      if (selected.canceled || !selected.filePath) {
+        emitProgress(trustedSender, {
+          transferId,
+          sessionId: parsed.data.sessionId,
+          direction,
+          phase: 'canceled',
+          transferredBytes: 0,
+          message: '已取消文件上传。',
+        })
+        await recordTransfer(options.history, {
+          sessionId: parsed.data.sessionId, id: transferId, direction, fileName, remotePath,
+          status: 'canceled', transferredBytes: 0, message: '已取消文件上传。', startedAt, endedAt: now().toISOString(),
+        })
+        return fileTransferResultSchema.parse({
+          transferId,
+          sessionId: parsed.data.sessionId,
+          direction,
+          status: 'canceled',
+          transferredBytes: 0,
+        })
+      }
     }
 
     try {
-      const localPath = await validateUploadPath(selected.filePath)
+      if (parsed.data.localPath) await ensureDefaultLocalDirectory()
+      const localPath = parsed.data.localPath
+        ? await validateGrantedUploadPath(parsed.data.localPath, selectedLocalDirectoryRoots)
+        : await validateUploadPath(selected!.filePath!)
       fileName = displayFileName(localPath)
       const remoteTarget = uploadRemoteTarget(parsed.data.remotePath, fileName)
       remotePath = remoteTarget
@@ -222,41 +289,46 @@ export function registerFileTransferHandlers(
     let fileName = suggestedName
     const remotePath = parsed.data.remotePath
     let totalBytes: number | undefined
-    let selected: TransferDialogResult
-    try {
-      selected = await dialogs.selectDownloadPath(suggestedName)
-    } catch (error) {
-      const failed = failTransfer(trustedSender, transferId, parsed.data.sessionId, direction, error)
-      await recordTransfer(options.history, {
-        sessionId: parsed.data.sessionId, id: transferId, direction, fileName, remotePath,
-        status: 'failed', transferredBytes: 0, message: failed.message, startedAt, endedAt: now().toISOString(),
-      })
-      throw failed
-    }
-    if (selected.canceled || !selected.filePath) {
-      emitProgress(trustedSender, {
-        transferId,
-        sessionId: parsed.data.sessionId,
-        direction,
-        phase: 'canceled',
-        transferredBytes: 0,
-        message: '已取消文件下载。',
-      })
-      await recordTransfer(options.history, {
-        sessionId: parsed.data.sessionId, id: transferId, direction, fileName, remotePath,
-        status: 'canceled', transferredBytes: 0, message: '已取消文件下载。', startedAt, endedAt: now().toISOString(),
-      })
-      return fileTransferResultSchema.parse({
-        transferId,
-        sessionId: parsed.data.sessionId,
-        direction,
-        status: 'canceled',
-        transferredBytes: 0,
-      })
+    let selected: TransferDialogResult | undefined
+    if (!parsed.data.localPath) {
+      try {
+        selected = await dialogs.selectDownloadPath(suggestedName)
+      } catch (error) {
+        const failed = failTransfer(trustedSender, transferId, parsed.data.sessionId, direction, error)
+        await recordTransfer(options.history, {
+          sessionId: parsed.data.sessionId, id: transferId, direction, fileName, remotePath,
+          status: 'failed', transferredBytes: 0, message: failed.message, startedAt, endedAt: now().toISOString(),
+        })
+        throw failed
+      }
+      if (selected.canceled || !selected.filePath) {
+        emitProgress(trustedSender, {
+          transferId,
+          sessionId: parsed.data.sessionId,
+          direction,
+          phase: 'canceled',
+          transferredBytes: 0,
+          message: '已取消文件下载。',
+        })
+        await recordTransfer(options.history, {
+          sessionId: parsed.data.sessionId, id: transferId, direction, fileName, remotePath,
+          status: 'canceled', transferredBytes: 0, message: '已取消文件下载。', startedAt, endedAt: now().toISOString(),
+        })
+        return fileTransferResultSchema.parse({
+          transferId,
+          sessionId: parsed.data.sessionId,
+          direction,
+          status: 'canceled',
+          transferredBytes: 0,
+        })
+      }
     }
 
     try {
-      const localPath = await validateDownloadPath(selected.filePath)
+      if (parsed.data.localPath) await ensureDefaultLocalDirectory()
+      const localPath = parsed.data.localPath
+        ? await validateGrantedDownloadDirectory(parsed.data.localPath, suggestedName, selectedLocalDirectoryRoots)
+        : await validateDownloadPath(selected!.filePath!)
       fileName = displayFileName(localPath)
       emitProgress(trustedSender, {
         transferId,
@@ -315,6 +387,8 @@ export function registerFileTransferHandlers(
     if (disposed) return
     disposed = true
     ipcMain.removeHandler(fileTransferChannels.list)
+    ipcMain.removeHandler(fileTransferChannels.selectLocalDirectory)
+    ipcMain.removeHandler(fileTransferChannels.listLocal)
     ipcMain.removeHandler(fileTransferChannels.upload)
     ipcMain.removeHandler(fileTransferChannels.download)
   }
@@ -374,6 +448,101 @@ async function validateDownloadPath(value: string): Promise<string> {
     throw new Error('本地保存路径必须是普通文件。')
   }
   return path
+}
+
+/** Add one picker-confirmed directory as a root available to local browsing. */
+async function grantLocalDirectory(value: string, roots: Set<string>): Promise<string> {
+  const localPath = await resolveLocalDirectory(value)
+  roots.add(localPath)
+  return localPath
+}
+
+/** Resolve a browsed local directory without allowing symlink traversal. */
+async function resolveGrantedLocalDirectory(value: string, roots: ReadonlySet<string>): Promise<string> {
+  const localPath = await resolveLocalDirectory(value)
+  if (![...roots].some(root => isWithinLocalRoot(root, localPath))) {
+    throw new Error('请先选择本地目录后重试。')
+  }
+  return localPath
+}
+
+async function resolveLocalDirectory(value: string): Promise<string> {
+  const path = validateLocalPath(value, '本地目录')
+  const details = await lstat(path).catch(() => undefined)
+  if (!details || !details.isDirectory() || details.isSymbolicLink()) {
+    throw new Error('请选择存在的普通本地目录。')
+  }
+  try {
+    return await realpath(path)
+  } catch {
+    throw new Error('本地目录不存在或不可访问。')
+  }
+}
+
+async function validateGrantedUploadPath(value: string, roots: ReadonlySet<string>): Promise<string> {
+  const path = await validateUploadPath(value)
+  let canonical: string
+  try {
+    canonical = await realpath(path)
+  } catch {
+    throw new Error('请选择存在的普通本地文件。')
+  }
+  if (![...roots].some(root => isWithinLocalRoot(root, canonical))) {
+    throw new Error('请选择本地目录中的文件后重试。')
+  }
+  return canonical
+}
+
+async function validateGrantedDownloadDirectory(
+  value: string,
+  fileName: string,
+  roots: ReadonlySet<string>,
+): Promise<string> {
+  const directory = await resolveGrantedLocalDirectory(value, roots)
+  return validateDownloadPath(join(directory, fileName))
+}
+
+function isWithinLocalRoot(root: string, candidate: string): boolean {
+  const pathDifference = relative(root, candidate)
+  return pathDifference === '' || (!pathDifference.startsWith(`..${sep}`) && pathDifference !== '..' && !isAbsolute(pathDifference))
+}
+
+async function listLocalDirectory(directory: string): Promise<FileTransferDirectoryEntry[]> {
+  const rawEntries = await readdir(directory, { withFileTypes: true })
+  if (rawEntries.length > FILE_TRANSFER_MAX_DIRECTORY_ENTRIES) {
+    throw new Error('本地目录条目过多，请缩小目录范围后重试。')
+  }
+  const entries: Array<FileTransferDirectoryEntry | undefined> = await Promise.all(rawEntries.map(async entry => {
+    if (!isSafeLocalEntryName(entry.name)) return undefined
+    const details = await lstat(join(directory, entry.name)).catch(() => undefined)
+    if (!details) return undefined
+    const kind = details.isDirectory()
+      ? 'directory'
+      : details.isFile()
+        ? 'file'
+        : details.isSymbolicLink()
+          ? 'symlink'
+          : 'other'
+    return {
+      name: entry.name,
+      kind,
+      size: finiteNonNegativeInteger(details.size) ?? 0,
+      modifiedAt: details.mtime.toISOString(),
+      mode: details.mode & 0o7777,
+      ...(finiteNonNegativeInteger(details.uid) === undefined ? {} : { uid: finiteNonNegativeInteger(details.uid) }),
+      ...(finiteNonNegativeInteger(details.gid) === undefined ? {} : { gid: finiteNonNegativeInteger(details.gid) }),
+    } as FileTransferDirectoryEntry
+  }))
+  return entries.filter((entry): entry is FileTransferDirectoryEntry => entry !== undefined)
+}
+
+function isSafeLocalEntryName(value: string): boolean {
+  return Boolean(value.trim()) && value !== '.' && value !== '..' && value.length <= 255
+    && !/[\\/]/.test(value) && !containsControlCharacters(value)
+}
+
+function finiteNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
 function validateLocalPath(value: string, operation: string): string {
@@ -463,4 +632,10 @@ function publicDirectoryError(error: unknown): string {
   if (raw.includes('Unknown terminal session')) return 'SSH 会话已关闭，请重新连接后重试。'
   if (raw.includes('目录条目过多')) return raw
   return '远程目录读取失败，请检查 SSH 连接和远程路径。'
+}
+
+function publicLocalDirectoryError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  if (raw.includes('请选择') || raw.includes('本地目录') || raw.includes('目录条目过多')) return raw
+  return '本地目录读取失败，请重新选择本地目录后重试。'
 }

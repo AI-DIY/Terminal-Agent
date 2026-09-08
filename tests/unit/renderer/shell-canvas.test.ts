@@ -199,6 +199,20 @@ describe('ShellCanvas Task 7 history actions', () => {
     expect(canvas).toContain("emit('reorder', ids)")
   })
 
+  it('keeps each file-transfer surface under its own SSH card without unmounting a hidden transfer', () => {
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+
+    expect(canvas).toContain('const fileTransferVisibleSessionIds = ref(new Set<string>())')
+    expect(canvas).toContain('function toggleFileTransfer(sessionId: string): void')
+    expect(canvas).toContain('@click.stop="toggleFileTransfer(session.id)"')
+    expect(canvas).toContain('fileTransferBusySessionIds.has(session.id)')
+    expect(canvas).toContain('fileTransferPanelSessionIds.includes(session.id)')
+    expect(canvas).toContain('v-show="isFileTransferVisible(session.id)"')
+    expect(canvas).toContain('@close="hideFileTransfer(session.id)"')
+    expect(canvas).not.toContain('class="file-transfer-dock"')
+    expect(canvas).not.toContain('SSH 文件传输面板')
+  })
+
   it('uses the resolved display label for full-host tooltips instead of a relay route', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     const tabs = readFileSync(new URL('../../../src/renderer/src/components/SessionTabs.vue', import.meta.url), 'utf8')

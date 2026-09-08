@@ -301,9 +301,10 @@ export class SessionService {
 
   close(sessionId: string): void {
     const session = this.sessions.get(sessionId)
-    if (!session) {
-      throw new Error('Unknown terminal session')
-    }
+    // A transport close event can win the race with the renderer's close
+    // button. Closing an already-finished session is intentionally a no-op so
+    // that normal teardown does not surface as an IPC error to the workbench.
+    if (!session) return
     try {
       session.shell.close()
     } finally {

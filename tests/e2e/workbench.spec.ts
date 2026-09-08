@@ -476,7 +476,7 @@ test('opens historical SSH dialogs without multi-select while closed SSH uses th
   }
 })
 
-test('keeps file transfer at workspace level and retains read-only history without reconnect controls', async ({ launchApp }) => {
+test('keeps file transfer with its SSH pane and retains read-only history without reconnect controls', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -493,7 +493,9 @@ test('keeps file transfer at workspace level and retains read-only history witho
     await expect(page.getByRole('button', { name: '终端操作 127.0.0.1', exact: true })).toHaveCount(0)
     await expect(page.getByRole('menu', { name: '终端操作 127.0.0.1', exact: true })).toHaveCount(0)
 
-    await expect(page.getByRole('button', { name: '显示文件传输', exact: true })).toBeVisible()
+    const terminalFrame = originalPane.locator('..')
+    const fileTransferButton = terminalFrame.getByRole('button', { name: '显示 127.0.0.1 的文件传输', exact: true })
+    await expect(fileTransferButton).toBeVisible()
     await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(0)
     const broadcastInput = page.getByPlaceholder('输入要发送到所有在线 SSH 的命令', { exact: true })
     const broadcastSend = page.getByRole('button', { name: '发送所有窗口执行', exact: true })
@@ -502,16 +504,20 @@ test('keeps file transfer at workspace level and retains read-only history witho
     await page.getByRole('checkbox', { name: '启用发送键输入到所有会话', exact: true }).check()
     await expect(broadcastInput).toBeEnabled()
 
-    await page.getByRole('button', { name: '显示文件传输', exact: true }).click()
+    await fileTransferButton.click()
     const transferPanel = page.getByLabel('文件传输', { exact: true })
     await expect(transferPanel).toBeVisible()
-    await expect(page.getByLabel('SSH 文件传输面板', { exact: true })).toBeVisible()
+    await expect(terminalFrame.getByLabel('127.0.0.1 的文件传输', { exact: true })).toBeVisible()
     await expect(transferPanel.getByText('本地（左）', { exact: true })).toBeVisible()
     await expect(transferPanel.getByText('远程（右）', { exact: true })).toBeVisible()
+    await expect(transferPanel.getByLabel('本地文件目录', { exact: true })).toBeVisible()
+    await expect(transferPanel.getByLabel('远程文件目录', { exact: true })).toBeVisible()
+    await expect(transferPanel.getByLabel('选择本地目录', { exact: true })).toBeVisible()
+    await expect(transferPanel.locator('input[id^="file-transfer-local-path-"]')).not.toHaveValue('')
     await transferPanel.getByRole('button', { name: '关闭文件传输', exact: true }).click()
     await expect(transferPanel).toBeHidden()
-    // Closing the dock changes visibility only.  This is what keeps an active
-    // transfer mounted when a user collapses the workspace panel.
+    // Closing this SSH pane's transfer section changes visibility only. This
+    // is what keeps an active transfer mounted when the user collapses it.
     await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(1)
 
     await page.getByRole('button', { name: '关闭画布终端会话 127.0.0.1', exact: true }).click()
@@ -1067,7 +1073,7 @@ test('captures WebContents layouts across persisted themes with native-control s
         const themeGroup = page.getByRole('group', { name: '工作台主题', exact: true })
         await expect(themeGroup.getByRole('button')).toHaveCount(5)
         const themeColumns = await themeGroup.evaluate(node => getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/).length)
-        expect(themeColumns).toBe(3)
+        expect(themeColumns).toBe(viewport.width > 960 ? 5 : 3)
         await themeGroup.getByRole('button', { name: theme.control }).click()
         await expect(page.getByRole('status')).toContainText('外观已保存')
         await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({ theme: theme.id })
@@ -1428,7 +1434,7 @@ test('renders two real SSH sessions in separate terminal panes with isolated out
     const panes = page.locator('[data-testid^="terminal-pane-"]')
     await expect(panes).toHaveCount(2)
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1' })).toHaveCount(2)
-    await expect(page.getByRole('button', { name: '显示文件传输', exact: true })).toHaveCount(1)
+    await expect(page.locator('.terminal-actions .file-transfer-button')).toHaveCount(2)
     await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(0)
 
     await sendCommand(panes.nth(0), page, 'alpha')

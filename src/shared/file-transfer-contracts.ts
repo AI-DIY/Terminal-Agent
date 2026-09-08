@@ -24,11 +24,30 @@ export const fileTransferRemotePathSchema = z.string()
   .max(FILE_TRANSFER_MAX_PATH_LENGTH, '远程路径过长。')
   .refine(value => !containsControlCharacters(value), '远程路径包含不可用字符。')
 
+/**
+ * Local paths are intentionally represented separately from remote paths.
+ * The main process additionally requires them to sit beneath a directory the
+ * user selected through the native directory picker before it reads or writes
+ * through one of these paths.
+ */
+export const fileTransferLocalPathSchema = z.string()
+  .trim()
+  .min(1, '请输入本地路径。')
+  .max(FILE_TRANSFER_MAX_PATH_LENGTH, '本地路径过长。')
+  .refine(value => !containsControlCharacters(value), '本地路径包含不可用字符。')
+export type FileTransferLocalPath = z.infer<typeof fileTransferLocalPathSchema>
+
 const fileTransferRequestBase = {
   sessionId: terminalSessionIdSchema,
   remotePath: fileTransferRemotePathSchema,
   /** Optional so callers can correlate progress; the main process generates one when omitted. */
   transferId: fileTransferIdSchema.optional(),
+  /**
+   * For uploads this is a selected local file. For downloads it is a selected
+   * local directory, into which the main process writes the remote basename.
+   * Omitting it retains the existing native file/save dialog behavior.
+   */
+  localPath: fileTransferLocalPathSchema.optional(),
 }
 
 export const fileTransferUploadRequestSchema = z.object(fileTransferRequestBase).strict()
@@ -79,6 +98,29 @@ export const fileTransferListResultSchema = z.object({
 }).strict()
 export type FileTransferListResult = z.infer<typeof fileTransferListResultSchema>
 
+/** A native directory-picker result used to authorize local browsing. */
+export const fileTransferLocalDirectorySelectionSchema = z.discriminatedUnion('canceled', [
+  z.object({ canceled: z.literal(true) }).strict(),
+  z.object({ canceled: z.literal(false), localPath: fileTransferLocalPathSchema }).strict(),
+])
+export type FileTransferLocalDirectorySelection = z.infer<typeof fileTransferLocalDirectorySelectionSchema>
+
+/**
+ * Omit localPath to begin at the stable user-home directory.  A chosen folder
+ * can then be supplied on later calls to browse that folder or its children.
+ */
+export const fileTransferLocalListRequestSchema = z.object({
+  localPath: fileTransferLocalPathSchema.optional(),
+}).strict()
+export type FileTransferLocalListRequest = z.infer<typeof fileTransferLocalListRequestSchema>
+
+/** Local entries deliberately share the metadata-only remote entry shape. */
+export const fileTransferLocalListResultSchema = z.object({
+  localPath: fileTransferLocalPathSchema,
+  entries: z.array(fileTransferDirectoryEntrySchema).max(FILE_TRANSFER_MAX_DIRECTORY_ENTRIES),
+}).strict()
+export type FileTransferLocalListResult = z.infer<typeof fileTransferLocalListResultSchema>
+
 export const fileTransferProgressSchema = z.object({
   transferId: fileTransferIdSchema,
   sessionId: terminalSessionIdSchema,
@@ -105,6 +147,8 @@ export const fileTransferChannels = Object.freeze({
   upload: 'file-transfer:upload',
   download: 'file-transfer:download',
   list: 'file-transfer:list',
+  listLocal: 'file-transfer:list-local',
+  selectLocalDirectory: 'file-transfer:select-local-directory',
   progress: 'file-transfer:progress',
 } as const)
 

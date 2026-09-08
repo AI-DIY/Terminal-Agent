@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import { createDefaultSsoConfiguration, ssoDocumentSchema } from '../../../src/shared/sso-contracts'
 
 describe('Terminal-Agent NSIS bridge registration lifecycle', () => {
@@ -23,19 +24,24 @@ describe('Terminal-Agent NSIS bridge registration lifecycle', () => {
     expect(install).toContain('ReadEnvStr')
     expect(install).toContain('"USERPROFILE"')
     expect(install).toContain('.terminal-agent')
+    expect(install).toContain('.terminal-agent\\user-config')
     expect(install).toContain('.ta\\user-config')
-    expect(install).toMatch(/IfFileExists\s+"\$1\\user-config"\s+done_config[\s\S]*IfFileExists\s+"\$4"\s+done_config[\s\S]*CreateDirectory\s+"\$1"/)
-    expect(install).toContain('user-config')
+    expect(install).toMatch(/IfFileExists\s+"\$1\\user-config\.yml"\s+done_config[\s\S]*IfFileExists\s+"\$4"\s+done_config[\s\S]*IfFileExists\s+"\$5"\s+done_config[\s\S]*CreateDirectory\s+"\$1"/)
+    expect(install).toContain('user-config.yml')
     expect(install).toContain('CreateDirectory')
     expect(install).toMatch(/GetTempFileName\s+\$2\s+"\$1"/)
     expect(install).toMatch(/FileOpen\s+\$3\s+"\$2"\s+w/)
-    expect(install).toMatch(/MoveFileEx\(t\s+r2,\s*t\s+"\$1\\user-config",\s*i\s+0\)/)
+    expect(install).toMatch(/MoveFileEx\(t\s+r2,\s*t\s+"\$1\\user-config\.yml",\s*i\s+0\)/)
     expect(install).not.toMatch(/FileOpen[^\r\n]*user-config[^\r\n]*\sw/)
 
-    const payload = /FileWrite\s+\$3\s+'([^'\r\n]+)'/.exec(install)?.[1]
-    expect(payload).toBeDefined()
-    expect([...payload!].every(character => character.codePointAt(0)! <= 0x7f)).toBe(true)
-    const document = ssoDocumentSchema.parse(JSON.parse(payload!))
+    const payload = [...install.matchAll(/FileWrite\s+\$3\s+'([^']*)'/g)]
+      .map(match => match[1].replace(/\$\\r\$\\n/g, '\n'))
+      .join('')
+    expect(payload).toContain('# 用户配置文件格式版本，请勿手动修改。')
+    expect(payload).toContain('# 是否启用单点登录。')
+    expect(payload).toContain('# 平台地址匹配方式：exact、prefix 或 regex。')
+    expect(payload).toContain('# 用户信息响应中姓名的字段路径。')
+    const document = ssoDocumentSchema.parse(parse(payload))
     expect(document).toEqual({ version: 1, sso: createDefaultSsoConfiguration() })
 
     expect(uninstall).not.toContain('user-config')

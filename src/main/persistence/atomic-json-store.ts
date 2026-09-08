@@ -36,6 +36,22 @@ export type AtomicJsonStoreOptions = {
   backupCorrupt?: boolean
   /** @internal Used to force source-key collisions in deterministic tests. */
   corruptSourceKey?: (source: Buffer) => string
+  /**
+   * Overrides the on-disk representation while retaining this store's atomic
+   * publication, corruption backup, validation, and concurrency behaviour.
+   */
+  codec?: AtomicJsonStoreCodec
+}
+
+export type AtomicJsonStoreCodec = {
+  parse(source: string): unknown
+  stringify(value: unknown): string
+  invalidDataMessage?: string
+}
+
+const jsonCodec: AtomicJsonStoreCodec = {
+  parse: source => JSON.parse(source),
+  stringify: value => JSON.stringify(value),
 }
 
 const defaultFileSystem: AtomicJsonStoreFileSystem = {
@@ -74,6 +90,7 @@ export class AtomicJsonStore<T> {
   private readonly migrate: AtomicJsonStoreOptions['migrate']
   private readonly backupCorrupt: boolean
   private readonly corruptSourceKey: (source: Buffer) => string
+  private readonly codec: AtomicJsonStoreCodec
 
   constructor(
     private readonly path: string,
@@ -87,6 +104,7 @@ export class AtomicJsonStore<T> {
     this.migrate = options.migrate
     this.backupCorrupt = options.backupCorrupt ?? true
     this.corruptSourceKey = options.corruptSourceKey ?? hashSource
+    this.codec = options.codec ?? jsonCodec
   }
 
   load(): Promise<T> {
@@ -143,7 +161,7 @@ export class AtomicJsonStore<T> {
 
       const empty = this.schema.parse(await (initializer ? initializer() : this.empty()))
       await this.fileSystem.mkdir(dirname(this.path), { recursive: true })
-      const serialized = JSON.stringify(empty)
+      const serialized = this.codec.stringify(empty)
       const attemptedPaths = new Set<string>()
 
       while (true) {
@@ -200,10 +218,10 @@ export class AtomicJsonStore<T> {
     let decoded: unknown
 
     try {
-      decoded = JSON.parse(utf8Decoder.decode(source))
+      decoded = this.codec.parse(utf8Decoder.decode(source))
     } catch (error) {
       if (this.backupCorrupt) await this.backUpCorruptFileOnce(source)
-      throw createInvalidDataError(error)
+      throw createInvalidDataError(error, this.codec.invalidDataMessage)
     }
 
     try {
@@ -217,7 +235,7 @@ export class AtomicJsonStore<T> {
       }
 
       if (this.backupCorrupt) await this.backUpCorruptFileOnce(source)
-      throw createInvalidDataError(error)
+      throw createInvalidDataError(error, this.codec.invalidDataMessage)
     }
   }
 
@@ -293,7 +311,7 @@ export class AtomicJsonStore<T> {
 
   private async writeAtomically(data: T): Promise<void> {
     const directory = dirname(this.path)
-    const serialized = JSON.stringify(data)
+    const serialized = this.codec.stringify(data)
     const attemptedPaths = new Set<string>()
 
     await this.fileSystem.mkdir(directory, { recursive: true })
@@ -359,8 +377,8 @@ export function isAtomicJsonStoreInvalidDataError(error: unknown): boolean {
   return error instanceof Error && invalidDataErrors.has(error)
 }
 
-function createInvalidDataError(cause: unknown): Error {
-  const error = new Error(invalidDataMessage, { cause })
+function createInvalidDataError(cause: unknown, message = invalidDataMessage): Error {
+  const error = new Error(message, { cause })
   invalidDataErrors.add(error)
   return error
 }

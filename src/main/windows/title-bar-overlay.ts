@@ -12,10 +12,10 @@ export function titleBarOverlayForTheme(input: WorkbenchTheme): TitleBarOverlay 
     return { color: '#302044', symbolColor: '#f7f0ff', height: TITLE_BAR_OVERLAY_HEIGHT }
   }
   if (theme === 'imperial-gold') {
-    return { color: '#4b3512', symbolColor: '#fff5d6', height: TITLE_BAR_OVERLAY_HEIGHT }
+    return { color: '#c99419', symbolColor: '#2b1a00', height: TITLE_BAR_OVERLAY_HEIGHT }
   }
   if (theme === 'sakura-pink') {
-    return { color: '#5b2d42', symbolColor: '#fff0f5', height: TITLE_BAR_OVERLAY_HEIGHT }
+    return { color: '#f8dfe8', symbolColor: '#4c2635', height: TITLE_BAR_OVERLAY_HEIGHT }
   }
   return { color: '#f0f3f6', symbolColor: '#1d242c', height: TITLE_BAR_OVERLAY_HEIGHT }
 }

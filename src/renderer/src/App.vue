@@ -137,30 +137,30 @@ watch(rootSurface, surface => {
   color-scheme: dark;
 }
 :root[data-theme="imperial-gold"] {
-  --chrome: #4b3512;
-  --panel: #34240d;
-  --surface: #241a0b;
-  --surface-soft: #2d200c;
-  --hover: #5a4018;
-  --selected: #634818;
-  --text-strong: #fff5d6;
-  --text: #f1dfae;
-  --muted: #cbb77f;
-  --faint: #9d8958;
-  --line: #6b5120;
-  --line-soft: #493716;
-  --accent: #e4b94f;
-  --accent-soft: #4a3715;
-  --focus: #f0ca68;
-  --green: #8ed1a6;
-  --green-soft: #203a29;
-  --amber: #f2c969;
-  --amber-soft: #493718;
-  --amber-line: #7b5d25;
-  --red: #ff9b8f;
-  --terminal: #1a1308;
-  --terminal-head: #2d200c;
-  --terminal-text: #f3e6c4;
+  --chrome: #c99419;
+  --panel: #3b2a04;
+  --surface: #211805;
+  --surface-soft: #2c2005;
+  --hover: #594008;
+  --selected: #73530a;
+  --text-strong: #fff5cf;
+  --text: #f3dda0;
+  --muted: #d2b76f;
+  --faint: #a78c42;
+  --line: #8a6615;
+  --line-soft: #523c09;
+  --accent: #ffd65a;
+  --accent-soft: #5a4207;
+  --focus: #ffe08a;
+  --green: #75d6a1;
+  --green-soft: #163d2b;
+  --amber: #ffd16b;
+  --amber-soft: #553c06;
+  --amber-line: #b4861f;
+  --red: #ff9b8e;
+  --terminal: #160f02;
+  --terminal-head: #3b2a04;
+  --terminal-text: #f7e9bd;
   color-scheme: dark;
 }
 :root[data-theme="sakura-pink"] {
@@ -195,7 +195,7 @@ html, body, #app { width: 100%; min-width: 0; height: 100%; margin: 0; overflow:
 body { background: #e7ebf0; color: var(--text); }
 :root[data-theme="graphite"] body { background: #121416; }
 :root[data-theme="noble-purple"] body { background: #120b1b; }
-:root[data-theme="imperial-gold"] body { background: #1b1408; }
+:root[data-theme="imperial-gold"] body { background: #120d02; }
 :root[data-theme="sakura-pink"] body { background: #fff4f7; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }

@@ -108,7 +108,8 @@ vi.mock('../../../src/main/settings/workbench-preferences-service', () => ({
   },
 }))
 vi.mock('../../../src/main/settings/sso-config-service', () => ({
-  getSsoConfigPath: vi.fn(() => 'D:\\terminal-agent-home\\.terminal-agent\\user-config'),
+  getSsoConfigPath: vi.fn(() => 'D:\\terminal-agent-home\\.terminal-agent\\user-config.yml'),
+  getPreviousSsoConfigPath: vi.fn(() => 'D:\\terminal-agent-home\\.terminal-agent\\user-config'),
   getLegacySsoConfigPath: vi.fn(() => 'D:\\terminal-agent-home\\.ta\\user-config'),
   SsoConfigService: class SsoConfigService { ensureInitialized() { return Promise.resolve() } },
 }))

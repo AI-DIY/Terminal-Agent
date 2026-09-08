@@ -13,11 +13,17 @@ import { normalizeSsoUrl, validateSsoMatcher } from '../sso/sso-url-matcher'
 import { AtomicJsonStore, isAtomicJsonStoreInvalidDataError } from '../persistence/atomic-json-store'
 import type { AtomicJsonStoreOptions } from '../persistence/atomic-json-store'
 import { withUserConfigPathLock } from './user-config-lock'
+import { userConfigYamlCodec } from './user-config-yaml'
 
 export { createDefaultSsoConfiguration }
 
 /** Canonical portable user configuration shared by SSO and model profiles. */
 export function getSsoConfigPath(homeDirectory: string): string {
+  return join(homeDirectory, '.terminal-agent', 'user-config.yml')
+}
+
+/** The JSON path used by the immediately previous release. */
+export function getPreviousSsoConfigPath(homeDirectory: string): string {
   return join(homeDirectory, '.terminal-agent', 'user-config')
 }
 
@@ -29,23 +35,32 @@ export function getLegacySsoConfigPath(homeDirectory: string): string {
 export type SsoConfigServiceOptions = Pick<AtomicJsonStoreOptions, 'fileSystem' | 'createId'> & {
   /** Optional legacy file to import when the canonical path is absent. */
   legacyPath?: string
+  /**
+   * Ordered JSON migration sources.  Earlier entries win conflicts while
+   * fields found only in a later source are retained.
+   */
+  legacyPaths?: readonly string[]
 }
 
 export class SsoConfigService {
   private readonly store: AtomicJsonStore<SsoDocument>
   private recoveryRequired = false
 
-  private readonly legacyPath: string | undefined
+  private readonly legacyPaths: readonly string[]
   private readonly legacyReadFile: (path: string) => Promise<Buffer>
 
   constructor(private readonly path: string, options: SsoConfigServiceOptions = {}) {
-    this.legacyPath = options.legacyPath
+    this.legacyPaths = uniquePaths([
+      ...(options.legacyPaths ?? []),
+      ...(options.legacyPath ? [options.legacyPath] : []),
+    ], path)
     this.legacyReadFile = options.fileSystem?.readFile ?? (async path => Buffer.from(await readFileFromDisk(path)))
     this.store = new AtomicJsonStore(path, ssoDocumentSchema, () => ({
       version: 1,
       sso: createDefaultSsoConfiguration(),
     }), {
       ...options,
+      codec: userConfigYamlCodec,
       // A model-profile document from an earlier build may already occupy the
       // shared path. Wrap it as a user-config document so SSO initialisation
       // remains fail-closed while preserving the model section.
@@ -74,22 +89,33 @@ export class SsoConfigService {
    */
   private async readLegacyOrDefault(): Promise<SsoDocument> {
     const empty = (): SsoDocument => ({ version: 1, sso: createDefaultSsoConfiguration() })
-    if (!this.legacyPath || samePath(this.path, this.legacyPath)) return empty()
+    const imported: ImportedSsoDocument[] = []
 
-    let source: Buffer
-    try {
-      source = await this.legacyReadFile(this.legacyPath)
-    } catch (error) {
-      if (isMissingFile(error)) return empty()
-      throw error
+    for (const legacyPath of this.legacyPaths) {
+      let source: Buffer
+      try {
+        source = await this.legacyReadFile(legacyPath)
+      } catch (error) {
+        if (isMissingFile(error)) continue
+        throw error
+      }
+
+      // Keep every JSON source untouched.  Parsing and schema validation happen
+      // before publication; unknown top-level fields are retained by the
+      // passthrough user-config envelope below.
+      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(source)
+      const persisted = JSON.parse(decoded) as unknown
+      imported.push({
+        document: ssoDocumentSchema.parse(migrateSsoDocument(persisted).value),
+        syntheticSso: isRecord(persisted) && isStandaloneModelProfileDocument(persisted),
+      })
     }
 
-    // Keep the legacy source untouched.  Parsing and schema validation happen
-    // before publication; unknown top-level fields are retained by the
-    // passthrough user-config envelope below.
-    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(source)
-    const persisted = JSON.parse(decoded) as unknown
-    return ssoDocumentSchema.parse(migrateSsoDocument(persisted).value)
+    if (imported.length === 0) return empty()
+    // The most recent no-extension .terminal-agent document is listed first.
+    // Overlay it last while retaining values found only in the older .ta file.
+    const [first, ...remaining] = imported.slice().reverse()
+    return remaining.reduce((merged, source) => mergeDocuments(merged, source.document, source.syntheticSso), first.document)
   }
 
   async get(): Promise<SsoConfiguration> {
@@ -163,6 +189,39 @@ function samePath(left: string, right: string): boolean {
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved
   }
   return normalize(left) === normalize(right)
+}
+
+function uniquePaths(paths: readonly string[], canonicalPath: string): string[] {
+  const unique: string[] = []
+  for (const path of paths) {
+    if (!path || samePath(path, canonicalPath) || unique.some(existing => samePath(existing, path))) continue
+    unique.push(path)
+  }
+  return unique
+}
+
+type ImportedSsoDocument = {
+  document: SsoDocument
+  /** A standalone model document receives a default SSO section only to satisfy the schema. */
+  syntheticSso: boolean
+}
+
+function mergeDocuments(base: SsoDocument, overlay: SsoDocument, omitSyntheticSso = false): SsoDocument {
+  if (!omitSyntheticSso) return ssoDocumentSchema.parse(mergeRecords(base, overlay))
+  const withoutSyntheticSso: Record<string, unknown> = { ...overlay }
+  delete withoutSyntheticSso.sso
+  return ssoDocumentSchema.parse(mergeRecords(base, withoutSyntheticSso))
+}
+
+function mergeRecords(base: Record<string, unknown>, overlay: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base }
+  for (const [key, value] of Object.entries(overlay)) {
+    const previous = merged[key]
+    merged[key] = isRecord(previous) && isRecord(value)
+      ? mergeRecords(previous, value)
+      : value
+  }
+  return merged
 }
 
 function isMissingFile(error: unknown): error is NodeJS.ErrnoException {

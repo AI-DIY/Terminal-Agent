@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { registerFileTransferHandlers } from '../../../src/main/ipc/register-file-transfer-handlers'
@@ -37,6 +37,84 @@ describe('registerFileTransferHandlers', () => {
     })
     expect(listDirectory).toHaveBeenCalledWith('session-1', '/tmp')
     expect(sender.send).not.toHaveBeenCalled()
+  })
+
+  it('starts local browsing at a stable home directory and permits an explicitly selected directory', async () => {
+    const homeDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-local-browser-home-'))
+    const selectedDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-local-browser-selected-'))
+    await mkdir(join(homeDirectory, 'nested'))
+    await writeFile(join(homeDirectory, 'report.txt'), 'data', 'utf8')
+    await writeFile(join(selectedDirectory, 'external.txt'), 'data', 'utf8')
+    const sender = createSender()
+    const selectLocalDirectory = vi.fn().mockResolvedValue({ canceled: false, filePath: selectedDirectory })
+    registerFileTransferHandlers({ uploadFile: vi.fn(), downloadFile: vi.fn() }, sender as never, {
+      localHomeDirectory: homeDirectory,
+      selectLocalDirectory,
+    })
+
+    try {
+      const home = await handlerFor('file-transfer:list-local')(trustedEvent(sender), {})
+      expect(home).toMatchObject({
+        entries: expect.arrayContaining([
+          expect.objectContaining({ name: 'nested', kind: 'directory' }),
+          expect.objectContaining({ name: 'report.txt', kind: 'file', size: 4 }),
+        ]),
+      })
+
+      const selected = await handlerFor('file-transfer:select-local-directory')(trustedEvent(sender))
+      expect(selected).toMatchObject({ canceled: false, localPath: expect.any(String) })
+      expect(selectLocalDirectory).toHaveBeenCalledOnce()
+
+      const external = await handlerFor('file-transfer:list-local')(trustedEvent(sender), { localPath: (selected as { localPath: string }).localPath })
+      expect(external).toMatchObject({ entries: [expect.objectContaining({ name: 'external.txt', kind: 'file' })] })
+
+      const outsideDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-local-browser-outside-'))
+      try {
+        await expect(handlerFor('file-transfer:list-local')(trustedEvent(sender), { localPath: outsideDirectory })).rejects.toThrow('请先选择本地目录后重试。')
+      } finally {
+        await rm(outsideDirectory, { recursive: true, force: true })
+      }
+    } finally {
+      await rm(homeDirectory, { recursive: true, force: true })
+      await rm(selectedDirectory, { recursive: true, force: true })
+    }
+  })
+
+  it('uses authorized explicit local paths without opening dialogs or recording their absolute paths', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-explicit-local-transfer-'))
+    const uploadPath = join(directory, 'upload.txt')
+    const downloadDirectory = join(directory, 'downloads')
+    await writeFile(uploadPath, 'data', 'utf8')
+    await mkdir(downloadDirectory)
+    const sender = createSender()
+    const selectUploadFile = vi.fn()
+    const selectDownloadPath = vi.fn()
+    const history = { recordFileTransfer: vi.fn() }
+    const uploadFile = vi.fn().mockResolvedValue(4)
+    const downloadFile = vi.fn().mockResolvedValue(4)
+    registerFileTransferHandlers({ uploadFile, downloadFile }, sender as never, {
+      localHomeDirectory: directory,
+      selectUploadFile,
+      selectDownloadPath,
+      history,
+    })
+
+    try {
+      await handlerFor('file-transfer:upload')(trustedEvent(sender), {
+        sessionId: 'session-explicit-upload', remotePath: '/srv/upload.txt', localPath: uploadPath,
+      })
+      await handlerFor('file-transfer:download')(trustedEvent(sender), {
+        sessionId: 'session-explicit-download', remotePath: '/srv/download.txt', localPath: downloadDirectory,
+      })
+
+      expect(uploadFile).toHaveBeenCalledWith('session-explicit-upload', uploadPath, '/srv/upload.txt', expect.any(Function))
+      expect(downloadFile).toHaveBeenCalledWith('session-explicit-download', '/srv/download.txt', join(downloadDirectory, 'download.txt'), expect.any(Function))
+      expect(selectUploadFile).not.toHaveBeenCalled()
+      expect(selectDownloadPath).not.toHaveBeenCalled()
+      expect(JSON.stringify(history.recordFileTransfer.mock.calls)).not.toContain(directory)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it('keeps native file selection in the main process and reports upload progress', async () => {
@@ -226,11 +304,17 @@ describe('registerFileTransferHandlers', () => {
     expect(listDirectory).not.toHaveBeenCalled()
   })
 
-  it('removes both transfer handlers on dispose', () => {
+  it('removes all transfer handlers on dispose', () => {
     const dispose = registerFileTransferHandlers({ uploadFile: vi.fn(), downloadFile: vi.fn() }, createSender() as never)
     dispose()
     dispose()
-    expect(removeHandler.mock.calls.map(([channel]) => channel)).toEqual(['file-transfer:list', 'file-transfer:upload', 'file-transfer:download'])
+    expect(removeHandler.mock.calls.map(([channel]) => channel)).toEqual([
+      'file-transfer:list',
+      'file-transfer:select-local-directory',
+      'file-transfer:list-local',
+      'file-transfer:upload',
+      'file-transfer:download',
+    ])
   })
 })
 

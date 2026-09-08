@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('SSH workspace file-transfer controls', () => {
-  it('provides one guarded workspace broadcast bar and a persistent transfer dock', () => {
+  it('keeps transfer panels attached to their own SSH cards while hidden', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
 
     expect(canvas).toContain('const broadcastEnabled = ref(false)')
@@ -15,27 +15,42 @@ describe('SSH workspace file-transfer controls', () => {
     expect(canvas).toContain('发送键输入到所有会话')
     expect(canvas).toContain('发送所有窗口执行')
 
-    expect(canvas).toContain('function toggleFileTransfer(): void')
+    expect(canvas).toContain('function toggleFileTransfer(sessionId: string): void')
     expect(canvas).toContain('fileTransferPanelSessionIds')
-    expect(canvas).toContain('v-show="fileTransferOpen"')
-    expect(canvas).toContain('v-show="session.id === fileTransferSessionId"')
+    expect(canvas).toContain('fileTransferVisibleSessionIds')
+    expect(canvas).toContain('fileTransferPanelSessionIds.includes(session.id)')
+    expect(canvas).toContain('v-show="isFileTransferVisible(session.id)"')
     expect(canvas).toContain('@busy-change="setFileTransferBusy(session.id, $event)"')
     expect(canvas).toContain('文件传输中')
-    expect(canvas).toContain('only closing/removing that SSH session destroys its panel')
+    expect(canvas).toContain('fileTransferPanelSessionIds.value = fileTransferPanelSessionIds.value.filter(sessionId => available.has(sessionId))')
+    expect(canvas).not.toContain('class="file-transfer-dock"')
   })
 
-  it('uses native-dialog-backed local/remote drag targets without exposing local paths', () => {
+  it('browses authorized local and remote directories with bidirectional transfer actions', () => {
     const panel = readFileSync(new URL('../../../src/renderer/src/components/workbench/FileTransferPanel.vue', import.meta.url), 'utf8')
 
     expect(panel).toContain('本地（左）')
     expect(panel).toContain('远程（右）')
-    expect(panel).toContain('function onLocalDrop(event: DragEvent): void')
-    expect(panel).toContain('function onRemoteDrop(event: DragEvent): void')
+    expect(panel).toContain('选择本地目录')
+    expect(panel).toContain('function refreshLocalDirectory(path?: string): Promise<void>')
+    expect(panel).toContain('window.terminalAgent.fileTransfer?.listLocal')
+    expect(panel).toContain('window.terminalAgent.fileTransfer?.selectLocalDirectory')
+    expect(panel).toContain('function onLocalDrop(event: DragEvent, destinationDirectory = localCurrentPath.value): void')
+    expect(panel).toContain('function onRemoteDrop(event: DragEvent, destinationDirectory = remoteCurrentPath.value): void')
+    expect(panel).toContain('function onLocalEntryDrop(entry: FileTransferDirectoryEntry, event: DragEvent): void')
+    expect(panel).toContain('function onRemoteEntryDrop(entry: FileTransferDirectoryEntry, event: DragEvent): void')
     expect(panel).toContain('startRemoteEntryDrag')
     expect(panel).toContain('startLocalEntryDrag')
-    expect(panel).toContain('trusted native picker')
+    expect(panel).toContain('uploadLocalEntry')
+    expect(panel).toContain('downloadRemoteEntry')
+    expect(panel).toContain('上传到当前远程目录')
+    expect(panel).toContain('下载到当前本地目录')
+    expect(panel).toContain('localPath: localSource')
+    expect(panel).toContain('localPath: destinationDirectory')
+    expect(panel).toContain('directory-authorized transfer boundary')
     expect(panel).toContain("emit('busyChange', value)")
     expect(panel).toContain('文件传输中')
-    expect(panel).not.toContain('localPath:')
+    expect(panel).not.toContain('recent-local-files')
+    expect(panel).not.toContain('localFiles')
   })
 })

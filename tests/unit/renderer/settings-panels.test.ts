@@ -47,13 +47,16 @@ describe('settings panels', () => {
     expect(canvas).toContain('SSH 字体大小')
   })
 
-  it('keeps the five appearance choices in the existing three-column layout', () => {
+  it('keeps all five appearance choices in one desktop row and reflows them in narrow panes', () => {
     const appearance = readFileSync(new URL('../../../src/renderer/src/components/settings/AppearanceSettings.vue', import.meta.url), 'utf8')
     const themeRule = /\.theme-options\s*\{([^}]*)\}/.exec(appearance)?.[1] ?? ''
 
-    expect(themeRule).toContain('grid-template-columns: repeat(3')
-    expect(themeRule).toContain('max-width: 860px')
-    expect(appearance).toContain('.theme-options { grid-template-columns: 1fr; }')
+    expect(themeRule).toContain('grid-template-columns: repeat(5, minmax(0, 1fr));')
+    expect(themeRule).toContain('max-width: 1080px')
+    expect(appearance).toContain('@media (max-width: 960px) { .theme-options { grid-template-columns: repeat(3, minmax(0, 1fr)); } }')
+    expect(appearance).toContain('@media (max-width: 760px)')
+    expect(appearance).toContain('.theme-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }')
+    expect(appearance).toContain('@media (max-width: 520px) { .theme-options { grid-template-columns: 1fr; } }')
     for (const label of ['珍珠白', '石墨黑', '高贵紫', '帝王金', '樱花粉']) expect(appearance).toContain(label)
   })
 

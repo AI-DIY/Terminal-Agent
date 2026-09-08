@@ -48,12 +48,18 @@ import type {
 import {
   fileTransferChannels,
   fileTransferDownloadRequestSchema,
+  fileTransferLocalDirectorySelectionSchema,
+  fileTransferLocalListRequestSchema,
+  fileTransferLocalListResultSchema,
   fileTransferListRequestSchema,
   fileTransferListResultSchema,
   fileTransferProgressSchema,
   fileTransferResultSchema,
   fileTransferUploadRequestSchema,
   type FileTransferDownloadRequest,
+  type FileTransferLocalDirectorySelection,
+  type FileTransferLocalListRequest,
+  type FileTransferLocalListResult,
   type FileTransferListRequest,
   type FileTransferListResult,
   type FileTransferProgress,
@@ -148,6 +154,8 @@ export type TerminalAgentApi = {
   }
   fileTransfer: {
     list(request: FileTransferListRequest): Promise<FileTransferListResult>
+    listLocal(request: FileTransferLocalListRequest): Promise<FileTransferLocalListResult>
+    selectLocalDirectory(): Promise<FileTransferLocalDirectorySelection>
     upload(request: FileTransferUploadRequest): Promise<FileTransferResult>
     download(request: FileTransferDownloadRequest): Promise<FileTransferResult>
     onProgress(listener: (event: FileTransferProgress) => void): () => void
@@ -316,6 +324,12 @@ export function createTerminalAgentApi(ipcRenderer: {
     fileTransfer: Object.freeze({
       list: async (request: FileTransferListRequest) => fileTransferListResultSchema.parse(
         await ipcRenderer.invoke(fileTransferChannels.list, fileTransferListRequestSchema.parse(request)),
+      ),
+      listLocal: async (request: FileTransferLocalListRequest) => fileTransferLocalListResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.listLocal, fileTransferLocalListRequestSchema.parse(request)),
+      ),
+      selectLocalDirectory: async () => fileTransferLocalDirectorySelectionSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.selectLocalDirectory),
       ),
       upload: async (request: FileTransferUploadRequest) => fileTransferResultSchema.parse(
         // Parse before IPC so malformed requests never reach the main process.
