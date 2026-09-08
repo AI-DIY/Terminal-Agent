@@ -1137,8 +1137,8 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
     await expect(leftSeparator).toHaveAttribute('aria-valuenow', '210')
 
     await rightSeparator.focus()
-    for (let index = 0; index < 16; index += 1) await page.keyboard.press('ArrowLeft')
-    await expect(rightSeparator).toHaveAttribute('aria-valuenow', '520')
+    for (let index = 0; index < 60; index += 1) await page.keyboard.press('ArrowLeft')
+    await expect(rightSeparator).toHaveAttribute('aria-valuenow', '900')
 
     await page.getByRole('button', { name: '收起任务空间', exact: true }).click()
     await page.getByRole('button', { name: '收起 AI工作区', exact: true }).click()
@@ -1146,7 +1146,7 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
     await expect(page.getByRole('button', { name: '展开 AI工作区', exact: true })).toBeVisible()
     await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({
       leftWidth: 210,
-      rightWidth: 520,
+      rightWidth: 900,
       leftCollapsed: true,
       rightCollapsed: true,
     })
@@ -1155,7 +1155,7 @@ test('collapse rails and separator keyboard bounds persist after reload', async 
     await expect(page.getByRole('button', { name: '展开任务空间', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '展开 AI工作区', exact: true })).toBeVisible()
     await expect(leftSeparator).toHaveAttribute('aria-valuenow', '210')
-    await expect(rightSeparator).toHaveAttribute('aria-valuenow', '520')
+    await expect(rightSeparator).toHaveAttribute('aria-valuenow', '900')
   } finally {
     await app?.close()
   }

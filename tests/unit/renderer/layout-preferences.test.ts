@@ -5,6 +5,7 @@ import { createTerminalAgentApi } from '../../../src/preload/api'
 import {
   createLayoutPreferencesStore,
   createDelayedLayoutSaver,
+  clampSidebarWidth,
   keyboardSidebarWidth,
   SHELL_FONT_SIZE_PRESETS,
   SHELL_ROW_HEIGHT_PRESETS,
@@ -135,8 +136,9 @@ describe('renderer layout preferences', () => {
   it('adjusts keyboard separators in the visual direction and clamps both boundaries', () => {
     expect(keyboardSidebarWidth('left', 210, 'ArrowLeft')).toBe(210)
     expect(keyboardSidebarWidth('left', 359, 'ArrowRight')).toBe(360)
-    expect(keyboardSidebarWidth('right', 519, 'ArrowLeft')).toBe(520)
+    expect(keyboardSidebarWidth('right', 899, 'ArrowLeft')).toBe(900)
     expect(keyboardSidebarWidth('right', 340, 'ArrowRight')).toBe(340)
+    expect(clampSidebarWidth('right', 9_000)).toBe(900)
     expect(keyboardSidebarWidth('left', 222, 'Enter')).toBeNull()
   })
 

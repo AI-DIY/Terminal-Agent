@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { Ssh2ClientAdapter } from '../../../src/main/ssh/ssh2-client-adapter'
+import { SSH_KEEPALIVE_COUNT_MAX, SSH_KEEPALIVE_INTERVAL_MS, Ssh2ClientAdapter } from '../../../src/main/ssh/ssh2-client-adapter'
 
 const state = vi.hoisted(() => {
   const sftp = {
@@ -63,6 +63,10 @@ describe('Ssh2ClientAdapter SFTP transfer channel', () => {
     await expect(connection.fileTransfer?.downloadFile('/tmp/archive.zip', 'C:/archive.zip', value => progress.push(value))).resolves.toBe(7)
 
     expect(state.client.sftp).toHaveBeenCalledTimes(2)
+    expect(state.client.connect).toHaveBeenLastCalledWith(expect.objectContaining({
+      keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
+      keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
+    }))
     expect(state.sftp.fastPut).toHaveBeenCalledWith('C:/report.txt', '/tmp/report.txt', expect.objectContaining({ step: expect.any(Function) }), expect.any(Function))
     expect(state.sftp.fastGet).toHaveBeenCalledWith('/tmp/archive.zip', 'C:/archive.zip', expect.objectContaining({ step: expect.any(Function) }), expect.any(Function))
     expect(state.sftp.end).toHaveBeenCalledTimes(2)
@@ -135,5 +139,34 @@ describe('Ssh2ClientAdapter SFTP transfer channel', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('serializes SFTP requests on one SSH transport without blocking the terminal transport', async () => {
+    let releaseFirstListing: ((error?: Error, entries?: unknown[]) => void) | undefined
+    let markFirstListingStarted!: () => void
+    const firstListingStarted = new Promise<void>(resolve => { markFirstListingStarted = resolve })
+    state.client.sftp.mockClear()
+    state.sftp.readdir.mockClear()
+    state.sftp.readdir
+      .mockImplementationOnce((_remote: string, callback: (error?: Error, entries?: unknown[]) => void) => {
+        releaseFirstListing = callback
+        markFirstListingStarted()
+      })
+      .mockImplementationOnce((_remote: string, callback: (error?: Error, entries?: unknown[]) => void) => {
+        callback(undefined, [])
+      })
+
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+    const first = connection.fileTransfer?.listDirectory?.('/first')
+    const second = connection.fileTransfer?.listDirectory?.('/second')
+
+    await firstListingStarted
+    expect(state.client.sftp).toHaveBeenCalledTimes(1)
+    expect(state.client.shell).not.toHaveBeenCalled()
+
+    releaseFirstListing?.(undefined, [])
+    await expect(first).resolves.toEqual([])
+    await expect(second).resolves.toEqual([])
+    expect(state.client.sftp).toHaveBeenCalledTimes(2)
   })
 })

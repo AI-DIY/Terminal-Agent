@@ -14,7 +14,11 @@ const welcomeName = computed(() => props.welcomeName?.trim() || '朋友')
 const layout = getLayoutPreferencesStore()
 const shellStyle = computed(() => ({
   '--left-width': layout.state.leftCollapsed ? '44px' : `${layout.state.leftWidth}px`,
-  '--right-width': layout.state.rightCollapsed ? '48px' : `${layout.state.rightWidth}px`,
+  // Keep the persisted width for a familiar restore point, but allow a wide
+  // desktop window to expose an AI dock up to 40% of the complete app width.
+  // `min()` deliberately lives in CSS so resize/orientation changes adapt
+  // without writing a new user preference.
+  '--right-width': layout.state.rightCollapsed ? '48px' : `min(${layout.state.rightWidth}px, 40vw)`,
 }))
 function saveLayout(patch: WorkbenchLayoutPatch): void {
   void layout.saveLayout(patch).catch(() => undefined)
@@ -165,10 +169,10 @@ onBeforeUnmount(widthSaver.flush)
 .restore-button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; height: 100%; padding: 12px 13px; border: 0; border-inline: 1px solid var(--line); background: var(--panel); color: var(--text-strong); writing-mode: vertical-rl; }
 .restore-button span { font-size: 10px; font-weight: 680; }
 @media (max-width: 1180px) {
-  .workspace { grid-template-columns: min(var(--left-width), 210px) 3px minmax(430px, 1fr) 3px min(var(--right-width), 350px); }
+  .workspace { grid-template-columns: min(var(--left-width), 210px) 3px minmax(430px, 1fr) 3px var(--right-width); }
 }
 @media (max-width: 1000px) {
-  .workspace { grid-template-columns: min(var(--left-width), 170px) 3px minmax(320px, 1fr) 3px min(var(--right-width), 300px); }
+  .workspace { grid-template-columns: min(var(--left-width), 170px) 3px minmax(320px, 1fr) 3px var(--right-width); }
   .brand { min-width: 150px; }
   /* Keep the greeting visible in compact windows while the task slot yields
      its space to the header action buttons. */

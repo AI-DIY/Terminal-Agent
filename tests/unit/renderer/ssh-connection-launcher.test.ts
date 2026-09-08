@@ -41,10 +41,12 @@ describe('unified SSH connection launcher', () => {
     expect(bastionPanelEnd).toBeGreaterThan(notices)
   })
 
-  it('uses a responsive tab strip and the same component for embedded and dialog entry points', () => {
-    expect(launcher).toContain('.mode-tabs { display: flex; flex-wrap: wrap;')
-    expect(launcher).toContain('.mode-tabs button { flex: 1 1 140px;')
-    expect(launcher).toContain('@media (max-width: 520px) { .mode-tabs button { flex-basis: 100%; }')
+  it('uses a responsive vertical connection chooser and the same component for embedded and dialog entry points', () => {
+    expect(launcher).toContain('aria-orientation="vertical"')
+    expect(launcher).toContain('.launcher-body { display: grid; grid-template-columns: minmax(218px, 264px) minmax(0, 1fr);')
+    expect(launcher).toContain('.mode-tabs { display: grid; grid-template-columns: 1fr;')
+    expect(launcher).toContain('.mode-tabs button { display: grid; grid-template-columns: 32px minmax(0, 1fr) 16px;')
+    expect(launcher).toContain('@media (max-width: 760px) { .launcher-body { grid-template-columns: 1fr;')
     expect(workbench).toContain('<SshConnectionLauncher\n              appearance="embedded"')
     expect(workbench).toContain('<SshConnectionLauncher\n          appearance="dialog"')
   })

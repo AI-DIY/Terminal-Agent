@@ -8,7 +8,11 @@ import { modelEndpointSchema, modelProfileIdSchema } from './validation'
 export const WORKBENCH_LEFT_WIDTH_MIN = 210
 export const WORKBENCH_LEFT_WIDTH_MAX = 360
 export const WORKBENCH_RIGHT_WIDTH_MIN = 340
-export const WORKBENCH_RIGHT_WIDTH_MAX = 520
+// The saved value is capped generously, while WorkbenchShell additionally
+// limits the rendered dock to 40vw.  This lets a user drag the AI workspace
+// to roughly 40% of a normal desktop window instead of stopping at the old
+// fixed 520px cap on wide displays.
+export const WORKBENCH_RIGHT_WIDTH_MAX = 900
 
 // Keep the theme identifiers deliberately small and stable: they are persisted
 // in the user's workbench preferences and mirrored to the document root.

@@ -514,7 +514,7 @@ watch(
 .layout-menu label { display: contents; color: var(--text); font-size: 11px; }
 .layout-menu select { width: 86px; height: 28px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--text); }
 .canvas-content { position: relative; display: grid; grid-template-rows: minmax(0, 1fr) auto; grid-row: 3; min-width: 0; min-height: 0; overflow: hidden; }
-.terminal-grid { display: grid; align-content: start; width: 100%; height: auto; min-width: 0; min-height: 0; gap: 10px; padding: 10px; overflow-x: auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-color: transparent transparent; background: var(--surface); }
+.terminal-grid { display: grid; align-content: start; width: 100%; height: auto; min-width: 0; min-height: 0; gap: 10px; padding: 10px; overflow-x: auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; scrollbar-color: transparent transparent; background: var(--surface); }
 .terminal-grid:hover,.terminal-grid:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; }
 .terminal-grid::-webkit-scrollbar { width: 8px; height: 8px; }
 .terminal-grid::-webkit-scrollbar-track { background: transparent; }

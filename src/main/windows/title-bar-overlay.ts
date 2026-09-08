@@ -12,7 +12,7 @@ export function titleBarOverlayForTheme(input: WorkbenchTheme): TitleBarOverlay 
     return { color: '#302044', symbolColor: '#f7f0ff', height: TITLE_BAR_OVERLAY_HEIGHT }
   }
   if (theme === 'imperial-gold') {
-    return { color: '#c99419', symbolColor: '#2b1a00', height: TITLE_BAR_OVERLAY_HEIGHT }
+    return { color: '#242019', symbolColor: '#fff4d4', height: TITLE_BAR_OVERLAY_HEIGHT }
   }
   if (theme === 'sakura-pink') {
     return { color: '#f8dfe8', symbolColor: '#4c2635', height: TITLE_BAR_OVERLAY_HEIGHT }

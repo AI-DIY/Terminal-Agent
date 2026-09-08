@@ -51,6 +51,7 @@ describe('V18 production visual contract', () => {
     expect(shell).toContain('grid-template-rows: 48px minmax(0, 1fr)')
     expect(shell).toContain("'--left-width'")
     expect(shell).toContain("'--right-width'")
+    expect(shell).toContain('min(${layout.state.rightWidth}px, 40vw)')
     expect(settings).toContain('settings-layout')
     expect(settings).toContain('settings-nav')
     expect(settings).toContain('settings-content')

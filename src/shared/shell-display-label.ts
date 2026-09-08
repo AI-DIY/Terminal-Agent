@@ -25,14 +25,22 @@ export type HostnameDisplayEntry = {
 export function sshHostIdentity(entry: HostnameDisplayEntry): string {
   const observed = entry.observedHostname?.trim()
   if (observed && !isIpLiteral(observed)) return observed.toLowerCase()
+
+  // AccessClient connections can all be routed through one relay address.
+  // In that case the user-visible connection title is the only target host
+  // information available before read-only hostname observation completes.
+  // Prefer an explicit host hint from that title *before* falling back to the
+  // transport route, otherwise two different hosts behind one bastion receive
+  // misleading #1/#2 badges merely because they share an IP address.
+  const titleHint = hostHintFromTitle(entry.displayName)
+  if (titleHint && !isIpLiteral(titleHint)) return titleHint.toLowerCase()
+
   const hostname = entry.hostname.trim()
   if (hostname && !isIpLiteral(hostname)) return hostname.toLowerCase()
-  // AccessClient/Raw bridges commonly use loopback as their route.  If the
-  // title contains an explicit host token (for example `appuser@web-01` or
-  // `堡垒机_web-01`), use that token so different targets do not all receive
-  // the same ordinal merely because they share the relay address.
-  const titleHint = hostHintFromTitle(entry.displayName)
-  if (titleHint) return titleHint.toLowerCase()
+
+  // A bare transport IP is only a last-resort fallback when no target hostname
+  // has been supplied or observed.  Crucially, it is never allowed to win over
+  // a target hint above, which is the common bastion/relay case.
   return hostname.toLowerCase()
 }
 
@@ -53,7 +61,13 @@ export function sshHostnameDisplayLabels(entries: readonly HostnameDisplayEntry[
   return entries.map((entry, index) => {
     const identity = identities[index]!
     const ordinal = ordinals[index]!
-    const displayName = entry.observedHostname?.trim() || entry.displayName?.trim() || entry.hostname.trim()
+    // A raw observed IP is a transport detail, not a friendlier target name.
+    // Preserve it as a last-resort label, but let a connection title identify
+    // the target when the route is shared by a bastion or local bridge.
+    const observed = entry.observedHostname?.trim()
+    const displayName = observed && !isIpLiteral(observed)
+      ? observed
+      : entry.displayName?.trim() || observed || entry.hostname.trim()
     return {
       displayLabel: totals.get(identity)! > 1 ? `${displayName} #${ordinal}` : displayName,
       ordinal,
@@ -175,7 +189,7 @@ function hostHintFromTitle(value: string | undefined): string | undefined {
   // “生产终端” remain associated with the route address and retain legacy
   // duplicate behaviour.
   const suffix = title.split('_').at(-1)?.trim()
-  if (suffix && (isHostLikeToken(suffix) || isIpLiteral(suffix))) return suffix
+  if (title.includes('_') && suffix && (isHostLikeToken(suffix) || isIpLiteral(suffix))) return suffix
 
   // A plain DNS-like title is also useful when a provider labels the target
   // directly (for example `web-01.example.com`).  Avoid treating natural

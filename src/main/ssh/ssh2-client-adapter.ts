@@ -14,6 +14,12 @@ import type { SshFileTransferProgress } from './ssh-client-port'
 // whenever ssh2 reports progress, so large but healthy copies can continue.
 const SFTP_CHANNEL_TIMEOUT_MS = 30_000
 const SFTP_TRANSFER_IDLE_TIMEOUT_MS = 30_000
+// Keep the interactive transport alive while a user leaves the file browser
+// open.  Some bastion/SFTP proxies close an otherwise idle multiplexed SSH
+// connection soon after an auxiliary channel is opened; ssh2's global
+// keepalive request is independent from both the PTY and SFTP channels.
+export const SSH_KEEPALIVE_INTERVAL_MS = 15_000
+export const SSH_KEEPALIVE_COUNT_MAX = 4
 
 export class Ssh2ClientAdapter implements SshClientPort {
   async connect(options: SshConnectOptions): Promise<SshConnection> {
@@ -22,8 +28,25 @@ export class Ssh2ClientAdapter implements SshClientPort {
     await new Promise<void>((resolve, reject) => {
       client.once('ready', resolve)
       client.once('error', reject)
-      client.connect(options)
+      client.connect({
+        ...options,
+        keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
+        keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
+      })
     })
+
+    // A number of enterprise bastions allow an interactive PTY and SFTP but
+    // are fragile when multiple SFTP subsystem requests are made at once on
+    // the same SSH transport (for example initial listing + a quick refresh).
+    // Serialize only SFTP work per connection.  It never serializes terminal
+    // input or work on another SSH connection, and every operation still gets
+    // its own short-lived SFTP channel.
+    let fileTransferTail: Promise<void> = Promise.resolve()
+    const queueFileTransfer = <T>(operation: () => Promise<T>): Promise<T> => {
+      const result = fileTransferTail.then(operation, operation)
+      fileTransferTail = result.then(() => undefined, () => undefined)
+      return result
+    }
 
     return {
       ...(isIP(options.host) ? { remoteAddress: options.host.toLowerCase() } : {}),
@@ -32,9 +55,9 @@ export class Ssh2ClientAdapter implements SshClientPort {
       // SFTP opens an independent SSH channel.  The PTY channel returned by
       // openShell remains alive while either operation is in progress.
       fileTransfer: {
-        listDirectory: remotePath => listDirectory(client, remotePath),
-        uploadFile: (localPath, remotePath, onProgress) => transferFile(client, 'upload', localPath, remotePath, onProgress),
-        downloadFile: (remotePath, localPath, onProgress) => transferFile(client, 'download', remotePath, localPath, onProgress),
+        listDirectory: remotePath => queueFileTransfer(() => listDirectory(client, remotePath)),
+        uploadFile: (localPath, remotePath, onProgress) => queueFileTransfer(() => transferFile(client, 'upload', localPath, remotePath, onProgress)),
+        downloadFile: (remotePath, localPath, onProgress) => queueFileTransfer(() => transferFile(client, 'download', remotePath, localPath, onProgress)),
       },
       close: () => client.end(),
     }

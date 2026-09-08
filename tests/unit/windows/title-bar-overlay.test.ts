@@ -7,7 +7,7 @@ describe('title bar overlay', () => {
     expect(titleBarOverlayForTheme('pearl')).toEqual({ color: '#f0f3f6', symbolColor: '#1d242c', height: 48 })
     expect(titleBarOverlayForTheme('graphite')).toEqual({ color: '#25292e', symbolColor: '#f0f3f6', height: 48 })
     expect(titleBarOverlayForTheme('noble-purple')).toEqual({ color: '#302044', symbolColor: '#f7f0ff', height: 48 })
-    expect(titleBarOverlayForTheme('imperial-gold')).toEqual({ color: '#c99419', symbolColor: '#2b1a00', height: 48 })
+    expect(titleBarOverlayForTheme('imperial-gold')).toEqual({ color: '#242019', symbolColor: '#fff4d4', height: 48 })
     expect(titleBarOverlayForTheme('sakura-pink')).toEqual({ color: '#f8dfe8', symbolColor: '#4c2635', height: 48 })
   })
 

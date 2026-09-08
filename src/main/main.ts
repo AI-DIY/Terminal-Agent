@@ -331,6 +331,16 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
     }
   })
   const rendererWindow = mainWindow
+  // The SSO provider uses a short-lived secondary BrowserWindow.  Once its
+  // capture succeeds, return attention to this already-created local
+  // renderer instead of creating or navigating another application window.
+  const unregisterSsoMainWindowState = ssoAuth.onState(snapshot => {
+    if (snapshot.state !== 'authenticated') return
+    if (mainWindow !== rendererWindow || rendererWindow.isDestroyed()) return
+    if (rendererWindow.isMinimized()) rendererWindow.restore()
+    rendererWindow.show()
+    rendererWindow.focus()
+  })
   // The renderer must be visible while SSO is authenticating so its local
   // progress animation can stay in the foreground.  The remote platform page
   // itself is loaded in a hidden, short-lived authentication window.
@@ -356,6 +366,7 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
   rendererWindow.webContents.on('before-input-event', onBeforeInput)
 
   mainWindow.on('closed', () => {
+    unregisterSsoMainWindowState()
     unregisterDiagnosticsHandlers?.()
     unregisterDiagnosticsHandlers = undefined
     unregisterUpdaterHandlers?.()

@@ -18,7 +18,7 @@ export function createWorkbenchLayout() {
     rightCollapsed,
     theme,
     setLeftWidth(value: number): void { leftWidth.value = clampSidebarWidth(value, 210, 360) },
-    setRightWidth(value: number): void { rightWidth.value = clampSidebarWidth(value, 340, 520) },
+    setRightWidth(value: number): void { rightWidth.value = clampSidebarWidth(value, 340, 900) },
     toggleLeft(): void { leftCollapsed.value = !leftCollapsed.value },
     toggleRight(): void { rightCollapsed.value = !rightCollapsed.value },
   }

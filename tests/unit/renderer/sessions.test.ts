@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSessionsStore, MAX_SESSION_BUFFER_CHARS, sessionDisplayLabel, sessionLabel } from '../../../src/renderer/src/stores/sessions'
+import { createSessionsStore, MAX_SESSION_BUFFER_CHARS, sessionDisplayLabel, sessionHasDuplicateHost, sessionLabel } from '../../../src/renderer/src/stores/sessions'
 
 describe('sessions store', () => {
   it('keeps terminal data isolated by session id', () => {
@@ -90,6 +90,20 @@ describe('sessions store', () => {
     }
     expect(sessionDisplayLabel(first, [first, second])).toBe('primary #1')
     expect(sessionDisplayLabel(second, [first, second])).toBe('secondary #2')
+  })
+
+  it('keeps distinct bastion targets free of ordinal badges even when their relay IP is identical', () => {
+    const application = {
+      id: 'application', hostname: '10.10.10.10', title: 'app-prod-01', mode: 'copilot' as const, buffer: '',
+    }
+    const database = {
+      id: 'database', hostname: '10.10.10.10', title: 'db-prod-01', mode: 'copilot' as const, buffer: '',
+    }
+
+    expect(sessionDisplayLabel(application, [application, database])).toBe('app-prod-01')
+    expect(sessionDisplayLabel(database, [application, database])).toBe('db-prod-01')
+    expect(sessionHasDuplicateHost(application, [application, database])).toBe(false)
+    expect(sessionHasDuplicateHost(database, [application, database])).toBe(false)
   })
 
   it('removes an observed hostname when a refreshed session summary rolls it back', () => {

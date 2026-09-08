@@ -11,7 +11,11 @@ const state = vi.hoisted(() => ({
     }
     options: { show?: boolean }
     isDestroyed: ReturnType<typeof vi.fn>
+    isMinimized: ReturnType<typeof vi.fn>
+    restore: ReturnType<typeof vi.fn>
     setTitleBarOverlay: ReturnType<typeof vi.fn>
+    show: ReturnType<typeof vi.fn>
+    focus: ReturnType<typeof vi.fn>
     shown: boolean
     emitClosed(): void
     emitReadyToShow(): void
@@ -26,6 +30,14 @@ const state = vi.hoisted(() => ({
   ipcHandlers: new Map<string, (event: { sender: unknown }, input?: unknown) => unknown>(),
   workbenchSaveTheme: vi.fn(),
   setApplicationMenu: vi.fn(),
+  ssoStateListeners: [] as Array<(snapshot: { state: string }) => void>,
+  subscribeSsoState: vi.fn((listener: (snapshot: { state: string }) => void) => {
+    state.ssoStateListeners.push(listener)
+    return () => {
+      const index = state.ssoStateListeners.indexOf(listener)
+      if (index >= 0) state.ssoStateListeners.splice(index, 1)
+    }
+  }),
 }))
 
 vi.mock('electron', () => {
@@ -37,8 +49,12 @@ vi.mock('electron', () => {
     loadFile = vi.fn().mockResolvedValue(undefined)
     private destroyed = false
     isDestroyed = vi.fn(() => this.destroyed)
+    isMinimized = vi.fn(() => false)
+    restore = vi.fn()
     setTitleBarOverlay = vi.fn()
     shown = false
+    show = vi.fn(() => { this.shown = true })
+    focus = vi.fn()
     readonly options: { show?: boolean }
 
     constructor(options: { show?: boolean }) {
@@ -52,7 +68,6 @@ vi.mock('electron', () => {
       return this.contents
     }
 
-    show() { this.shown = true }
     on(event: string, listener: () => void) {
       const listeners = this.listeners.get(event) ?? []
       listeners.push(listener)
@@ -117,6 +132,7 @@ vi.mock('../../../src/main/sso/sso-authentication-service', () => ({
   SsoAuthenticationService: class SsoAuthenticationService {
     initialize() { return Promise.resolve({ state: 'configuration-required' }) }
     attachRenderer() {}
+    onState(listener: (snapshot: { state: string }) => void) { return state.subscribeSsoState(listener) }
     getState() { return { state: 'configuration-required' } }
     dispose() { return Promise.resolve() }
   },
@@ -203,6 +219,48 @@ describe('main chat lifecycle', () => {
     expect(() => window.emitClosed()).not.toThrow()
     expect(state.disposeChatHandlers).toHaveBeenCalledOnce()
     expect(state.disposeWorkbenchSettingsHandlers).toHaveBeenCalledOnce()
+  })
+
+  it('restores a minimized main window and returns focus only after SSO authentication succeeds', () => {
+    const windowCountBefore = state.windows.length
+    const window = createMainWindow() as unknown as (typeof state.windows)[number]
+    const listener = state.ssoStateListeners.at(-1)
+    expect(listener).toBeTypeOf('function')
+    window.isMinimized.mockReturnValue(true)
+
+    listener?.({ state: 'error' })
+    expect(window.restore).not.toHaveBeenCalled()
+    expect(window.show).not.toHaveBeenCalled()
+    expect(window.focus).not.toHaveBeenCalled()
+
+    listener?.({ state: 'authenticated' })
+
+    expect(state.windows).toHaveLength(windowCountBefore + 1)
+    expect(window.restore).toHaveBeenCalledOnce()
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.focus).toHaveBeenCalledOnce()
+    expect(window.restore.mock.invocationCallOrder[0]).toBeLessThan(window.show.mock.invocationCallOrder[0]!)
+    expect(window.show.mock.invocationCallOrder[0]).toBeLessThan(window.focus.mock.invocationCallOrder[0]!)
+
+    window.emitClosed()
+    expect(state.ssoStateListeners).not.toContain(listener)
+    listener?.({ state: 'authenticated' })
+    expect(window.restore).toHaveBeenCalledOnce()
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.focus).toHaveBeenCalledOnce()
+  })
+
+  it('shows and focuses a non-minimized main window after SSO authentication succeeds', () => {
+    const window = createMainWindow() as unknown as (typeof state.windows)[number]
+    const listener = state.ssoStateListeners.at(-1)
+    expect(listener).toBeTypeOf('function')
+
+    listener?.({ state: 'authenticated' })
+
+    expect(window.restore).not.toHaveBeenCalled()
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.focus).toHaveBeenCalledOnce()
+    window.emitClosed()
   })
 
   it('finishes an in-flight theme save without touching a destroyed native title bar', async () => {

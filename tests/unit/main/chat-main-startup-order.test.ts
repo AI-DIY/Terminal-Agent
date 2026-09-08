@@ -167,6 +167,7 @@ vi.mock('../../../src/main/sso/sso-authentication-service', () => ({
   SsoAuthenticationService: class SsoAuthenticationService {
     initialize() { return state.initializeSsoAuth() }
     attachRenderer(sender: unknown) { return state.attachSsoRenderer(sender) }
+    onState() { return () => undefined }
     getState() { return { state: 'configuration-required' } }
     dispose() { return Promise.resolve() }
   },
