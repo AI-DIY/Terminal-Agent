@@ -478,13 +478,13 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
     </header>
 
     <div ref="messagesElement" class="messages" @scroll="onMessagesScroll">
-      <article v-for="message in messages" :key="message.id" :class="['message', message.role, { audit: message.messageType === 'execution_audit' }]">
+      <article v-for="message in messages" :key="message.id" :class="['message', message.role, { audit: message.messageType === 'execution_audit', 'execution-card': message.messageType === 'execution_audit' }]">
         <span class="message-avatar" aria-hidden="true"><UserRound v-if="message.role === 'user'" :size="14" /><Bot v-else :size="14" /></span>
-        <div class="message-content">
+        <div class="message-content message-bubble">
           <div class="message-meta"><strong>{{ message.messageType === 'execution_audit' ? '执行审计' : message.role === 'user' ? '你' : 'Terminal-Agent' }}</strong><span v-if="message.state === 'streaming'">生成中</span><span v-else-if="message.state === 'error'">未完成</span></div>
           <p>{{ message.messageType === 'execution_audit' ? String(message.content) : message.role === 'assistant' ? assistantReply(message.content) : (typeof message.content === 'string' ? message.content : chatContentText(message.content)) }}</p>
-          <section v-if="message.executionPlan" class="execution-plan" :data-status="message.executionPlan.status">
-            <header class="plan-head"><div><strong>{{ message.executionPlan.title }}</strong><span>{{ message.executionPlan.steps.length }} 步 · {{ planStatusLabel(message.executionPlan.status) }}</span></div><span class="plan-badge">{{ planStatusLabel(message.executionPlan.status) }}</span></header>
+          <section v-if="message.executionPlan" class="execution-plan plan-card" :data-status="message.executionPlan.status" :aria-label="message.executionPlan.status === 'pending_review' ? '待确认的命令计划' : '已执行的命令结果'">
+            <header class="plan-head plan-heading"><div><strong>{{ message.executionPlan.title }}</strong><span>{{ message.executionPlan.steps.length }} 步 · {{ planStatusLabel(message.executionPlan.status) }}</span></div><span :class="['plan-badge', 'status-chip', message.executionPlan.status]">{{ planStatusLabel(message.executionPlan.status) }}</span></header>
             <p v-if="message.executionPlan.steps.length === 0" class="plan-empty">计划已取消，未执行任何命令。</p>
              <div v-for="step in message.executionPlan.steps" :key="step.id" class="plan-step" :data-plan-step="step.id">
                <div class="plan-step-head"><strong>{{ planTargetLabel(step.target) }}</strong><span>{{ step.sendState }}</span></div>
@@ -508,11 +508,11 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
       </article>
       <article v-if="progress" class="message assistant progress-message">
         <span class="message-avatar" aria-hidden="true"><Bot :size="14" /></span>
-        <div class="message-content progress-content">
+        <div class="message-content message-bubble progress-content">
           <div class="message-meta"><strong>Terminal-Agent</strong><span>处理中</span></div>
-          <section class="progress-item" role="status" aria-live="polite" aria-atomic="true">
-            <span class="progress-dots" aria-hidden="true"><i /><i /><i /></span>
-            <span>{{ progressLabel(progress) }}</span>
+          <section class="progress-item" role="status" aria-live="polite" aria-atomic="true" data-visual="thinking-card">
+            <span class="thinking-animation" aria-hidden="true"><span class="thinking-bars"><i /><i /><i /><i /></span></span>
+            <span class="thinking-copy"><strong>{{ progressLabel(progress) }}</strong><em>分析中</em></span>
           </section>
         </div>
       </article>
@@ -533,7 +533,7 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 </template>
 
 <style scoped>
-.global-chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--surface); color: var(--text); }.global-chat-panel.context-details-expanded { grid-template-rows: minmax(148px, auto) minmax(0, 1fr) auto; }
+.global-chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--surface); color: var(--text); container-type: inline-size; }.global-chat-panel.context-details-expanded { grid-template-rows: minmax(148px, auto) minmax(0, 1fr) auto; }
 .ai-head { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; align-content: start; gap: 8px 9px; min-width: 0; min-height: 0; padding: 12px 13px 11px; overflow: hidden; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 88%, var(--panel)); }
 .ai-avatar { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--accent-soft) 74%, var(--surface)); color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .04em; }
 .ai-head-copy { min-width: 0; }.ai-head-copy h3 { margin: 0; overflow: hidden; color: var(--text-strong); font-size: 14px; font-weight: 740; text-overflow: ellipsis; white-space: nowrap; }.ai-head-copy span { display: block; margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
@@ -563,4 +563,72 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 @keyframes chat-progress-dot { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
 @media (prefers-reduced-motion: reduce) { .progress-dots i { animation-duration: .01ms; animation-iteration-count: 1; } }
 @media (max-width: 1180px) { .collapse-button span { display: none; }.collapse-button { width: 30px; padding: 0; }.ai-head-copy span { display: none; } }
+
+/* Prototype-aligned AI transcript surfaces.  These overrides intentionally
+   keep the existing DOM/events intact while giving each message state a
+   distinct, theme-aware visual treatment. */
+.messages { padding: 15px; background: color-mix(in srgb, var(--surface) 94%, var(--panel)); }
+.message + .message { margin-top: 10px; }
+.message { grid-template-columns: 34px minmax(0, 1fr); gap: 9px; padding: 0; }
+.message.user { grid-template-columns: minmax(0, 1fr) 34px; padding-left: clamp(18px, 8%, 48px); }
+.message-avatar { width: 34px; height: 34px; border-radius: 8px; border-color: var(--line); background: var(--surface); color: var(--accent); }
+.message.user .message-avatar { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: var(--accent); color: #fff; }
+.message-content.message-bubble { box-sizing: border-box; width: fit-content; max-width: 88%; padding: 12px 13px; border-radius: 8px; background: var(--surface); }
+.message.assistant .message-content.message-bubble { width: min(100%, 540px); max-width: none; border-left: 4px solid var(--accent); }
+.message.user .message-content.message-bubble { justify-self: end; max-width: min(70%, 360px); border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); background: var(--accent-soft); box-shadow: 0 1px 1px color-mix(in srgb, var(--accent) 14%, transparent); }
+.message-meta { margin-bottom: 7px; }
+.message-meta strong { font-size: 13px; }
+.message.assistant .message-meta strong { color: var(--accent); }
+.message.user .message-meta strong { color: var(--accent); }
+.message p { font-size: 13px; line-height: 1.6; }
+.message.audit { grid-template-columns: minmax(0, 1fr); padding-left: clamp(18px, 8%, 48px); }
+.message.audit .message-avatar { display: none; }
+.message.audit .message-content.message-bubble { justify-self: start; width: min(100%, 540px); max-width: none; border: 1px solid color-mix(in srgb, var(--green) 48%, var(--line)); border-left: 4px solid var(--green); background: var(--green-soft); }
+.execution-plan { margin-top: 12px; padding: 0; gap: 0; overflow: hidden; border: 1px solid var(--amber-line); border-left: 4px solid var(--amber); border-radius: 8px; background: var(--surface); }
+.plan-head.plan-heading { display: flex; justify-content: space-between; gap: 12px; padding: 13px; border-bottom: 1px solid color-mix(in srgb, var(--amber-line) 65%, var(--line)); background: color-mix(in srgb, var(--amber-soft) 78%, var(--surface)); }
+.plan-head.plan-heading strong { font-size: 15px; }
+.plan-head.plan-heading span:not(.plan-badge) { display: block; margin-top: 3px; font-size: 12px; }
+.plan-badge.status-chip { min-height: 26px; padding: 0 8px; border: 0; border-radius: 5px; background: var(--amber-soft); color: var(--amber) !important; font-size: 11px; }
+.plan-badge.status-chip.executed { background: var(--green-soft); color: var(--green) !important; }
+.plan-badge.status-chip.partially_executed { background: var(--amber-soft); color: var(--amber) !important; }
+.plan-badge.status-chip.executing { background: var(--accent-soft); color: var(--accent) !important; }
+.plan-badge.status-chip.execution_failed { background: color-mix(in srgb, var(--red) 15%, var(--surface)); color: var(--red) !important; }
+.plan-badge.status-chip.cancelled { background: var(--surface-soft); color: var(--muted) !important; }
+.execution-plan[data-status="executed"] { border-color: color-mix(in srgb, var(--green) 48%, var(--line)); border-left-color: var(--green); }
+.execution-plan[data-status="executed"] .plan-heading { border-bottom-color: color-mix(in srgb, var(--green) 28%, var(--line)); background: color-mix(in srgb, var(--green-soft) 74%, var(--surface)); }
+.execution-plan[data-status="partially_executed"] { border-color: color-mix(in srgb, var(--amber) 58%, var(--line)); border-left-color: var(--amber); }
+.execution-plan[data-status="partially_executed"] .plan-heading { border-bottom-color: color-mix(in srgb, var(--amber) 32%, var(--line)); background: color-mix(in srgb, var(--amber-soft) 84%, var(--surface)); }
+.execution-plan[data-status="executing"] { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); border-left-color: var(--accent); }
+.execution-plan[data-status="executing"] .plan-heading { border-bottom-color: color-mix(in srgb, var(--accent) 28%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 78%, var(--surface)); }
+.execution-plan[data-status="execution_failed"] { border-color: color-mix(in srgb, var(--red) 48%, var(--line)); border-left-color: var(--red); }
+.execution-plan[data-status="execution_failed"] .plan-heading { border-bottom-color: color-mix(in srgb, var(--red) 28%, var(--line)); background: color-mix(in srgb, var(--red) 10%, var(--surface)); }
+.execution-plan[data-status="cancelled"] { border-color: color-mix(in srgb, var(--muted) 52%, var(--line)); border-left-color: var(--muted); }
+.execution-plan[data-status="cancelled"] .plan-heading { border-bottom-color: color-mix(in srgb, var(--muted) 26%, var(--line)); background: color-mix(in srgb, var(--surface-soft) 78%, var(--surface)); }
+.plan-step { padding: 13px; border-bottom: 1px solid var(--line); }
+.plan-step-head strong { font-size: 13px; }
+.plan-step p { margin: 8px 0 9px; font-size: 12px; line-height: 1.55; }
+.plan-risk { margin-bottom: 9px; padding: 8px 9px; border-radius: 5px; background: var(--amber-soft); font-size: 11px; }
+.plan-command span { font-size: 10px; font-weight: 700; }
+.plan-command code { padding: 9px 10px; border-color: var(--line); border-radius: 6px; background: var(--terminal); color: var(--terminal-text); font-size: 12px; line-height: 1.45; }
+.plan-command-editor { grid-template-columns: minmax(0, 1fr) 32px; gap: 8px; margin-top: 8px; padding: 8px; border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface)); }
+.plan-command-editor .plan-edit-input { min-height: 48px; padding: 8px 9px; border-color: color-mix(in srgb, var(--accent) 56%, var(--line)); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 11px; }
+.delete-plan-step { width: 32px; height: 32px; border-radius: 5px; background: var(--amber-soft); }
+.plan-actions { justify-content: space-between; padding: 11px 13px; border-top: 1px solid color-mix(in srgb, var(--amber-line) 65%, var(--line)); background: color-mix(in srgb, var(--amber-soft) 78%, var(--surface)); }
+.plan-actions::before { color: var(--amber); font-size: 11px; font-weight: 700; content: '确认后将按顺序发送命令'; }
+.progress-message { grid-template-columns: minmax(0, 1fr); padding-left: clamp(18px, 8%, 48px); }
+.progress-message .message-avatar { display: none; }
+.progress-message .message-content.message-bubble { width: min(100%, 540px); max-width: none; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-left: 4px solid var(--accent); background: var(--accent-soft); }
+.progress-content .message-meta { display: none; }
+.progress-item { min-height: 66px; padding: 12px 13px; border: 0; background: transparent; font-size: 12px; }
+.thinking-animation { position: relative; display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border: 1px solid color-mix(in srgb, var(--accent) 64%, var(--line)); border-radius: 50%; color: var(--accent); }
+.thinking-animation::before { position: absolute; inset: 5px; border: 2px solid transparent; border-top-color: var(--accent); border-right-color: var(--accent); border-radius: 50%; content: ''; animation: chat-thinking-orbit 1.35s linear infinite; }
+.thinking-bars { display: flex; align-items: center; gap: 3px; height: 17px; }
+.thinking-bars i { display: block; width: 3px; height: 7px; border-radius: 3px; background: var(--accent); animation: chat-thinking-bar 1s ease-in-out infinite; }
+.thinking-bars i:nth-child(2) { animation-delay: .12s; }.thinking-bars i:nth-child(3) { animation-delay: .24s; }.thinking-bars i:nth-child(4) { animation-delay: .36s; }
+.thinking-copy { display: inline-flex; align-items: center; justify-content: space-between; gap: 9px; min-width: 0; flex: 1; color: var(--text); }
+.thinking-copy strong { color: var(--accent); font-size: 14px; font-weight: 760; }.thinking-copy em { color: var(--muted); font-size: 11px; font-style: normal; font-weight: 700; white-space: nowrap; }
+@keyframes chat-thinking-orbit { to { transform: rotate(360deg); } }
+@keyframes chat-thinking-bar { 0%, 100% { height: 7px; opacity: .45; } 50% { height: 17px; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .thinking-animation::before,.thinking-bars i { animation-duration: .01ms; animation-iteration-count: 1; } }
+@container (max-width: 520px) { .message.user .message-content.message-bubble { max-width: 82%; }.message.assistant .message-content.message-bubble,.progress-message .message-content.message-bubble { width: 100%; }.plan-actions { align-items: flex-start; flex-wrap: wrap; }.plan-actions::before { flex: 1 1 100%; order: 2; } }
 </style>

@@ -56,6 +56,13 @@ const broadcastEnabled = ref(false)
 const broadcastInput = ref('')
 const broadcastSending = ref(false)
 const broadcastStatus = ref('')
+type BroadcastRequest = {
+  data: string
+  targets: string[]
+  clearInputValue?: string
+}
+const broadcastQueue: BroadcastRequest[] = []
+let broadcastQueueRunning = false
 const orderedCurrentSessions = computed(() => {
   const sessionsById = new Map(props.currentSessions.map(session => [session.id, session]))
   const ordered: SessionView[] = []
@@ -136,29 +143,103 @@ function setFileTransferBusy(sessionId: string, busy: boolean): void {
   fileTransferBusySessionIds.value = next
 }
 
-function sendBroadcast(): void {
-  if (!broadcastEnabled.value || broadcastSending.value || !canUseWorkspaceControls.value) return
-  const value = broadcastInput.value
-  if (!value.trim()) return
-  const targets = orderedCurrentSessions.value.map(session => session.id)
-  if (!targets.length) return
+function hasTerminalControlCharacter(value: string): boolean {
+  // Keep C0 controls (including CR/LF) and DEL intact.  A pasted escape
+  // sequence must reach the remote shell byte-for-byte instead of receiving
+  // an extra carriage return intended for ordinary one-line commands.
+  return /[\u0000-\u001f\u007f]/.test(value)
+}
+
+async function drainBroadcastQueue(): Promise<void> {
+  if (broadcastQueueRunning) return
+  broadcastQueueRunning = true
   broadcastSending.value = true
-  broadcastStatus.value = `正在发送到 ${targets.length} 个 SSH…`
-  // A one-line field represents a command-like keystroke.  Append Enter so
-  // the same input can be executed immediately in every shell; callers may
-  // still paste control sequences through the terminal itself when needed.
-  const data = `${value}\r`
-  void Promise.allSettled(targets.map(sessionId => Promise.resolve().then(() => window.terminalAgent.sessions.write(sessionId, data))))
-    .then(results => {
+  try {
+    while (broadcastQueue.length > 0) {
+      const request = broadcastQueue.shift()!
+      const data = request.data
+      broadcastStatus.value = `正在发送到 ${request.targets.length} 个 SSH…`
+      const results = await Promise.allSettled(request.targets.map(sessionId => (
+        Promise.resolve().then(() => window.terminalAgent.sessions.write(sessionId, data))
+      )))
       const failed = results.filter(result => result.status === 'rejected').length
       const succeeded = results.length - failed
       broadcastStatus.value = failed
         ? `已发送到 ${succeeded} 个 SSH，${failed} 个会话发送失败。`
         : `已发送到 ${succeeded} 个 SSH。`
-      if (!failed) broadcastInput.value = ''
-    })
-    .catch(() => { broadcastStatus.value = '发送失败，请检查 SSH 连接。' })
-    .finally(() => { broadcastSending.value = false })
+      // Do not erase text that the user entered while an earlier write was
+      // waiting on IPC.  Control-key requests intentionally leave the draft
+      // untouched, so they can be used to interrupt or navigate a command.
+      if (!failed && request.clearInputValue !== undefined && broadcastInput.value === request.clearInputValue) {
+        broadcastInput.value = ''
+      }
+    }
+  } catch {
+    // Promise.allSettled normally keeps this path unreachable, but preserve a
+    // usable status if an unexpected bridge failure escapes the per-target
+    // promise wrapper.
+    broadcastStatus.value = '发送失败，请检查 SSH 连接。'
+  } finally {
+    broadcastQueueRunning = false
+    broadcastSending.value = broadcastQueue.length > 0
+    if (broadcastQueue.length > 0) void drainBroadcastQueue()
+  }
+}
+
+function sendBroadcastData(data: string, clearInputValue?: string): void {
+  if (!broadcastEnabled.value || !canUseWorkspaceControls.value || !data) return
+  const targets = orderedCurrentSessions.value.map(session => session.id)
+  if (!targets.length) return
+  broadcastQueue.push({ data, targets, ...(clearInputValue === undefined ? {} : { clearInputValue }) })
+  void drainBroadcastQueue()
+}
+
+function sendBroadcast(): void {
+  const value = broadcastInput.value
+  if (!value || (!value.trim() && !hasTerminalControlCharacter(value))) return
+  // Ordinary text is a command-like keystroke and is executed immediately.
+  // Control bytes (including pasted ANSI/input sequences) are already complete
+  // terminal input and must not be followed by an implicit carriage return.
+  const containsControl = hasTerminalControlCharacter(value)
+  sendBroadcastData(containsControl ? value : `${value}\r`, value)
+}
+
+function isBroadcastInputSendable(value: string): boolean {
+  return Boolean(value) && (Boolean(value.trim()) || hasTerminalControlCharacter(value))
+}
+
+function controlCharacterForKey(event: KeyboardEvent): string | null {
+  if (!event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return null
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key
+  if (key >= 'a' && key <= 'z') return String.fromCharCode(key.charCodeAt(0) - 96)
+  return ({
+    ' ': '\u0000',
+    '@': '\u0000',
+    '[': '\u001b',
+    '\\': '\u001c',
+    ']': '\u001d',
+    '^': '\u001e',
+    '_': '\u001f',
+    '?': '\u007f',
+  } as Record<string, string>)[key] ?? null
+}
+
+function sendBroadcastControl(data: string): void {
+  sendBroadcastData(data)
+}
+
+function handleBroadcastKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Enter' && !event.isComposing) {
+    event.preventDefault()
+    sendBroadcast()
+    return
+  }
+  const control = controlCharacterForKey(event)
+  if (!control) return
+  // Prevent browser editing shortcuts (notably Ctrl+C copy) from swallowing
+  // the signal before it can be delivered to every connected shell.
+  event.preventDefault()
+  sendBroadcastControl(control)
 }
 
 function beginSessionDrag(sessionId: string, event: DragEvent): void {
@@ -468,24 +549,33 @@ watch(
       <section v-if="currentSessions.length === 0" class="empty-slot"><slot name="empty" /></section>
     </div>
 
-    <section v-if="isLive && currentSessions.length" class="broadcast-bar" aria-label="发送键输入到所有会话">
+    <section v-if="isLive && currentSessions.length" class="broadcast-bar" aria-label="发送命令到所有窗口">
       <label class="broadcast-toggle">
-        <input v-model="broadcastEnabled" type="checkbox" aria-label="启用发送键输入到所有会话" />
-        <span>发送键输入到所有会话</span>
+        <span class="broadcast-toggle-label">发送命令到所有窗口</span>
+        <input
+          v-model="broadcastEnabled"
+          class="broadcast-switch-input"
+          type="checkbox"
+          role="switch"
+          aria-label="启用发送命令到所有窗口"
+          :aria-checked="broadcastEnabled"
+        />
+        <span class="broadcast-switch-control" :class="{ enabled: broadcastEnabled }" aria-hidden="true"><i /></span>
       </label>
       <input
         v-model="broadcastInput"
         class="broadcast-input"
         type="text"
         autocomplete="off"
+        aria-label="发送命令到所有窗口"
         placeholder="输入要发送到所有在线 SSH 的命令"
         :disabled="!broadcastEnabled"
-        @keydown.enter.prevent="sendBroadcast"
+        @keydown="handleBroadcastKeydown"
       />
       <button
         type="button"
         class="broadcast-send-button"
-        :disabled="!broadcastEnabled || !broadcastInput.trim() || broadcastSending || !currentSessions.length"
+        :disabled="!broadcastEnabled || !isBroadcastInputSendable(broadcastInput) || broadcastSending || !currentSessions.length"
         @click="sendBroadcast"
       >{{ broadcastSending ? '发送中…' : '发送所有窗口执行' }}</button>
       <span class="broadcast-status" role="status" aria-live="polite">{{ broadcastStatus }}</span>
@@ -553,9 +643,15 @@ watch(
 .history-session-tab > .history-shell-tab:hover,.history-session-tab > .history-shell-tab:focus-visible { outline: 0; }.history-session-tab > .history-shell-tab strong { max-width: 112px; overflow: hidden; color: var(--text-strong); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .host-status { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }.history-session-tab.active .host-status { background: var(--accent); }
 .broadcast-bar { display: grid; grid-row: 4; grid-template-columns: auto minmax(180px, 1fr) auto minmax(0, 220px); align-items: center; gap: 7px; min-width: 0; min-height: 42px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--panel); }
-.broadcast-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--text-strong); font-size: 10px; font-weight: 650; white-space: nowrap; cursor: pointer; }.broadcast-toggle input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
-.broadcast-input { box-sizing: border-box; width: 100%; min-width: 0; height: 27px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 10px; }.broadcast-input:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 22%, transparent); }.broadcast-input:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }
-.broadcast-send-button { height: 27px; padding: 0 9px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 680; white-space: nowrap; }.broadcast-send-button:disabled { cursor: not-allowed; border-color: var(--line); background: var(--surface-soft); color: var(--faint); }
+.broadcast-bar > * { align-self: center; }
+.broadcast-toggle { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 27px; color: var(--text-strong); font-size: 10px; font-weight: 650; line-height: 1; white-space: nowrap; cursor: pointer; }
+.broadcast-toggle-label { display: inline-flex; align-items: center; min-height: 27px; }
+.broadcast-switch-input { position: absolute; z-index: 2; top: 50%; right: 0; width: 36px; height: 20px; margin: 0; border: 0; opacity: 0; cursor: pointer; transform: translateY(-50%); }
+.broadcast-switch-control { box-sizing: border-box; display: inline-flex; width: 36px; height: 20px; flex: 0 0 auto; align-items: center; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--line); pointer-events: none; transition: background .15s,border-color .15s; }
+.broadcast-switch-control i { display: block; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(19 27 36 / 22%); transition: transform .15s; }
+.broadcast-switch-control.enabled { border-color: var(--accent); background: var(--accent); }.broadcast-switch-control.enabled i { transform: translateX(15px); }.broadcast-switch-input:focus-visible + .broadcast-switch-control { box-shadow: 0 0 0 3px var(--accent-soft); }
+.broadcast-input { box-sizing: border-box; display: block; width: 100%; min-width: 0; height: 27px; margin: 0; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 10px; line-height: 25px; }.broadcast-input:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 22%, transparent); }.broadcast-input:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }
+.broadcast-send-button { display: inline-flex; align-items: center; justify-content: center; height: 27px; margin: 0; padding: 0 9px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 680; line-height: 1; white-space: nowrap; }.broadcast-send-button:disabled { cursor: not-allowed; border-color: var(--line); background: var(--surface-soft); color: var(--faint); }
 .broadcast-status { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 1180px) {
   .shell-title { display: none; }

@@ -8,6 +8,8 @@ import bastionUsageImage from '../../../../../docs/images/quickstart/07-launch-b
 import DirectSshForm, { type DirectSshConnectRequest, type DirectSshSharedFields, type PrivateKeySelection } from './DirectSshForm.vue'
 import { nextConnectionEntryState } from './connection-entry-state'
 
+let launcherInstanceCounter = 0
+
 const modes = [
   { id: 'bastionHost', label: '堡垒机跳转连接', description: '通过已配置的堡垒机进入目标主机', icon: ShieldCheck },
   { id: 'password', label: '主机用户名 + 密码连接', description: '使用账户密码直接连接 SSH 主机', icon: Server },
@@ -29,6 +31,8 @@ const emit = defineEmits<{
 // The empty state and the modal opened from any SSH entry point intentionally
 // render this exact component and expose the same connection choices.
 const visibleModes = computed(() => modes)
+const launcherInstanceId = `ssh-launcher-${++launcherInstanceCounter}`
+const launcherTitleId = `${launcherInstanceId}-title`
 const initialMode = props.editingProfile?.authKind ?? 'bastionHost'
 const mode = ref<SshConnectionLauncherMode>(initialMode)
 const fields = ref<DirectSshSharedFields>({ host: '', port: 22, username: '' })
@@ -74,35 +78,36 @@ function updateFields(next: DirectSshSharedFields): void {
 </script>
 
 <template>
-  <section class="ssh-launcher" :class="`appearance-${appearance}`" aria-labelledby="ssh-launcher-title">
+  <section class="ssh-launcher" :class="`appearance-${appearance}`" :aria-labelledby="launcherTitleId">
     <header class="launcher-header">
       <span class="launcher-visual" aria-hidden="true"><SquareTerminal :size="25" /></span>
       <div class="launcher-title">
         <span class="launcher-eyebrow">SSH CONNECTION</span>
-        <h2 id="ssh-launcher-title">新建 SSH 连接</h2>
+        <h2 :id="launcherTitleId">新建 SSH 连接</h2>
         <p class="mode-description">选择适合当前环境的安全连接方式</p>
         <p v-if="appearance === 'embedded'" class="plugin-status"><CheckCircle2 :size="13" aria-hidden="true" /><span>请选择连接方式，现有 SSH 会话不会受影响</span></p>
       </div>
       <button v-if="appearance === 'dialog'" type="button" class="close-button" aria-label="关闭新建 SSH 连接" title="关闭" @click="emit('close')"><X :size="17" aria-hidden="true" /></button>
     </header>
     <div class="launcher-body">
-      <div class="mode-tabs" role="tablist" aria-label="SSH 连接方式" aria-orientation="vertical">
+      <div class="mode-tabs" role="tablist" aria-label="SSH 连接方式" aria-orientation="horizontal">
         <button
           v-for="item in visibleModes"
           :key="item.id"
           :ref="setTabRef"
+          :id="`${launcherInstanceId}-tab-${item.id}`"
           type="button"
           role="tab"
           :aria-label="item.label"
           :aria-selected="mode === item.id"
-          :aria-controls="`ssh-panel-${item.id}`"
+          :aria-controls="`${launcherInstanceId}-panel-${item.id}`"
           :tabindex="mode === item.id ? 0 : -1"
           :class="{ active: mode === item.id }"
           @click="selectMode(item.id)"
           @keydown="onKeydown"
         ><span class="mode-tab-icon" aria-hidden="true"><component :is="item.icon" :size="17" /></span><span class="mode-tab-copy" :data-description="item.description">{{ item.label }}</span><ChevronRight class="mode-tab-arrow" :size="16" aria-hidden="true" /></button>
       </div>
-      <div class="mode-panel" role="tabpanel" :id="`ssh-panel-${mode}`">
+      <div class="mode-panel" role="tabpanel" :id="`${launcherInstanceId}-panel-${mode}`" :aria-labelledby="`${launcherInstanceId}-tab-${mode}`">
         <header class="mode-panel-heading">
           <div><span>当前连接方式</span><h3>{{ activeLabel }}</h3></div>
           <b><CheckCircle2 :size="14" aria-hidden="true" />已选</b>
@@ -138,16 +143,16 @@ h2 { color: var(--text-strong); font-size: 18px; font-weight: 740; }.appearance-
 .mode-description { margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .plugin-status { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin: 8px 0 0; color: var(--green); font-size: 10px; font-weight: 650; }
 .close-button { position: absolute; top: 0; right: 0; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--muted); }.close-button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
-.launcher-body { display: grid; grid-template-columns: minmax(218px, 264px) minmax(0, 1fr); align-items: start; gap: 24px 28px; margin-top: 24px; }
-.mode-tabs { display: grid; grid-template-columns: 1fr; align-self: center; gap: 7px; margin: 0; padding: 0; border: 0; background: transparent; }
-.mode-tabs button { display: grid; grid-template-columns: 32px minmax(0, 1fr) 16px; align-items: center; gap: 9px; min-width: 0; min-height: 64px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); color: var(--muted); font-size: 12px; font-weight: 700; line-height: 1.35; text-align: left; }
-.mode-tab-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 6px; background: var(--surface); color: var(--accent); }.mode-tab-copy { display: grid; gap: 2px; min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 12px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }.mode-tab-copy::after { overflow: hidden; color: var(--muted); font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; content: attr(data-description); }.mode-tab-arrow { justify-self: end; color: var(--faint); }
+.launcher-body { display: flex; flex-direction: column; gap: 18px; min-width: 0; margin-top: 24px; }
+.mode-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-self: stretch; gap: 8px; margin: 0; padding: 0; border: 0; background: transparent; }
+.mode-tabs button { display: grid; grid-template-columns: 32px minmax(0, 1fr) 16px; align-items: center; gap: 9px; min-width: 0; min-height: 68px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); color: var(--muted); font-size: 14px; font-weight: 700; line-height: 1.35; text-align: left; }
+.mode-tab-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 6px; background: var(--surface); color: var(--accent); }.mode-tab-copy { display: grid; gap: 2px; min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 14px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }.mode-tab-copy::after { overflow: hidden; color: var(--muted); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; content: attr(data-description); }.mode-tab-arrow { justify-self: end; color: var(--faint); }
 .mode-tabs button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }.mode-tabs button.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }.mode-tabs button.active .mode-tab-icon { background: var(--accent-soft); }.mode-tabs button.active .mode-tab-copy { color: var(--accent); }.mode-tabs button.active .mode-tab-arrow { color: var(--accent); }
-.mode-panel { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); text-align: left; }.mode-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 18px 13px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 78%, var(--surface)); }.mode-panel-heading > div { min-width: 0; }.mode-panel-heading > div > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; font-weight: 650; }.mode-panel-heading h3 { overflow: hidden; color: var(--text-strong); font-size: 15px; font-weight: 730; text-overflow: ellipsis; white-space: nowrap; }.mode-panel-heading b { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; min-height: 25px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--green) 45%, var(--line)); border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 10px; font-weight: 700; }
-.manual-launch-note { grid-column: 1 / -1; margin: 0 0 2px; padding: 7px 8px; border: 1px solid var(--amber-line); border-radius: 4px; background: var(--amber-soft); color: var(--amber); font-size: 10px; line-height: 1.55; }
+.mode-panel { width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); text-align: left; }.mode-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 18px 13px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 78%, var(--surface)); }.mode-panel-heading > div { min-width: 0; }.mode-panel-heading > div > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; font-weight: 650; }.mode-panel-heading h3 { overflow: hidden; color: var(--text-strong); font-size: 17px; font-weight: 730; text-overflow: ellipsis; white-space: nowrap; }.mode-panel-heading b { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; min-height: 27px; padding: 0 9px; border: 1px solid color-mix(in srgb, var(--green) 45%, var(--line)); border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 12px; font-weight: 700; }
+.manual-launch-note { margin: 0 0 2px; padding: 9px 10px; border: 1px solid var(--amber-line); border-radius: 4px; background: var(--amber-soft); color: var(--amber); font-size: 12px; line-height: 1.55; }
 .manual-launch-note strong { margin-right: 4px; color: var(--text-strong); font-weight: 700; }
-.connection-notices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 16px 18px 18px; color: var(--muted); font-size: 10px; line-height: 1.55; }.connection-notice { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 10px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface-soft); }.connection-notice figcaption { margin: 0; }.connection-notice strong { margin-right: 4px; color: var(--text-strong); font-weight: 700; }.connection-notice img { display: block; width: 100%; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }.appearance-dialog .connection-notice img { max-height: 156px; object-fit: contain; object-position: top left; }
+.connection-notices { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 18px 20px 20px; color: var(--muted); font-size: 12px; line-height: 1.6; }.connection-notice { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface-soft); }.connection-notice figcaption { margin: 0; }.connection-notice strong { margin-right: 4px; color: var(--text-strong); font-weight: 700; }.connection-notice img { display: block; width: 100%; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }.appearance-dialog .connection-notice img { max-height: 300px; object-fit: contain; object-position: top left; }
 .mode-panel :deep(.direct-ssh-form) { max-width: 500px; margin: 0; padding: 18px; }
-@media (max-width: 760px) { .launcher-body { grid-template-columns: 1fr; gap: 16px; }.mode-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); align-self: stretch; }.mode-tabs button { grid-template-columns: 28px minmax(0, 1fr); min-height: 60px; gap: 7px; }.mode-tab-icon { width: 28px; height: 28px; }.mode-tab-arrow { display: none; }.mode-tab-copy::after { display: none; }.connection-notices { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .launcher-body { gap: 16px; }.mode-tabs { grid-template-columns: 1fr; align-self: stretch; }.mode-tabs button { grid-template-columns: 28px minmax(0, 1fr) 16px; min-height: 60px; gap: 7px; }.mode-tab-icon { width: 28px; height: 28px; }.mode-tab-arrow { display: block; }.mode-tab-copy::after { display: block; }.connection-notices { grid-template-columns: 1fr; } }
 @media (max-width: 520px) { .appearance-dialog { padding: 17px; }.launcher-header { align-items: flex-start; justify-content: flex-start; padding-right: 34px; }.launcher-visual { width: 40px; height: 40px; }.appearance-embedded h2 { font-size: 17px; }.mode-tabs { grid-template-columns: 1fr; }.mode-tabs button { grid-template-columns: 32px minmax(0, 1fr) 16px; }.mode-tab-arrow { display: block; }.mode-tab-copy::after { display: block; }.mode-panel-heading,.connection-notices { padding-right: 13px; padding-left: 13px; } }
 </style>

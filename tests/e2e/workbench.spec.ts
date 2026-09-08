@@ -501,7 +501,7 @@ test('keeps file transfer with its SSH pane and retains read-only history withou
     const broadcastSend = page.getByRole('button', { name: '发送所有窗口执行', exact: true })
     await expect(broadcastInput).toBeDisabled()
     await expect(broadcastSend).toBeDisabled()
-    await page.getByRole('checkbox', { name: '启用发送键输入到所有会话', exact: true }).check()
+    await page.getByRole('switch', { name: '启用发送命令到所有窗口', exact: true }).check()
     await expect(broadcastInput).toBeEnabled()
 
     await fileTransferButton.click()

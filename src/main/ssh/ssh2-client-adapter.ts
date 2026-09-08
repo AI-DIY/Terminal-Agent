@@ -21,19 +21,131 @@ const SFTP_TRANSFER_IDLE_TIMEOUT_MS = 30_000
 export const SSH_KEEPALIVE_INTERVAL_MS = 15_000
 export const SSH_KEEPALIVE_COUNT_MAX = 4
 
+type TransportFailureListener = (error: Error) => void
+
+type TransportLifecycle = {
+  assertOpen(): void
+  fail(reason: unknown): Error
+  subscribe(listener: TransportFailureListener): () => void
+}
+
+/**
+ * Keep transport state separate from ssh2's channels.  A client-level socket
+ * failure must reject SFTP work, but it must not become an uncaught
+ * EventEmitter error or accidentally close an unrelated SSH client.
+ */
+function createTransportLifecycle(): TransportLifecycle {
+  let failure: Error | undefined
+  const listeners = new Set<TransportFailureListener>()
+  const normalize = (reason: unknown): Error => reason instanceof Error
+    ? reason
+    : new Error(reason === undefined ? 'SSH connection failed' : String(reason))
+
+  return {
+    assertOpen: () => {
+      if (failure) throw failure
+    },
+    fail: (reason: unknown): Error => {
+      const normalized = normalize(reason)
+      if (failure) return failure
+      failure = normalized
+      for (const listener of [...listeners]) {
+        try { listener(normalized) } catch { /* One failed waiter must not break transport cleanup. */ }
+      }
+      listeners.clear()
+      return normalized
+    },
+    subscribe: (listener: TransportFailureListener): (() => void) => {
+      if (failure) {
+        try { listener(failure) } catch { /* Keep the caller's rejection path isolated. */ }
+        return () => undefined
+      }
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+}
+
+type ClientEventListener = (...args: unknown[]) => void
+type ClientEventEmitter = {
+  on?: (event: string, listener: ClientEventListener) => unknown
+  once?: (event: string, listener: ClientEventListener) => unknown
+}
+
+function listenClientEvent(client: Client, event: 'error' | 'close' | 'end', listener: ClientEventListener): void {
+  const candidate = client as unknown as ClientEventEmitter
+  if (typeof candidate.on === 'function') {
+    candidate.on(event, listener)
+    return
+  }
+  // Lightweight test/custom clients may only expose once().  Real ssh2
+  // clients always expose on(), which keeps the error listener persistent.
+  if (typeof candidate.once === 'function') candidate.once(event, listener)
+}
+
 export class Ssh2ClientAdapter implements SshClientPort {
   async connect(options: SshConnectOptions): Promise<SshConnection> {
     const client = new Client()
+    const transport = createTransportLifecycle()
+    let ready = false
+    let connectSettled = false
 
-    await new Promise<void>((resolve, reject) => {
-      client.once('ready', resolve)
-      client.once('error', reject)
-      client.connect({
-        ...options,
-        keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
-        keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
+    // ssh2 can emit a client-level error long after the initial ready event.
+    // Keep this listener for the entire connection lifetime: EventEmitter
+    // treats an error without a listener as an uncaught process exception.
+    let rejectConnect: ((error: Error) => void) | undefined
+    const onClientError = (error: unknown): void => {
+      const failure = transport.fail(error)
+      if (!ready && !connectSettled) {
+        connectSettled = true
+        rejectConnect?.(failure)
+      }
+    }
+    const onClientClose = (): void => {
+      const failure = transport.fail(new Error('SSH connection closed'))
+      if (!ready && !connectSettled) {
+        connectSettled = true
+        rejectConnect?.(failure)
+      }
+    }
+    const onClientEnd = (): void => {
+      const failure = transport.fail(new Error('SSH connection ended'))
+      if (!ready && !connectSettled) {
+        connectSettled = true
+        rejectConnect?.(failure)
+      }
+    }
+    listenClientEvent(client, 'error', onClientError)
+    listenClientEvent(client, 'close', onClientClose)
+    listenClientEvent(client, 'end', onClientEnd)
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        rejectConnect = reject
+        const onReady = (): void => {
+          ready = true
+          connectSettled = true
+          resolve()
+        }
+        client.once('ready', onReady)
+        try {
+          client.connect({
+            ...options,
+            keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
+            keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
+          })
+        } catch (error) {
+          const failure = transport.fail(error)
+          connectSettled = true
+          reject(failure)
+        }
       })
-    })
+    } catch (error) {
+      // Avoid leaving a half-open ssh2 client behind when authentication or
+      // socket setup fails before the connection becomes usable.
+      try { client.end() } catch { /* The client may already be closed. */ }
+      throw error
+    }
 
     // A number of enterprise bastions allow an interactive PTY and SFTP but
     // are fragile when multiple SFTP subsystem requests are made at once on
@@ -43,23 +155,36 @@ export class Ssh2ClientAdapter implements SshClientPort {
     // its own short-lived SFTP channel.
     let fileTransferTail: Promise<void> = Promise.resolve()
     const queueFileTransfer = <T>(operation: () => Promise<T>): Promise<T> => {
-      const result = fileTransferTail.then(operation, operation)
+      const run = (): Promise<T> => {
+        transport.assertOpen()
+        return operation()
+      }
+      const result = fileTransferTail.then(run, run)
       fileTransferTail = result.then(() => undefined, () => undefined)
       return result
     }
 
     return {
       ...(isIP(options.host) ? { remoteAddress: options.host.toLowerCase() } : {}),
-      openShell: async (columns, rows) => adaptShell(await openShell(client, columns, rows)),
-      execute: (command, maxOutputBytes) => executeCommand(client, command, maxOutputBytes),
+      openShell: async (columns, rows) => {
+        transport.assertOpen()
+        return adaptShell(await openShell(client, columns, rows))
+      },
+      execute: async (command, maxOutputBytes) => {
+        transport.assertOpen()
+        return executeCommand(client, command, maxOutputBytes)
+      },
       // SFTP opens an independent SSH channel.  The PTY channel returned by
       // openShell remains alive while either operation is in progress.
       fileTransfer: {
-        listDirectory: remotePath => queueFileTransfer(() => listDirectory(client, remotePath)),
-        uploadFile: (localPath, remotePath, onProgress) => queueFileTransfer(() => transferFile(client, 'upload', localPath, remotePath, onProgress)),
-        downloadFile: (remotePath, localPath, onProgress) => queueFileTransfer(() => transferFile(client, 'download', remotePath, localPath, onProgress)),
+        listDirectory: remotePath => queueFileTransfer(() => listDirectory(transport, client, remotePath)),
+        uploadFile: (localPath, remotePath, onProgress) => queueFileTransfer(() => transferFile(transport, client, 'upload', localPath, remotePath, onProgress)),
+        downloadFile: (remotePath, localPath, onProgress) => queueFileTransfer(() => transferFile(transport, client, 'download', remotePath, localPath, onProgress)),
       },
-      close: () => client.end(),
+      close: () => {
+        transport.fail(new Error('SSH connection closed'))
+        client.end()
+      },
     }
   }
 }
@@ -72,27 +197,32 @@ type TransferDirection = 'upload' | 'download'
  * this adapter; no ssh2 objects or credentials cross the process boundary.
  */
 async function transferFile(
+  transport: TransportLifecycle,
   client: Client,
   direction: TransferDirection,
   sourcePath: string,
   targetPath: string,
   onProgress?: (progress: SshFileTransferProgress) => void,
 ): Promise<number> {
+  transport.assertOpen()
   const uploadSize = direction === 'upload'
     ? await stat(sourcePath).then(result => result.size)
     : undefined
+  transport.assertOpen()
   if (uploadSize !== undefined) onProgress?.({ transferredBytes: 0, totalBytes: uploadSize })
   else onProgress?.({ transferredBytes: 0 })
 
-  const sftp = await openSftp(client)
+  const sftp = await openSftp(transport, client)
   let lastTransferred = 0
   let settled = false
 
   return await new Promise<number>((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout> | undefined
+    let unsubscribeTransport = (): void => undefined
     const finish = (error?: Error | null): void => {
       if (settled) return
       settled = true
+      unsubscribeTransport()
       if (timeout) clearTimeout(timeout)
       try { sftp.end() } catch { /* The channel may already be closed. */ }
       if (error) {
@@ -115,6 +245,7 @@ async function transferFile(
       timeout.unref?.()
     }
     const step = (total: number, _chunk: number, fileSize: number): void => {
+      if (settled) return
       // ssh2 reports the cumulative transferred amount as `total`; retain a
       // monotonic value even with unusual server implementations.
       lastTransferred = Math.max(lastTransferred, Number.isFinite(total) ? Math.max(0, Math.floor(total)) : 0)
@@ -134,6 +265,8 @@ async function transferFile(
     }
     listenSftpEvent(sftp, 'error', onSftpError)
     listenSftpEvent(sftp, 'close', onSftpClose)
+    unsubscribeTransport = transport.subscribe(finish)
+    if (settled) return
     armTimeout()
     try {
       if (direction === 'upload') sftp.fastPut(sourcePath, targetPath, options, callback)
@@ -144,12 +277,15 @@ async function transferFile(
   })
 }
 
-function openSftp(client: Client): Promise<SFTPWrapper> {
+function openSftp(transport: TransportLifecycle, client: Client): Promise<SFTPWrapper> {
+  transport.assertOpen()
   return new Promise((resolve, reject) => {
     let settled = false
+    let unsubscribeTransport = (): void => undefined
     const timeout = setTimeout(() => {
       if (settled) return
       settled = true
+      unsubscribeTransport()
       reject(new Error('SFTP 通道建立超时，请检查远程服务是否启用 SFTP。'))
     }, SFTP_CHANNEL_TIMEOUT_MS)
     timeout.unref?.()
@@ -161,11 +297,14 @@ function openSftp(client: Client): Promise<SFTPWrapper> {
         return
       }
       settled = true
+      unsubscribeTransport()
       clearTimeout(timeout)
       if (error) reject(error)
       else if (!sftp) reject(new Error('SSH server returned no SFTP channel'))
       else resolve(sftp)
     }
+    unsubscribeTransport = transport.subscribe(finish)
+    if (settled) return
     try {
       client.sftp((error, sftp) => {
         if (error) {
@@ -180,14 +319,17 @@ function openSftp(client: Client): Promise<SFTPWrapper> {
   })
 }
 
-async function listDirectory(client: Client, remotePath: string): Promise<readonly SshDirectoryEntry[]> {
-  const sftp = await openSftp(client)
+async function listDirectory(transport: TransportLifecycle, client: Client, remotePath: string): Promise<readonly SshDirectoryEntry[]> {
+  transport.assertOpen()
+  const sftp = await openSftp(transport, client)
   return await new Promise<readonly SshDirectoryEntry[]>((resolve, reject) => {
     let settled = false
+    let unsubscribeTransport = (): void => undefined
     const timeout = setTimeout(() => finish(new Error('SFTP 目录读取超时，请检查远程服务是否启用 SFTP。')), SFTP_CHANNEL_TIMEOUT_MS)
     const finish = (error?: Error, entries?: readonly SshDirectoryEntry[]): void => {
       if (settled) return
       settled = true
+      unsubscribeTransport()
       if (timeout) clearTimeout(timeout)
       try { sftp.end() } catch { /* The channel may already be closed. */ }
       if (error) reject(error)
@@ -200,9 +342,12 @@ async function listDirectory(client: Client, remotePath: string): Promise<readon
     }
     listenSftpEvent(sftp, 'error', onError)
     listenSftpEvent(sftp, 'close', onClose)
+    unsubscribeTransport = transport.subscribe(finish)
+    if (settled) return
     timeout.unref?.()
     try {
       sftp.readdir(remotePath, (error, entries) => {
+        if (settled) return
         if (error) {
           finish(error)
           return

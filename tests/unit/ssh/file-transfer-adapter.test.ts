@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SSH_KEEPALIVE_COUNT_MAX, SSH_KEEPALIVE_INTERVAL_MS, Ssh2ClientAdapter } from '../../../src/main/ssh/ssh2-client-adapter'
 
 const state = vi.hoisted(() => {
@@ -34,7 +34,14 @@ const state = vi.hoisted(() => {
     }),
   }
   let ready: (() => void) | undefined
+  const clientListeners = new Map<string, Set<(...args: unknown[]) => void>>()
   const client = {
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      const listeners = clientListeners.get(event) ?? new Set<(...args: unknown[]) => void>()
+      listeners.add(listener)
+      clientListeners.set(event, listeners)
+      return client
+    }),
     once: vi.fn((event: string, listener: () => void) => {
       if (event === 'ready') ready = listener
       return client
@@ -45,14 +52,31 @@ const state = vi.hoisted(() => {
     shell: vi.fn(),
     end: vi.fn(),
   }
+  const emitClient = (event: string, ...args: unknown[]): void => {
+    for (const listener of [...(clientListeners.get(event) ?? [])]) listener(...args)
+  }
+  const clearClientListeners = (): void => clientListeners.clear()
   const Client = class {
     constructor() { return client }
   }
-  return { client, Client, sftp }
+  return { client, Client, sftp, emitClient, clearClientListeners }
 })
 
 vi.mock('ssh2', () => ({ Client: state.Client }))
 vi.mock('node:fs/promises', () => ({ stat: vi.fn(async (path: string) => ({ size: path.includes('archive') ? 7 : 4 })) }))
+
+beforeEach(() => {
+  state.clearClientListeners()
+  state.client.on.mockClear()
+  state.client.once.mockClear()
+  state.client.connect.mockClear()
+  state.client.sftp.mockClear()
+  state.client.end.mockClear()
+  state.sftp.end.mockClear()
+  state.sftp.fastPut.mockClear()
+  state.sftp.fastGet.mockClear()
+  state.sftp.readdir.mockClear()
+})
 
 describe('Ssh2ClientAdapter SFTP transfer channel', () => {
   it('uploads and downloads over an independent SFTP channel with byte progress', async () => {
@@ -100,6 +124,39 @@ describe('Ssh2ClientAdapter SFTP transfer channel', () => {
 
     await expect(connection.fileTransfer?.uploadFile('C:/report.txt', '/tmp/report.txt')).rejects.toThrow('subsystem unavailable')
     expect(state.client.end).not.toHaveBeenCalled()
+  })
+
+  it('keeps a client error listener after ready and fails active and queued SFTP work on transport loss', async () => {
+    let transferStarted!: () => void
+    const started = new Promise<void>(resolve => { transferStarted = resolve })
+    state.sftp.fastGet.mockImplementationOnce(() => {
+      transferStarted()
+    })
+
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+    const active = connection.fileTransfer?.downloadFile('/tmp/archive.zip', 'C:/archive.zip')
+    await started
+    const queued = connection.fileTransfer?.listDirectory?.('/second')
+
+    expect(state.client.on).toHaveBeenCalledWith('error', expect.any(Function))
+    expect(() => state.emitClient('error', new Error('connection reset after ready'))).not.toThrow()
+    await expect(active).rejects.toThrow('connection reset after ready')
+    await expect(queued).rejects.toThrow('connection reset after ready')
+    expect(state.client.sftp).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not close the whole SSH client when an SFTP channel completes normally', async () => {
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+    await expect(connection.fileTransfer?.uploadFile('C:/report.txt', '/tmp/report.txt')).resolves.toBe(4)
+    expect(state.client.end).not.toHaveBeenCalled()
+    expect(state.sftp.end).toHaveBeenCalledOnce()
+  })
+
+  it('returns rejected promises for operations requested after transport close', async () => {
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+    connection.close()
+    await expect(connection.execute?.('hostname')).rejects.toThrow('SSH connection closed')
+    await expect(connection.fileTransfer?.listDirectory?.('/')).rejects.toThrow('SSH connection closed')
   })
 
   it('rejects instead of leaving the invoke pending when a transfer callback never arrives', async () => {
