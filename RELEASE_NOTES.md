@@ -1,3 +1,27 @@
+# Terminal-Agent v3.3.1
+
+Release date: 2026-09-09
+
+## 开源 TA 修改意见微调
+
+- 设置导航暂时隐藏“安全围栏”，保留已有规则、配置、IPC 和运行时安全约束；外观新增“茉绿茶”主题，并适配任务空间、SSH 工作区、AI 工作区及原生标题栏。
+- SSH 文件传输改为在既有 SSH transport 上串行复用一个持久 SFTP 子系统；失败时只废弃 SFTP 子通道，不关闭交互式终端。连接与 SFTP 生命周期会写入安装目录 `logs\\ssh-connection.log`，记录不包含密码、私钥或命令内容。
+- “发送命令到所有窗口”输入框补充组合键发送提示，并新增放大编辑图标和大空间编辑弹窗；保留普通 Enter 发送、组合键直接发送和 Shift+Enter 多行编辑行为。
+- 移除 SSH 工作区的“返回实时任务”入口；所有新建 SSH 连接场景支持固定认证方式头部、内容垂直滚动和窄窗口文字换行，不再裁切下方内容。
+- AI 工作区的普通助手文本统一采用安全 Markdown 渲染；思考状态、审核命令计划和已执行命令卡片保持原有专用呈现。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-3.3.1.exe`
+- `putty.exe`
+- `快速安装脚本.cmd`
+- `快速安装手册.md`
+- `快速安装手册.pdf`
+- `Terminal-Agent-Quick-Install-3.3.1.zip`
+- `Terminal-Agent-Uninstall-Cleanup-3.3.1.zip`
+
+---
+
 # Terminal-Agent v3.3.0
 
 Release date: 2026-09-08

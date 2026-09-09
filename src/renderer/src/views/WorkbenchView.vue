@@ -21,7 +21,7 @@ import { createSessionsStore, uniqueSessionHostCount, type SessionView } from '.
 import { getLayoutPreferencesStore } from '../stores/layout-preferences'
 import { createShellHistoryStore } from '../stores/shell-history'
 import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosure-queue'
-import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, runWorkbenchSessionOpen, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
+import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 import { getUserPreferencesStore } from '../stores/user-preferences'
 import { getSsoStore } from '../stores/sso'
 import { consumeWorkbenchNavigationHandoff } from '../stores/workbench-navigation-handoff'
@@ -677,21 +677,23 @@ function selectPrivateKey(accept: (selection: PrivateKeySelection | null) => voi
 async function connect(request: ConnectionDialogRequest): Promise<void> {
   connectionError.value = ''
   const targetChatId = activeWorkbenchChatId.value
-  const ownershipOperation = sessionOwnership.begin(targetChatId ?? '')
-  await runWorkbenchSessionOpen({
-    gate: workbenchOperations,
-    targetChatId,
-    open: async () => {
-      if (request.profile) {
-        await window.terminalAgent.sessions.saveProfile(request.profile)
-        await refreshSavedProfiles()
-      }
-      return window.terminalAgent.sessions.connect(request.connection)
-    },
-    attach: (session, current, capturedTargetChatId) => { sessionOwnership.resolve(ownershipOperation, session); return attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined) },
-    complete: () => { sessionOwnership.complete(ownershipOperation); closeConnectionDialog() },
-    fail: error => { connectionError.value = error instanceof Error ? error.message : '无法建立 SSH 会话。' },
-  })
+  const operationGeneration = workbenchOperations.begin()
+  const isCurrent = () => workbenchOperations.isCurrent(operationGeneration)
+  const ownershipOperation = sessionOwnership.begin(targetChatId ?? '', isCurrent)
+  try {
+    if (request.profile) {
+      await window.terminalAgent.sessions.saveProfile(request.profile)
+      await refreshSavedProfiles()
+    }
+    const session = await window.terminalAgent.sessions.connect(request.connection)
+    sessionOwnership.resolve(ownershipOperation, session)
+    await attachSession(session, true, isCurrent, (session as SessionView & { chatId?: string }).chatId ?? targetChatId ?? undefined)
+    if (isCurrent()) closeConnectionDialog()
+  } catch (error) {
+    if (isCurrent()) connectionError.value = error instanceof Error ? error.message : '无法建立 SSH 会话。'
+  } finally {
+    sessionOwnership.complete(ownershipOperation)
+  }
 }
 
 function createConnection(): void {
@@ -764,15 +766,19 @@ function trapConnectionFocus(event: KeyboardEvent): void {
 async function openSavedProfile(id: string): Promise<void> {
   connectionError.value = ''
   const targetChatId = activeWorkbenchChatId.value
-  const ownershipOperation = sessionOwnership.begin(targetChatId ?? '')
-  await runWorkbenchSessionOpen({
-    gate: workbenchOperations,
-    targetChatId,
-    open: () => window.terminalAgent.sessions.openProfile(id),
-    attach: (session, current, capturedTargetChatId) => { sessionOwnership.resolve(ownershipOperation, session); return attachSession(session, true, current, (session as SessionView & { chatId?: string }).chatId ?? capturedTargetChatId ?? undefined) },
-    complete: closeSavedSessionsDialog,
-    fail: error => { sessionOwnership.complete(ownershipOperation); connectionError.value = error instanceof Error ? error.message : '无法打开已保存的 SSH 会话。' },
-  })
+  const operationGeneration = workbenchOperations.begin()
+  const isCurrent = () => workbenchOperations.isCurrent(operationGeneration)
+  const ownershipOperation = sessionOwnership.begin(targetChatId ?? '', isCurrent)
+  try {
+    const session = await window.terminalAgent.sessions.openProfile(id)
+    sessionOwnership.resolve(ownershipOperation, session)
+    await attachSession(session, true, isCurrent, (session as SessionView & { chatId?: string }).chatId ?? targetChatId ?? undefined)
+    if (isCurrent()) closeSavedSessionsDialog()
+  } catch (error) {
+    if (isCurrent()) connectionError.value = error instanceof Error ? error.message : '无法打开已保存的 SSH 会话。'
+  } finally {
+    sessionOwnership.complete(ownershipOperation)
+  }
 }
 
 async function deleteSavedProfile(id: string): Promise<void> {
@@ -896,7 +902,7 @@ watch(
 )
 
 onMounted(() => {
-  handleOpenedSession = createWorkbenchOpenedSessionHandler({ tracker: sessionOwnership, currentChatId: () => isLiveChat.value ? chatStore.state.selectedId : null, attach: (session, target) => attachSession(session as Omit<SessionView, 'buffer'>, true, () => true, target ?? undefined) })
+  handleOpenedSession = createWorkbenchOpenedSessionHandler({ tracker: sessionOwnership, currentChatId: () => isLiveChat.value ? chatStore.state.selectedId : null, attach: (session, target, isCurrent) => attachSession(session as Omit<SessionView, 'buffer'>, true, isCurrent, target ?? undefined) })
   stopShellHistoryEligibilityRefresh = shellHistory.startEligibilityRefresh({
     setInterval: (callback, delay) => window.setInterval(callback, delay),
     clearInterval: handle => window.clearInterval(handle),
@@ -1006,12 +1012,10 @@ onBeforeUnmount(() => {
         :active-session-id="activeSessionId"
         :shell-count="isLiveChat ? currentChatUniqueHostCount : 0"
         :is-live="isLiveChat"
-        :live-chat-available="Boolean(chatStore.state.liveChatId)"
         :history-hosts="historyHosts"
         @select="select"
         @close="close"
         @connect="createConnection"
-        @restore-live="chatStore.state.liveChatId ? selectChat(chatStore.state.liveChatId) : undefined"
         @history="openShellHistory"
         @history-menu="openHistoricalShellMenu"
         @reorder="reorderSessions"
@@ -1084,12 +1088,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .header-button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; font-weight: 600; }.header-button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
-.empty-state { display: grid; align-content: safe center; min-width: 0; min-height: 0; overflow: auto; padding: clamp(28px, 5vh, 64px) clamp(20px, 3vw, 48px); background: var(--surface); }
+.empty-state { display: grid; align-content: safe center; height: 100%; min-width: 0; min-height: 0; overflow: auto; padding: clamp(28px, 5vh, 64px) clamp(20px, 3vw, 48px); background: var(--surface); }
 .agent-empty { display: grid; gap: 7px; padding: 16px; }
 .read-only { background: var(--surface-soft); }
 .agent-empty strong { color: var(--text-strong); font-size: 12px; }
 .agent-empty p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .connection-error { max-width: min(42vw, 480px); margin: 0; overflow: hidden; color: var(--red); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .diagnostic-error { max-width: min(30vw, 320px); min-width: 0; margin: 0; overflow: hidden; color: var(--red); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.connection-modal { position: fixed; z-index: 10; inset: 57px 9px 9px; display: grid; align-content: safe center; justify-content: center; padding: 16px; overflow: auto; border-radius: 0 0 7px 7px; background: rgb(20 24 29 / 52%); backdrop-filter: blur(1px); }
+.connection-modal { position: fixed; z-index: 10; inset: 57px 9px 9px; display: grid; align-content: safe center; justify-content: center; box-sizing: border-box; padding: 16px; overflow: hidden; border-radius: 0 0 7px 7px; background: rgb(20 24 29 / 52%); backdrop-filter: blur(1px); }
 </style>

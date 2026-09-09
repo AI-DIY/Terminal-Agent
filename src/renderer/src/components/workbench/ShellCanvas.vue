@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Files, History, LayoutGrid, Plus, X } from '@lucide/vue'
-import { computed, ref, watch } from 'vue'
+import { Expand, Files, History, LayoutGrid, Plus, X } from '@lucide/vue'
+import { computed, nextTick, ref, watch } from 'vue'
+import { broadcastCommandPayload } from './broadcast-command'
 import SessionTabs from '../SessionTabs.vue'
 import TerminalPane from '../TerminalPane.vue'
 import FileTransferPanel from './FileTransferPanel.vue'
@@ -27,14 +28,12 @@ const props = defineProps<{
   activeSessionId: string | null
   shellCount: number
   isLive: boolean
-  liveChatAvailable: boolean
   historyHosts: HistoryHost[]
 }>()
 const emit = defineEmits<{
   select: [sessionId: string]
   close: [sessionId: string]
   connect: []
-  restoreLive: []
   history: [hostname: string, historyId?: string]
   historyMenu: [historyHostId: string]
   reorder: [sessionIds: string[]]
@@ -56,6 +55,8 @@ const broadcastEnabled = ref(false)
 const broadcastInput = ref('')
 const broadcastSending = ref(false)
 const broadcastStatus = ref('')
+const broadcastEditorOpen = ref(false)
+const broadcastEditor = ref<HTMLTextAreaElement | null>(null)
 type BroadcastRequest = {
   data: string
   targets: string[]
@@ -143,13 +144,6 @@ function setFileTransferBusy(sessionId: string, busy: boolean): void {
   fileTransferBusySessionIds.value = next
 }
 
-function hasTerminalControlCharacter(value: string): boolean {
-  // Keep C0 controls (including CR/LF) and DEL intact.  A pasted escape
-  // sequence must reach the remote shell byte-for-byte instead of receiving
-  // an extra carriage return intended for ordinary one-line commands.
-  return /[\u0000-\u001f\u007f]/.test(value)
-}
-
 async function drainBroadcastQueue(): Promise<void> {
   if (broadcastQueueRunning) return
   broadcastQueueRunning = true
@@ -196,16 +190,13 @@ function sendBroadcastData(data: string, clearInputValue?: string): void {
 
 function sendBroadcast(): void {
   const value = broadcastInput.value
-  if (!value || (!value.trim() && !hasTerminalControlCharacter(value))) return
-  // Ordinary text is a command-like keystroke and is executed immediately.
-  // Control bytes (including pasted ANSI/input sequences) are already complete
-  // terminal input and must not be followed by an implicit carriage return.
-  const containsControl = hasTerminalControlCharacter(value)
-  sendBroadcastData(containsControl ? value : `${value}\r`, value)
+  const data = broadcastCommandPayload(value)
+  if (!data) return
+  sendBroadcastData(data, value)
 }
 
 function isBroadcastInputSendable(value: string): boolean {
-  return Boolean(value) && (Boolean(value.trim()) || hasTerminalControlCharacter(value))
+  return broadcastCommandPayload(value) !== null
 }
 
 function controlCharacterForKey(event: KeyboardEvent): string | null {
@@ -240,6 +231,35 @@ function handleBroadcastKeydown(event: KeyboardEvent): void {
   // the signal before it can be delivered to every connected shell.
   event.preventDefault()
   sendBroadcastControl(control)
+}
+
+function openBroadcastEditor(): void {
+  if (!broadcastEnabled.value || !canUseWorkspaceControls.value) return
+  broadcastEditorOpen.value = true
+  void nextTick(() => broadcastEditor.value?.focus())
+}
+
+function closeBroadcastEditor(): void {
+  broadcastEditorOpen.value = false
+}
+
+function sendBroadcastFromEditor(): void {
+  const value = broadcastInput.value
+  const data = broadcastCommandPayload(value, true)
+  if (data) sendBroadcastData(data, value)
+  closeBroadcastEditor()
+}
+
+function handleBroadcastEditorKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeBroadcastEditor()
+    return
+  }
+  // Shift+Enter remains available for composing a multi-line shell input;
+  // unmodified Enter preserves the compact input's immediate-send behavior.
+  if (event.key === 'Enter' && event.shiftKey) return
+  handleBroadcastKeydown(event)
 }
 
 function beginSessionDrag(sessionId: string, event: DragEvent): void {
@@ -425,7 +445,6 @@ watch(
         </div>
         <span v-else class="history-readonly-note">当前任务没有在线 SSH</span>
         <button v-if="isLive" type="button" class="connect-button" @click="emit('connect')"><Plus :size="13" aria-hidden="true" /><span>新建 SSH 连接</span></button>
-        <button v-else-if="liveChatAvailable" type="button" class="connect-button" @click="emit('restoreLive')">返回实时任务</button>
         <button
           v-if="isLive && currentSessions.length"
           type="button"
@@ -562,16 +581,26 @@ watch(
         />
         <span class="broadcast-switch-control" :class="{ enabled: broadcastEnabled }" aria-hidden="true"><i /></span>
       </label>
-      <input
-        v-model="broadcastInput"
-        class="broadcast-input"
-        type="text"
-        autocomplete="off"
-        aria-label="发送命令到所有窗口"
-        placeholder="输入要发送到所有在线 SSH 的命令"
-        :disabled="!broadcastEnabled"
-        @keydown="handleBroadcastKeydown"
-      />
+      <div class="broadcast-input-group">
+        <input
+          v-model="broadcastInput"
+          class="broadcast-input"
+          type="text"
+          autocomplete="off"
+          aria-label="发送命令到所有窗口"
+          placeholder="输入要发送到所有在线 SSH 的命令。注意：组合键操作跳过发送按键直接发送"
+          :disabled="!broadcastEnabled"
+          @keydown="handleBroadcastKeydown"
+        />
+        <button
+          type="button"
+          class="broadcast-expand-button"
+          aria-label="放大编辑广播命令"
+          title="放大编辑"
+          :disabled="!broadcastEnabled"
+          @click="openBroadcastEditor"
+        ><Expand :size="14" aria-hidden="true" /></button>
+      </div>
       <button
         type="button"
         class="broadcast-send-button"
@@ -580,6 +609,31 @@ watch(
       >{{ broadcastSending ? '发送中…' : '发送所有窗口执行' }}</button>
       <span class="broadcast-status" role="status" aria-live="polite">{{ broadcastStatus }}</span>
     </section>
+
+    <div v-if="broadcastEditorOpen" class="broadcast-editor-backdrop" role="presentation" @pointerdown.self="closeBroadcastEditor">
+      <section class="broadcast-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="broadcast-editor-title" @keydown="handleBroadcastEditorKeydown">
+        <header>
+          <strong id="broadcast-editor-title">发送命令到所有窗口</strong>
+          <button type="button" aria-label="关闭放大编辑" title="关闭" @click="closeBroadcastEditor"><X :size="15" aria-hidden="true" /></button>
+        </header>
+        <textarea
+          ref="broadcastEditor"
+          v-model="broadcastInput"
+          aria-label="放大编辑发送命令到所有窗口"
+          placeholder="输入要发送到所有在线 SSH 的命令。注意：组合键操作跳过发送按键直接发送"
+          :disabled="!broadcastEnabled"
+        />
+        <footer>
+          <span>{{ broadcastStatus }}</span>
+          <button
+            type="button"
+            class="broadcast-editor-send-button"
+            :disabled="!broadcastEnabled || !isBroadcastInputSendable(broadcastInput) || broadcastSending || !currentSessions.length"
+            @click="sendBroadcastFromEditor"
+          >{{ broadcastSending ? '发送中…' : '发送所有窗口执行' }}</button>
+        </footer>
+      </section>
+    </div>
 
   </section>
 </template>
@@ -650,9 +704,11 @@ watch(
 .broadcast-switch-control { box-sizing: border-box; display: inline-flex; width: 36px; height: 20px; flex: 0 0 auto; align-items: center; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--line); pointer-events: none; transition: background .15s,border-color .15s; }
 .broadcast-switch-control i { display: block; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(19 27 36 / 22%); transition: transform .15s; }
 .broadcast-switch-control.enabled { border-color: var(--accent); background: var(--accent); }.broadcast-switch-control.enabled i { transform: translateX(15px); }.broadcast-switch-input:focus-visible + .broadcast-switch-control { box-shadow: 0 0 0 3px var(--accent-soft); }
-.broadcast-input { box-sizing: border-box; display: block; width: 100%; min-width: 0; height: 27px; margin: 0; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 10px; line-height: 25px; }.broadcast-input:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 22%, transparent); }.broadcast-input:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }
+.broadcast-input-group { display: grid; grid-template-columns: minmax(0, 1fr) 27px; min-width: 0; gap: 4px; }.broadcast-input { box-sizing: border-box; display: block; width: 100%; min-width: 0; height: 27px; margin: 0; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 10px; line-height: 25px; }.broadcast-input:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 22%, transparent); }.broadcast-input:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }
+.broadcast-expand-button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.broadcast-expand-button:hover:not(:disabled) { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }.broadcast-expand-button:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }
 .broadcast-send-button { display: inline-flex; align-items: center; justify-content: center; height: 27px; margin: 0; padding: 0 9px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 680; line-height: 1; white-space: nowrap; }.broadcast-send-button:disabled { cursor: not-allowed; border-color: var(--line); background: var(--surface-soft); color: var(--faint); }
 .broadcast-status { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.broadcast-editor-backdrop { position: absolute; z-index: 15; inset: 0; display: grid; place-items: center; padding: 16px; background: rgb(20 24 29 / 48%); backdrop-filter: blur(1px); }.broadcast-editor-dialog { display: grid; grid-template-rows: auto minmax(180px, 1fr) auto; width: min(760px, 100%); height: min(520px, 100%); min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 20px 48px rgb(20 24 29 / 28%); }.broadcast-editor-dialog header,.broadcast-editor-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 9px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }.broadcast-editor-dialog header strong { color: var(--text-strong); font-size: 12px; }.broadcast-editor-dialog header button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.broadcast-editor-dialog header button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }.broadcast-editor-dialog textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; padding: 12px; resize: none; border: 0; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 12px; line-height: 1.55; outline: 0; }.broadcast-editor-dialog textarea:focus { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus) 32%, transparent); }.broadcast-editor-dialog textarea:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }.broadcast-editor-dialog footer { min-height: 46px; border-top: 1px solid var(--line); border-bottom: 0; }.broadcast-editor-dialog footer span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.broadcast-editor-send-button { flex: 0 0 auto; min-height: 28px; padding: 0 10px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 680; }.broadcast-editor-send-button:disabled { cursor: not-allowed; border-color: var(--line); background: var(--surface-soft); color: var(--faint); }
 @media (max-width: 1180px) {
   .shell-title { display: none; }
   .history-shell-heading span { display: none; }

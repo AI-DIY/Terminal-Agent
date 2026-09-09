@@ -107,34 +107,36 @@ function updateFields(next: DirectSshSharedFields): void {
           @keydown="onKeydown"
         ><span class="mode-tab-icon" aria-hidden="true"><component :is="item.icon" :size="17" /></span><span class="mode-tab-copy" :data-description="item.description">{{ item.label }}</span><ChevronRight class="mode-tab-arrow" :size="16" aria-hidden="true" /></button>
       </div>
-      <div class="mode-panel" role="tabpanel" :id="`${launcherInstanceId}-panel-${mode}`" :aria-labelledby="`${launcherInstanceId}-tab-${mode}`">
-        <header class="mode-panel-heading">
-          <div><span>当前连接方式</span><h3>{{ activeLabel }}</h3></div>
-          <b><CheckCircle2 :size="14" aria-hidden="true" />已选</b>
-        </header>
-        <template v-if="mode === 'bastionHost'">
-          <section class="connection-notices" aria-label="堡垒机连接须知">
-            <p class="manual-launch-note"><strong>请手动操作</strong>请在堡垒机客户端中指定目标主机并发起 SSH 连接，Terminal-Agent 不会自动填写或唤起堡垒机。</p>
-            <figure class="connection-notice">
-              <figcaption><strong>【配置须知】</strong>AccessClient“会话配置”的“会话访问方式”必须使用“使用全局设置(putty)”。</figcaption>
-              <img :src="sessionConfigImage" alt="AccessClient 会话配置：使用全局设置(putty)" />
-            </figure>
-            <figure class="connection-notice">
-              <figcaption><strong>【使用须知】</strong>使用集团堡垒机正常指定主机 SSH 连接即可。</figcaption>
-              <img :src="bastionUsageImage" alt="集团堡垒机正常指定主机 SSH 连接" />
-            </figure>
-          </section>
-        </template>
-        <DirectSshForm v-else :key="mode" :mode="mode" :editing-profile="editingProfile" :initial-fields="fields" @fields-change="updateFields" @connect="directConnect" @save-profile="emit('saveProfile', $event)" @select-private-key="emit('selectPrivateKey', $event)" />
+      <div class="launcher-scroll-region">
+        <div class="mode-panel" role="tabpanel" :id="`${launcherInstanceId}-panel-${mode}`" :aria-labelledby="`${launcherInstanceId}-tab-${mode}`">
+          <header class="mode-panel-heading">
+            <div><span>当前连接方式</span><h3>{{ activeLabel }}</h3></div>
+            <b><CheckCircle2 :size="14" aria-hidden="true" />已选</b>
+          </header>
+          <template v-if="mode === 'bastionHost'">
+            <section class="connection-notices" aria-label="堡垒机连接须知">
+              <p class="manual-launch-note"><strong>请手动操作</strong>请在堡垒机客户端中指定目标主机并发起 SSH 连接，Terminal-Agent 不会自动填写或唤起堡垒机。</p>
+              <figure class="connection-notice">
+                <figcaption><strong>【配置须知】</strong>AccessClient“会话配置”的“会话访问方式”必须使用“使用全局设置(putty)”。</figcaption>
+                <img :src="sessionConfigImage" alt="AccessClient 会话配置：使用全局设置(putty)" />
+              </figure>
+              <figure class="connection-notice">
+                <figcaption><strong>【使用须知】</strong>使用集团堡垒机正常指定主机 SSH 连接即可。</figcaption>
+                <img :src="bastionUsageImage" alt="集团堡垒机正常指定主机 SSH 连接" />
+              </figure>
+            </section>
+          </template>
+          <DirectSshForm v-else :key="mode" :mode="mode" :editing-profile="editingProfile" :initial-fields="fields" @fields-change="updateFields" @connect="directConnect" @save-profile="emit('saveProfile', $event)" @select-private-key="emit('selectPrivateKey', $event)" />
+        </div>
       </div>
     </div>
   </section>
 </template>
 
 <style scoped>
-.ssh-launcher { width: min(100%, 1040px); color: var(--text); }
-.appearance-dialog { max-height: calc(100vh - 32px); overflow-y: auto; padding: clamp(20px, 3vw, 30px); border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: 0 20px 54px rgb(24 31 40 / 25%), 0 3px 12px rgb(24 31 40 / 12%); }
-.appearance-embedded { margin: auto; }
+.ssh-launcher { display: flex; flex-direction: column; width: min(100%, 1040px); min-width: 0; min-height: 0; color: var(--text); container-type: inline-size; }
+.appearance-dialog { box-sizing: border-box; width: min(1040px, calc(100vw - 64px)); height: min(100%, 760px); max-height: 100%; overflow: hidden; padding: clamp(20px, 3vw, 30px); border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: 0 20px 54px rgb(24 31 40 / 25%), 0 3px 12px rgb(24 31 40 / 12%); }
+.appearance-embedded { align-self: stretch; height: 100%; }
 .launcher-header { position: relative; display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 54px; text-align: left; }
 .launcher-title { min-width: 0; }.launcher-eyebrow { display: block; margin-bottom: 3px; color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .12em; }
 .launcher-visual { display: grid; place-items: center; width: 46px; height: 46px; flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--accent-soft) 76%, var(--surface)); color: var(--accent); }
@@ -143,16 +145,18 @@ h2 { color: var(--text-strong); font-size: 18px; font-weight: 740; }.appearance-
 .mode-description { margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .plugin-status { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin: 8px 0 0; color: var(--green); font-size: 10px; font-weight: 650; }
 .close-button { position: absolute; top: 0; right: 0; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--muted); }.close-button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
-.launcher-body { display: flex; flex-direction: column; gap: 18px; min-width: 0; margin-top: 24px; }
+.launcher-body { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; margin-top: 24px; }
 .mode-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-self: stretch; gap: 8px; margin: 0; padding: 0; border: 0; background: transparent; }
-.mode-tabs button { display: grid; grid-template-columns: 32px minmax(0, 1fr) 16px; align-items: center; gap: 9px; min-width: 0; min-height: 68px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); color: var(--muted); font-size: 14px; font-weight: 700; line-height: 1.35; text-align: left; }
-.mode-tab-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 6px; background: var(--surface); color: var(--accent); }.mode-tab-copy { display: grid; gap: 2px; min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 14px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }.mode-tab-copy::after { overflow: hidden; color: var(--muted); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; content: attr(data-description); }.mode-tab-arrow { justify-self: end; color: var(--faint); }
+.mode-tabs button { display: grid; grid-template-columns: 32px minmax(0, 1fr) 16px; align-items: center; gap: 9px; min-width: 0; min-height: 56px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); color: var(--muted); font-size: 14px; font-weight: 700; line-height: 1.35; text-align: left; }
+.mode-tab-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 6px; background: var(--surface); color: var(--accent); }.mode-tab-copy { display: grid; gap: 2px; min-width: 0; color: var(--text-strong); font-size: 14px; font-weight: 720; line-height: 1.35; overflow-wrap: anywhere; white-space: normal; }.mode-tab-copy::after { color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; white-space: normal; content: attr(data-description); }.mode-tab-arrow { justify-self: end; color: var(--faint); }
 .mode-tabs button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }.mode-tabs button.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }.mode-tabs button.active .mode-tab-icon { background: var(--accent-soft); }.mode-tabs button.active .mode-tab-copy { color: var(--accent); }.mode-tabs button.active .mode-tab-arrow { color: var(--accent); }
+.launcher-scroll-region { flex: 1 1 auto; min-width: 0; min-height: 0; margin-top: 18px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: color-mix(in srgb, var(--muted) 58%, transparent) transparent; scrollbar-gutter: stable; }.launcher-scroll-region::-webkit-scrollbar { width: 8px; }.launcher-scroll-region::-webkit-scrollbar-track { background: transparent; }.launcher-scroll-region::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--muted) 58%, transparent); background-clip: padding-box; }.launcher-scroll-region::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .mode-panel { width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); text-align: left; }.mode-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 18px 13px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 78%, var(--surface)); }.mode-panel-heading > div { min-width: 0; }.mode-panel-heading > div > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; font-weight: 650; }.mode-panel-heading h3 { overflow: hidden; color: var(--text-strong); font-size: 17px; font-weight: 730; text-overflow: ellipsis; white-space: nowrap; }.mode-panel-heading b { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; min-height: 27px; padding: 0 9px; border: 1px solid color-mix(in srgb, var(--green) 45%, var(--line)); border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 12px; font-weight: 700; }
 .manual-launch-note { margin: 0 0 2px; padding: 9px 10px; border: 1px solid var(--amber-line); border-radius: 4px; background: var(--amber-soft); color: var(--amber); font-size: 12px; line-height: 1.55; }
 .manual-launch-note strong { margin-right: 4px; color: var(--text-strong); font-weight: 700; }
 .connection-notices { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 18px 20px 20px; color: var(--muted); font-size: 12px; line-height: 1.6; }.connection-notice { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface-soft); }.connection-notice figcaption { margin: 0; }.connection-notice strong { margin-right: 4px; color: var(--text-strong); font-weight: 700; }.connection-notice img { display: block; width: 100%; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }.appearance-dialog .connection-notice img { max-height: 300px; object-fit: contain; object-position: top left; }
 .mode-panel :deep(.direct-ssh-form) { max-width: 500px; margin: 0; padding: 18px; }
-@media (max-width: 760px) { .launcher-body { gap: 16px; }.mode-tabs { grid-template-columns: 1fr; align-self: stretch; }.mode-tabs button { grid-template-columns: 28px minmax(0, 1fr) 16px; min-height: 60px; gap: 7px; }.mode-tab-icon { width: 28px; height: 28px; }.mode-tab-arrow { display: block; }.mode-tab-copy::after { display: block; }.connection-notices { grid-template-columns: 1fr; } }
-@media (max-width: 520px) { .appearance-dialog { padding: 17px; }.launcher-header { align-items: flex-start; justify-content: flex-start; padding-right: 34px; }.launcher-visual { width: 40px; height: 40px; }.appearance-embedded h2 { font-size: 17px; }.mode-tabs { grid-template-columns: 1fr; }.mode-tabs button { grid-template-columns: 32px minmax(0, 1fr) 16px; }.mode-tab-arrow { display: block; }.mode-tab-copy::after { display: block; }.mode-panel-heading,.connection-notices { padding-right: 13px; padding-left: 13px; } }
+@container (max-width: 620px) { .launcher-header { min-height: 46px; }.launcher-visual { width: 40px; height: 40px; }.mode-tabs { gap: 6px; }.mode-tabs button { grid-template-columns: 26px minmax(0, 1fr) 12px; gap: 6px; min-height: 0; padding: 7px; }.mode-tab-icon { width: 26px; height: 26px; }.mode-tab-copy { gap: 1px; font-size: 12px; line-height: 1.25; }.mode-tab-copy::after { font-size: 10px; line-height: 1.25; }.mode-tab-arrow { width: 12px; height: 12px; } }
+@container (max-width: 460px) { .mode-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }.mode-tabs button { grid-template-columns: 24px minmax(0, 1fr); gap: 4px; min-height: 56px; padding: 6px; }.mode-tab-icon { width: 24px; height: 24px; }.mode-tab-copy { font-size: 12px; line-height: 1.2; }.mode-tab-copy::after,.mode-tab-arrow { display: none; } }
+@media (max-width: 520px) { .appearance-dialog { padding: 17px; }.launcher-header { align-items: flex-start; justify-content: flex-start; padding-right: 34px; }.launcher-visual { width: 40px; height: 40px; }.appearance-embedded h2 { font-size: 17px; }.mode-panel-heading,.connection-notices { padding-right: 13px; padding-left: 13px; } }
 </style>

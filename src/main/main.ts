@@ -7,6 +7,7 @@ import { KeyMaterialStore } from './ssh/key-material-store'
 import { SessionService } from './ssh/session-service'
 import { FileDirectSessionRepository } from './ssh/direct-session-repository'
 import { Ssh2ClientAdapter } from './ssh/ssh2-client-adapter'
+import { createSshConnectionDiagnostics } from './ssh/ssh-connection-diagnostics'
 import { RawClientAdapter } from './ssh/raw-client-adapter'
 import { AccessClientService } from './access-client/access-client-service'
 import { AccessSessionResolver } from './access-client/access-session-resolver'
@@ -97,7 +98,11 @@ const ssoConfig = new SsoConfigService(userConfigPath, {
   ],
 })
 const ssoAuth = new SsoAuthenticationService(ssoConfig)
-const sessions = new SessionService(new Ssh2ClientAdapter(), new PrivateKeyLoader(new PpkToOpenSshConverter()), new RawClientAdapter())
+const sessions = new SessionService(
+  new Ssh2ClientAdapter(createSshConnectionDiagnostics(process.execPath)),
+  new PrivateKeyLoader(new PpkToOpenSshConverter()),
+  new RawClientAdapter(),
+)
 const keyMaterials = new KeyMaterialStore()
 const secretStore = new ElectronSecretStore()
 const directSessions = new FileDirectSessionRepository(join(app.getPath('userData'), 'direct-sessions.json'), secretStore)

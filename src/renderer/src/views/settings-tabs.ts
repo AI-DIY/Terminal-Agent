@@ -14,5 +14,5 @@ export type SettingsTabId = typeof SETTINGS_TABS[number]['id']
  * preference compatibility, while temporarily hiding routes that are not part
  * of the current user-facing settings surface.
  */
-export const SETTINGS_NAV_TABS = SETTINGS_TABS.filter(item => item.id !== 'routing' && item.id !== 'vlm' && item.id !== 'memory')
+export const SETTINGS_NAV_TABS = SETTINGS_TABS.filter(item => item.id !== 'routing' && item.id !== 'vlm' && item.id !== 'fence' && item.id !== 'memory')
 export type SettingsNavTabId = typeof SETTINGS_NAV_TABS[number]['id']

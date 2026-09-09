@@ -18,7 +18,7 @@ export const WORKBENCH_RIGHT_WIDTH_MAX = 900
 // in the user's workbench preferences and mirrored to the document root.
 // Theme identifiers are persisted in user preferences; keep them stable and
 // explicit so the renderer and native title-bar overlay always agree.
-export const workbenchThemeSchema = z.enum(['pearl', 'graphite', 'noble-purple', 'imperial-gold', 'sakura-pink'])
+export const workbenchThemeSchema = z.enum(['pearl', 'graphite', 'noble-purple', 'imperial-gold', 'sakura-pink', 'jasmine-green-tea'])
 export type WorkbenchTheme = z.infer<typeof workbenchThemeSchema>
 
 // The original four presets remain valid for existing preference files.  The

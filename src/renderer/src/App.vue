@@ -190,6 +190,33 @@ watch(rootSurface, surface => {
   --terminal-text: #f8eaf0;
   color-scheme: light;
 }
+:root[data-theme="jasmine-green-tea"] {
+  --chrome: #e5f0e6;
+  --panel: #f1f7f0;
+  --surface: #fbfdf8;
+  --surface-soft: #f2f7ed;
+  --hover: #e4efe1;
+  --selected: #dcecdf;
+  --text-strong: #243b31;
+  --text: #3f584b;
+  --muted: #687e6e;
+  --faint: #8da08f;
+  --line: #cbdccb;
+  --line-soft: #e0eadf;
+  --accent: #2f7659;
+  --accent-soft: #d7ebdc;
+  --focus: #3d8d69;
+  --green: #278250;
+  --green-soft: #e0f0e2;
+  --amber: #9a6b20;
+  --amber-soft: #fff3d8;
+  --amber-line: #dfc17b;
+  --red: #b34f51;
+  --terminal: #16231d;
+  --terminal-head: #23362d;
+  --terminal-text: #e4eee5;
+  color-scheme: light;
+}
 *, *::before, *::after { box-sizing: border-box; letter-spacing: 0; }
 html, body, #app { width: 100%; min-width: 0; height: 100%; margin: 0; overflow: hidden; }
 body { background: #e7ebf0; color: var(--text); }
@@ -197,6 +224,7 @@ body { background: #e7ebf0; color: var(--text); }
 :root[data-theme="noble-purple"] body { background: #120b1b; }
 :root[data-theme="imperial-gold"] body { background: #0c0b09; }
 :root[data-theme="sakura-pink"] body { background: #fff4f7; }
+:root[data-theme="jasmine-green-tea"] body { background: #e7f0e5; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .58; }

@@ -191,9 +191,9 @@ describe('WorkbenchPreferencesService', () => {
   it('persists only a validated V18 theme name', async () => {
     const { service } = await createService()
 
-    await expect(service.saveTheme('graphite')).resolves.toMatchObject({ theme: 'graphite' })
+    await expect(service.saveTheme('jasmine-green-tea')).resolves.toMatchObject({ theme: 'jasmine-green-tea' })
     await expect(service.saveTheme('dark')).rejects.toThrow()
-    await expect(service.load()).resolves.toMatchObject({ theme: 'graphite' })
+    await expect(service.load()).resolves.toMatchObject({ theme: 'jasmine-green-tea' })
   })
 })
 

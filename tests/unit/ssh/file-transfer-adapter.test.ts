@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { SSH_KEEPALIVE_COUNT_MAX, SSH_KEEPALIVE_INTERVAL_MS, Ssh2ClientAdapter } from '../../../src/main/ssh/ssh2-client-adapter'
+
+let sftpEvents: EventEmitter
 
 const state = vi.hoisted(() => {
   const sftp = {
     end: vi.fn(),
+    once: vi.fn((event: string, listener: (...args: unknown[]) => void) => sftpEvents.once(event, listener)),
+    off: vi.fn((event: string, listener: (...args: unknown[]) => void) => sftpEvents.off(event, listener)),
+    removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => sftpEvents.removeListener(event, listener)),
     readdir: vi.fn((_remote: string, callback: (error?: Error, entries?: unknown[]) => void) => {
       callback(undefined, [
         {
@@ -66,6 +72,7 @@ vi.mock('ssh2', () => ({ Client: state.Client }))
 vi.mock('node:fs/promises', () => ({ stat: vi.fn(async (path: string) => ({ size: path.includes('archive') ? 7 : 4 })) }))
 
 beforeEach(() => {
+  sftpEvents = new EventEmitter()
   state.clearClientListeners()
   state.client.on.mockClear()
   state.client.once.mockClear()
@@ -73,27 +80,30 @@ beforeEach(() => {
   state.client.sftp.mockClear()
   state.client.end.mockClear()
   state.sftp.end.mockClear()
+  state.sftp.once.mockClear()
+  state.sftp.off.mockClear()
+  state.sftp.removeListener.mockClear()
   state.sftp.fastPut.mockClear()
   state.sftp.fastGet.mockClear()
   state.sftp.readdir.mockClear()
 })
 
 describe('Ssh2ClientAdapter SFTP transfer channel', () => {
-  it('uploads and downloads over an independent SFTP channel with byte progress', async () => {
+  it('uploads and downloads over one reusable SFTP channel with byte progress', async () => {
     const progress: Array<{ transferredBytes: number; totalBytes?: number }> = []
     const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
 
     await expect(connection.fileTransfer?.uploadFile('C:/report.txt', '/tmp/report.txt', value => progress.push(value))).resolves.toBe(4)
     await expect(connection.fileTransfer?.downloadFile('/tmp/archive.zip', 'C:/archive.zip', value => progress.push(value))).resolves.toBe(7)
 
-    expect(state.client.sftp).toHaveBeenCalledTimes(2)
+    expect(state.client.sftp).toHaveBeenCalledOnce()
     expect(state.client.connect).toHaveBeenLastCalledWith(expect.objectContaining({
       keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
       keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
     }))
     expect(state.sftp.fastPut).toHaveBeenCalledWith('C:/report.txt', '/tmp/report.txt', expect.objectContaining({ step: expect.any(Function) }), expect.any(Function))
     expect(state.sftp.fastGet).toHaveBeenCalledWith('/tmp/archive.zip', 'C:/archive.zip', expect.objectContaining({ step: expect.any(Function) }), expect.any(Function))
-    expect(state.sftp.end).toHaveBeenCalledTimes(2)
+    expect(state.sftp.end).not.toHaveBeenCalled()
     expect(progress).toEqual([
       { transferredBytes: 0, totalBytes: 4 },
       { transferredBytes: 4, totalBytes: 4 },
@@ -145,11 +155,16 @@ describe('Ssh2ClientAdapter SFTP transfer channel', () => {
     expect(state.client.sftp).toHaveBeenCalledTimes(1)
   })
 
-  it('does not close the whole SSH client when an SFTP channel completes normally', async () => {
+  it('keeps the SFTP subsystem open after normal work and ends it only with its SSH client', async () => {
     const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
     await expect(connection.fileTransfer?.uploadFile('C:/report.txt', '/tmp/report.txt')).resolves.toBe(4)
     expect(state.client.end).not.toHaveBeenCalled()
+    expect(state.sftp.end).not.toHaveBeenCalled()
+
+    connection.close()
+
     expect(state.sftp.end).toHaveBeenCalledOnce()
+    expect(state.client.end).toHaveBeenCalledOnce()
   })
 
   it('returns rejected promises for operations requested after transport close', async () => {
@@ -224,6 +239,69 @@ describe('Ssh2ClientAdapter SFTP transfer channel', () => {
     releaseFirstListing?.(undefined, [])
     await expect(first).resolves.toEqual([])
     await expect(second).resolves.toEqual([])
+    expect(state.client.sftp).toHaveBeenCalledOnce()
+  })
+
+  it('abandons only a failed SFTP subsystem and opens a replacement for the next file action', async () => {
+    state.sftp.readdir
+      .mockImplementationOnce((_remote: string, callback: (error?: Error, entries?: unknown[]) => void) => callback(new Error('subsystem reset')))
+      .mockImplementationOnce((_remote: string, callback: (error?: Error, entries?: unknown[]) => void) => callback(undefined, []))
+
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+
+    await expect(connection.fileTransfer?.listDirectory?.('/failed')).rejects.toThrow('subsystem reset')
+    await expect(connection.fileTransfer?.listDirectory?.('/recovered')).resolves.toEqual([])
+
+    expect(state.sftp.end).toHaveBeenCalledOnce()
     expect(state.client.sftp).toHaveBeenCalledTimes(2)
+    expect(state.client.end).not.toHaveBeenCalled()
+  })
+
+  it('invalidates an ended SFTP subsystem, rejects its active directory read, and opens a replacement for queued work', async () => {
+    let markListingStarted!: () => void
+    const listingStarted = new Promise<void>(resolve => { markListingStarted = resolve })
+    const replacement = Object.assign(new EventEmitter(), {
+      end: vi.fn(),
+      readdir: vi.fn((_remote: string, callback: (error?: Error, entries?: unknown[]) => void) => callback(undefined, [])),
+      fastPut: vi.fn(),
+      fastGet: vi.fn(),
+    })
+    state.sftp.readdir.mockImplementationOnce(() => {
+      markListingStarted()
+    })
+    state.client.sftp
+      .mockImplementationOnce((callback: (error: Error | null, value: typeof state.sftp) => void) => callback(null, state.sftp))
+      .mockImplementationOnce((callback: (error: Error | null, value: typeof state.sftp) => void) => callback(null, replacement as unknown as typeof state.sftp))
+
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+    const active = connection.fileTransfer?.listDirectory?.('/active')
+    await listingStarted
+    const queued = connection.fileTransfer?.listDirectory?.('/queued')
+
+    sftpEvents.emit('end')
+
+    await expect(active).rejects.toThrow('SFTP channel ended before directory listing completed')
+    await expect(queued).resolves.toEqual([])
+    expect(state.client.sftp).toHaveBeenCalledTimes(2)
+    expect(replacement.readdir).toHaveBeenCalledWith('/queued', expect.any(Function))
+    expect(state.sftp.end).not.toHaveBeenCalled()
+    expect(state.client.end).not.toHaveBeenCalled()
+  })
+
+  it('rejects an active transfer promptly when its SFTP subsystem ends', async () => {
+    let markTransferStarted!: () => void
+    const transferStarted = new Promise<void>(resolve => { markTransferStarted = resolve })
+    state.sftp.fastGet.mockImplementationOnce(() => {
+      markTransferStarted()
+    })
+
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+    const pending = connection.fileTransfer?.downloadFile('/tmp/archive.zip', 'C:/archive.zip')
+    await transferStarted
+
+    sftpEvents.emit('end')
+
+    await expect(pending).rejects.toThrow('SFTP channel ended before transfer completed')
+    expect(state.client.end).not.toHaveBeenCalled()
   })
 })

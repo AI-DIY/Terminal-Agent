@@ -497,7 +497,7 @@ test('keeps file transfer with its SSH pane and retains read-only history withou
     const fileTransferButton = terminalFrame.getByRole('button', { name: '显示 127.0.0.1 的文件传输', exact: true })
     await expect(fileTransferButton).toBeVisible()
     await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(0)
-    const broadcastInput = page.getByPlaceholder('输入要发送到所有在线 SSH 的命令', { exact: true })
+    const broadcastInput = page.getByRole('textbox', { name: '发送命令到所有窗口', exact: true })
     const broadcastSend = page.getByRole('button', { name: '发送所有窗口执行', exact: true })
     await expect(broadcastInput).toBeDisabled()
     await expect(broadcastSend).toBeDisabled()
@@ -556,6 +556,37 @@ test('keeps file transfer with its SSH pane and retains read-only history withou
     await historyButton.click()
     await expect(dialog.getByRole('button', { name: '重新连接', exact: true })).toHaveCount(0)
     await dialog.getByRole('button', { name: '关闭 Shell 历史', exact: true }).click()
+  } finally {
+    await app?.close()
+    await closeServer(sshServer.server)
+  }
+})
+
+test('completes the final expanded broadcast command for every connected SSH session', async ({ launchApp }) => {
+  const sshServer = await startSshServer()
+  let app: ElectronApplication | undefined
+
+  try {
+    app = (await launchApp()).app
+    const page = await app.firstWindow()
+    await connect(page, sshServer.port, '127.0.0.1')
+    await connect(page, sshServer.port, '127.0.0.2')
+    const panes = page.locator('[data-testid^="terminal-pane-"]:visible')
+    await expect(panes).toHaveCount(2)
+
+    await page.getByRole('switch', { name: '启用发送命令到所有窗口', exact: true }).check()
+    await page.getByRole('button', { name: '放大编辑广播命令', exact: true }).click()
+    const editor = page.getByRole('dialog', { name: '发送命令到所有窗口', exact: true })
+    await expect(editor).toBeVisible()
+    await editor.getByRole('textbox', { name: '放大编辑发送命令到所有窗口', exact: true })
+      .fill('echo broadcast-first\necho broadcast-final')
+    await editor.getByRole('button', { name: '发送所有窗口执行', exact: true }).click()
+    await expect(editor).toHaveCount(0)
+
+    for (const pane of [panes.nth(0), panes.nth(1)]) {
+      await expect(pane).toContainText('echo:echo broadcast-first')
+      await expect(pane).toContainText('echo broadcast-final')
+    }
   } finally {
     await app?.close()
     await closeServer(sshServer.server)
@@ -1061,6 +1092,7 @@ test('captures WebContents layouts across persisted themes with native-control s
         { id: 'noble-purple', control: '高贵紫' },
         { id: 'imperial-gold', control: '帝王金' },
         { id: 'sakura-pink', control: '樱花粉' },
+        { id: 'jasmine-green-tea', control: '茉绿茶' },
       ] as const) {
         const continuingDraft = `切换设置后继续保留的聊天草稿 ${theme.id} ${viewport.width}`
         await globalChatInput.fill(continuingDraft)
@@ -1071,9 +1103,9 @@ test('captures WebContents layouts across persisted themes with native-control s
         await expect(page.locator('.settings')).toBeVisible()
         await page.getByRole('navigation', { name: '设置面板' }).getByRole('button', { name: '外观', exact: true }).click()
         const themeGroup = page.getByRole('group', { name: '工作台主题', exact: true })
-        await expect(themeGroup.getByRole('button')).toHaveCount(5)
+        await expect(themeGroup.getByRole('button')).toHaveCount(6)
         const themeColumns = await themeGroup.evaluate(node => getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/).length)
-        expect(themeColumns).toBe(viewport.width > 960 ? 5 : 3)
+        expect(themeColumns).toBe(viewport.width === 1440 ? 6 : 4)
         await themeGroup.getByRole('button', { name: theme.control }).click()
         await expect(page.getByRole('status')).toContainText('外观已保存')
         await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({ theme: theme.id })
@@ -1237,6 +1269,57 @@ test('shows direct and manual bastion SSH modes, defaulting to the bastion guida
   }
 })
 
+test('keeps SSH launcher controls fixed while compact workspace guidance scrolls without clipping mode cards', async ({ launchApp }) => {
+  let app: ElectronApplication | undefined
+
+  try {
+    app = (await launchApp()).app
+    await app.evaluate(({ BrowserWindow }) => {
+      const mainWindow = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().startsWith('file:'))
+      if (!mainWindow) throw new Error('Expected the Terminal-Agent main window')
+      mainWindow.setSize(1_000, 540)
+    })
+
+    const page = await app.firstWindow()
+    const launcher = page.locator('.ssh-launcher.appearance-embedded')
+    const tabs = launcher.locator('.mode-tabs')
+    const scrollRegion = launcher.locator('.launcher-scroll-region')
+    await expect(launcher).toBeVisible()
+    await expect(tabs).toBeVisible()
+    await expect(scrollRegion).toBeVisible()
+
+    await expect.poll(() => scrollRegion.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true)
+    const tabsBeforeScroll = await tabs.boundingBox()
+    if (!tabsBeforeScroll) throw new Error('Expected visible SSH mode tabs')
+    await scrollRegion.evaluate(node => { node.scrollTop = node.scrollHeight })
+    await expect.poll(() => scrollRegion.evaluate(node => node.scrollTop)).toBeGreaterThan(0)
+    const tabsAfterScroll = await tabs.boundingBox()
+    if (!tabsAfterScroll) throw new Error('Expected SSH mode tabs after scrolling guidance')
+    expect(tabsAfterScroll.y).toBe(tabsBeforeScroll.y)
+
+    const cards = await tabs.getByRole('tab').evaluateAll(nodes => nodes.map(node => {
+      const copy = node.querySelector<HTMLElement>('.mode-tab-copy')
+      if (!copy) throw new Error('Expected SSH mode tab copy')
+      const style = getComputedStyle(copy)
+      return {
+        cardFits: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight,
+        fontSize: style.fontSize,
+        textOverflow: style.textOverflow,
+        whiteSpace: style.whiteSpace,
+      }
+    }))
+    expect(cards).toHaveLength(3)
+    expect(cards.every(card => (
+      card.cardFits
+      && card.fontSize === '12px'
+      && card.textOverflow === 'clip'
+      && card.whiteSpace === 'normal'
+    ))).toBe(true)
+  } finally {
+    await app?.close()
+  }
+})
+
 test('opens the unified launcher over an existing terminal without unmounting it', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
@@ -1263,6 +1346,17 @@ test('opens the unified launcher over an existing terminal without unmounting it
     await expect(dialog.getByAltText('AccessClient 会话配置：使用全局设置(putty)', { exact: true })).toBeVisible()
     await expect(dialog.getByAltText('集团堡垒机正常指定主机 SSH 连接', { exact: true })).toBeVisible()
     await expect(dialog.getByRole('tab', { name: '堡垒机SSH连接', exact: true })).toHaveCount(0)
+    const dialogTabs = dialog.locator('.mode-tabs')
+    const dialogScrollRegion = dialog.locator('.launcher-scroll-region')
+    const dialogTabsBeforeScroll = await dialogTabs.boundingBox()
+    if (!dialogTabsBeforeScroll) throw new Error('Expected visible dialog SSH mode tabs')
+    await expect.poll(() => dialogScrollRegion.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true)
+    await dialogScrollRegion.evaluate(node => { node.scrollTop = node.scrollHeight })
+    await expect.poll(() => dialogScrollRegion.evaluate(node => node.scrollTop)).toBeGreaterThan(0)
+    const dialogTabsAfterScroll = await dialogTabs.boundingBox()
+    if (!dialogTabsAfterScroll) throw new Error('Expected dialog SSH mode tabs after scrolling guidance')
+    expect(dialogTabsAfterScroll.y).toBe(dialogTabsBeforeScroll.y)
+    await expect(dialog.locator('.connection-notices')).toBeVisible()
     expect(await originalPane.evaluate(node => node.isConnected)).toBe(true)
     await dialog.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true }).click()
     await expect(dialog.getByLabel('主机地址')).toBeVisible()
@@ -1306,12 +1400,15 @@ test('ignores a late direct connection after newer chat navigation and dialog ge
     const openButton = page.locator('.shell-toolbar-content').getByRole('button', { name: '新建 SSH 连接', exact: true })
     await openButton.click()
     const dialog = page.getByRole('dialog', { name: '新建 SSH 连接', exact: true })
-    await dialog.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true }).click()
+    const firstModeTab = dialog.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })
+    await firstModeTab.click()
     await dialog.getByLabel('主机地址').fill('127.0.0.2')
     await dialog.getByLabel('端口').fill(String(firstDelayedServer.port))
     await dialog.getByRole('textbox', { name: '用户名', exact: true }).fill('ops')
     await dialog.getByRole('textbox', { name: '密码', exact: true }).fill('secret')
-    await dialog.getByRole('button', { name: '连接', exact: true }).click()
+    const firstConnectButton = dialog.getByRole('button', { name: '连接', exact: true })
+    await ensureElementCanBeReached(firstConnectButton)
+    await firstConnectButton.click()
     await firstAuthenticationStarted.promise
 
     await dialog.getByRole('button', { name: '关闭新建 SSH 连接', exact: true }).click()
@@ -1336,7 +1433,9 @@ test('ignores a late direct connection after newer chat navigation and dialog ge
     await dialog.getByLabel('端口').fill(String(secondDelayedServer.port))
     await dialog.getByRole('textbox', { name: '用户名', exact: true }).fill('ops')
     await dialog.getByRole('textbox', { name: '密码', exact: true }).fill('secret')
-    await dialog.getByRole('button', { name: '连接', exact: true }).click()
+    const secondConnectButton = dialog.getByRole('button', { name: '连接', exact: true })
+    await ensureElementCanBeReached(secondConnectButton)
+    await secondConnectButton.click()
     await secondAuthenticationStarted.promise
 
     await dialog.getByRole('button', { name: '关闭新建 SSH 连接', exact: true }).click()
@@ -2136,9 +2235,6 @@ async function createNamedChat(
   await expect(chat).toHaveAttribute('aria-current', 'page')
   const connectButton = page.locator('.shell-toolbar-content').getByRole('button', { name: '新建 SSH 连接', exact: true })
   const launcherTab = page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })
-  const restoreButton = page.getByRole('button', { name: '返回实时任务', exact: true })
-  await expect(connectButton.or(launcherTab).or(restoreButton)).toBeVisible()
-  if (await restoreButton.isVisible()) await restoreButton.click()
   await expect(connectButton.or(launcherTab)).toBeVisible()
   return chatId
 }
@@ -2152,6 +2248,15 @@ async function sendCommand(
   await pane.locator('.xterm-helper-textarea').focus()
   await page.keyboard.type(command)
   await page.keyboard.press('Enter')
+}
+
+async function ensureElementCanBeReached(locator: Locator): Promise<void> {
+  await locator.scrollIntoViewIfNeeded()
+  const inViewport = await locator.evaluate(node => {
+    const button = node.getBoundingClientRect()
+    return button.top >= 0 && button.bottom <= window.innerHeight
+  })
+  expect(inViewport).toBe(true)
 }
 
 async function startSshServer(

@@ -114,6 +114,29 @@ describe('chat workspaces store', () => {
     expect(attached).toEqual(['captured-task'])
   })
 
+  it('binds a resolved direct session without reactivating a stale operation', async () => {
+    const { createWorkbenchSessionOwnershipTracker, runWorkbenchOpenedSessionEvent } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const tracker = createWorkbenchSessionOwnershipTracker<{ id: string; chatId?: string }>()
+    let operationCurrent = true
+    const operation = tracker.begin('origin-task', () => operationCurrent)
+    const session = { id: 'session-delayed' }
+    tracker.resolve(operation, session)
+    tracker.complete(operation)
+    operationCurrent = false
+    const attached: Array<{ targetChatId: string | null; current: boolean }> = []
+
+    await runWorkbenchOpenedSessionEvent({
+      tracker,
+      session,
+      currentChatId: 'newer-task',
+      attach: async (_session, targetChatId, isCurrent) => {
+        attached.push({ targetChatId, current: isCurrent() })
+      },
+    })
+
+    expect(attached).toEqual([{ targetChatId: 'origin-task', current: false }])
+  })
+
   it('invokes the registered opened-event handler and binds the captured task after selection changes', async () => {
     const { createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker } = await import('../../../src/renderer/src/stores/chat-workspaces')
     const tracker = createWorkbenchSessionOwnershipTracker<{ id: string; chatId?: string }>()
@@ -1392,13 +1415,21 @@ describe('durable chat workbench components', () => {
     expect(openedHandler).toContain('handleOpenedSession(session)')
   })
 
-  it('captures the direct attachment target before asynchronous open completes', () => {
+  it('captures direct attachment targets and keeps stale launches from changing the current dialog', () => {
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
     const connect = view.slice(view.indexOf('async function connect'), view.indexOf('function createConnection'))
+    const openSavedProfile = view.slice(view.indexOf('async function openSavedProfile'), view.indexOf('async function deleteSavedProfile'))
 
-    expect(connect).toContain('const targetChatId = activeWorkbenchChatId.value')
-    expect(connect).toContain('targetChatId,')
-    expect(connect).toContain('capturedTargetChatId')
+    for (const opening of [connect, openSavedProfile]) {
+      expect(opening).toContain('const targetChatId = activeWorkbenchChatId.value')
+      expect(opening).toContain('const operationGeneration = workbenchOperations.begin()')
+      expect(opening).toContain('const isCurrent = () => workbenchOperations.isCurrent(operationGeneration)')
+      expect(opening).toContain("sessionOwnership.begin(targetChatId ?? '', isCurrent)")
+      expect(opening).toContain('await attachSession(session, true, isCurrent')
+      expect(opening).toContain('sessionOwnership.complete(ownershipOperation)')
+    }
+    expect(connect).toContain('if (isCurrent()) closeConnectionDialog()')
+    expect(openSavedProfile).toContain('if (isCurrent()) closeSavedSessionsDialog()')
   })
 
   it('keeps an opened event on its captured task when selection changes during the open', async () => {

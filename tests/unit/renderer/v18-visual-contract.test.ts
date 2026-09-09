@@ -123,7 +123,7 @@ describe('V18 production visual contract', () => {
     expect(workbench).toContain('<template #empty>')
     expect(workbench).toContain('<SshConnectionLauncher')
     expect(shell).toContain('当前任务')
-    expect(shellCanvas).toContain('返回实时任务')
+    expect(shellCanvas).not.toContain('返回实时任务')
     expect(shellCanvas).toContain('<section v-if="currentSessions.length === 0" class="empty-slot"><slot name="empty" /></section>')
     expect(shellCanvas).not.toContain('<slot name="history"')
     expect(store).toContain('无法读取任务。')

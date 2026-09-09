@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Bot, Check, ChevronDown, ChevronUp, CircleAlert, History, MessageSquarePlus, PanelRightClose, Send, Square, Trash2, UserRound, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import SafeMarkdown from './SafeMarkdown.vue'
 import type { ChatConversationSessionSummary, ChatProgressStage, ChatWorkspace } from '../../../../shared/contracts'
 import { createGlobalChatStore, hasVisibleAssistantError } from '../../stores/global-chat'
 import { chatContentText } from '../../../../shared/chat-content'
@@ -482,7 +483,8 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
         <span class="message-avatar" aria-hidden="true"><UserRound v-if="message.role === 'user'" :size="14" /><Bot v-else :size="14" /></span>
         <div class="message-content message-bubble">
           <div class="message-meta"><strong>{{ message.messageType === 'execution_audit' ? '执行审计' : message.role === 'user' ? '你' : 'Terminal-Agent' }}</strong><span v-if="message.state === 'streaming'">生成中</span><span v-else-if="message.state === 'error'">未完成</span></div>
-          <p>{{ message.messageType === 'execution_audit' ? String(message.content) : message.role === 'assistant' ? assistantReply(message.content) : (typeof message.content === 'string' ? message.content : chatContentText(message.content)) }}</p>
+          <SafeMarkdown v-if="message.role === 'assistant' && message.messageType !== 'execution_audit'" :content="assistantReply(message.content)" />
+          <p v-else>{{ message.messageType === 'execution_audit' ? String(message.content) : (typeof message.content === 'string' ? message.content : chatContentText(message.content)) }}</p>
           <section v-if="message.executionPlan" class="execution-plan plan-card" :data-status="message.executionPlan.status" :aria-label="message.executionPlan.status === 'pending_review' ? '待确认的命令计划' : '已执行的命令结果'">
             <header class="plan-head plan-heading"><div><strong>{{ message.executionPlan.title }}</strong><span>{{ message.executionPlan.steps.length }} 步 · {{ planStatusLabel(message.executionPlan.status) }}</span></div><span :class="['plan-badge', 'status-chip', message.executionPlan.status]">{{ planStatusLabel(message.executionPlan.status) }}</span></header>
             <p v-if="message.executionPlan.steps.length === 0" class="plan-empty">计划已取消，未执行任何命令。</p>

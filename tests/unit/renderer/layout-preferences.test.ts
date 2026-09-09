@@ -19,6 +19,7 @@ describe('renderer layout preferences', () => {
     expect(html).toContain(':root[data-theme="graphite"]')
     expect(html).toContain(':root[data-theme="imperial-gold"]')
     expect(html).toContain(':root[data-theme="sakura-pink"]')
+    expect(html).toContain(':root[data-theme="jasmine-green-tea"]')
     expect(html).toContain('color-scheme: dark')
   })
 

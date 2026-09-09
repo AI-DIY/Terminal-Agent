@@ -47,4 +47,13 @@ describe('Terminal-Agent NSIS bridge registration lifecycle', () => {
     expect(uninstall).not.toContain('user-config')
     expect(uninstall).not.toContain('.ta')
   })
+
+  it('creates an install-directory diagnostics folder writable by ordinary users', async () => {
+    const script = await readFile(join(process.cwd(), 'scripts', 'windows', 'terminal-agent-installer.nsh'), 'utf8')
+    const installStart = script.indexOf('!macro customInstall')
+    const installEnd = script.indexOf('!macroend', installStart) + '!macroend'.length
+    const install = script.slice(installStart, installEnd)
+
+    expect(install).toMatch(/CreateDirectory\s+"\$INSTDIR\\logs"[\s\S]*ExecWait\s+'"\$SYSDIR\\icacls\.exe"\s+"\$INSTDIR\\logs"\s+\/grant:r\s+\*S-1-5-32-545:\(OI\)\(CI\)M\s+\/T\s+\/C'\s+\$0/)
+  })
 })

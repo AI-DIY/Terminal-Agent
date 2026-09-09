@@ -9,6 +9,7 @@ describe('title bar overlay', () => {
     expect(titleBarOverlayForTheme('noble-purple')).toEqual({ color: '#302044', symbolColor: '#f7f0ff', height: 48 })
     expect(titleBarOverlayForTheme('imperial-gold')).toEqual({ color: '#242019', symbolColor: '#fff4d4', height: 48 })
     expect(titleBarOverlayForTheme('sakura-pink')).toEqual({ color: '#f8dfe8', symbolColor: '#4c2635', height: 48 })
+    expect(titleBarOverlayForTheme('jasmine-green-tea')).toEqual({ color: '#e5f0e6', symbolColor: '#243b31', height: 48 })
   })
 
   it('rejects an unknown theme before it reaches BrowserWindow', () => {

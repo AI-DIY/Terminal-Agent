@@ -8,12 +8,22 @@ describe('settings panels', () => {
   it('keeps prototype navigation order with host memory ready', () => {
     expect(SETTINGS_TABS.map(tab => tab.id)).toEqual(['routing', 'llm', 'vlm', 'fence', 'memory', 'appearance', 'sso'])
     expect(SETTINGS_TABS.find(tab => tab.id === 'memory')?.status).toBe('ready')
+    expect(SETTINGS_TABS.find(tab => tab.id === 'fence')?.status).toBe('ready')
   })
 
-  it('hides the host-memory panel from the temporary user-facing navigation', () => {
+  it('hides the host-memory and safety-fence panels from the temporary user-facing navigation', () => {
     const visibleIds = SETTINGS_NAV_TABS.map(tab => tab.id)
-    expect(visibleIds).toEqual(['llm', 'fence', 'appearance', 'sso'])
+    expect(visibleIds).toEqual(['llm', 'appearance', 'sso'])
     expect(visibleIds).not.toContain('memory')
+    expect(visibleIds).not.toContain('fence')
+  })
+
+  it('retains the safety-fence tab registration and renderer implementation while its entry is hidden', () => {
+    const settings = readFileSync(new URL('../../../src/renderer/src/views/SettingsView.vue', import.meta.url), 'utf8')
+
+    expect(SETTINGS_TABS.find(tab => tab.id === 'fence')).toMatchObject({ label: '安全围栏', status: 'ready' })
+    expect(settings).toContain("import RegexFenceRules from '../components/settings/RegexFenceRules.vue'")
+    expect(settings).toContain("tab === 'fence'")
   })
 
   it('applies the persisted theme before the first renderer mount', () => {
@@ -47,17 +57,15 @@ describe('settings panels', () => {
     expect(canvas).toContain('SSH 字体大小')
   })
 
-  it('keeps all five appearance choices in one desktop row and reflows them in narrow panes', () => {
+  it('keeps all six appearance choices in one sufficiently wide row and reflows them in narrow panes', () => {
     const appearance = readFileSync(new URL('../../../src/renderer/src/components/settings/AppearanceSettings.vue', import.meta.url), 'utf8')
     const themeRule = /\.theme-options\s*\{([^}]*)\}/.exec(appearance)?.[1] ?? ''
 
-    expect(themeRule).toContain('grid-template-columns: repeat(5, minmax(0, 1fr));')
+    expect(themeRule).toContain('grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));')
     expect(themeRule).toContain('max-width: 1080px')
-    expect(appearance).toContain('@media (max-width: 960px) { .theme-options { grid-template-columns: repeat(3, minmax(0, 1fr)); } }')
     expect(appearance).toContain('@media (max-width: 760px)')
-    expect(appearance).toContain('.theme-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }')
-    expect(appearance).toContain('@media (max-width: 520px) { .theme-options { grid-template-columns: 1fr; } }')
-    for (const label of ['珍珠白', '石墨黑', '高贵紫', '帝王金', '樱花粉']) expect(appearance).toContain(label)
+    expect(appearance).toContain('theme-swatch.jasmine-green-tea')
+    for (const label of ['珍珠白', '石墨黑', '高贵紫', '帝王金', '樱花粉', '茉绿茶']) expect(appearance).toContain(label)
   })
 
   it('themes the settings and host-memory surfaces through shared tokens', () => {
@@ -117,5 +125,6 @@ describe('settings panels', () => {
     expect(settings).toContain('initialTab?: SettingsTabId')
     expect(settings).toContain('lockNavigation?: boolean')
     expect(settings).toContain('normalizeTab(props.initialTab)')
+    expect(settings).toContain("value === 'fence'")
   })
 })

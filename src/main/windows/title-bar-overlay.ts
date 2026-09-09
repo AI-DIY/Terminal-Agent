@@ -17,5 +17,8 @@ export function titleBarOverlayForTheme(input: WorkbenchTheme): TitleBarOverlay 
   if (theme === 'sakura-pink') {
     return { color: '#f8dfe8', symbolColor: '#4c2635', height: TITLE_BAR_OVERLAY_HEIGHT }
   }
+  if (theme === 'jasmine-green-tea') {
+    return { color: '#e5f0e6', symbolColor: '#243b31', height: TITLE_BAR_OVERLAY_HEIGHT }
+  }
   return { color: '#f0f3f6', symbolColor: '#1d242c', height: TITLE_BAR_OVERLAY_HEIGHT }
 }

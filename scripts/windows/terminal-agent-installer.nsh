@@ -50,6 +50,10 @@ close_temp:
 cleanup_temp:
   Delete "$2"
 done_config:
+  ; All-users installs reside under Program Files. Keep diagnostics beside the
+  ; runtime, but grant ordinary users modify access to this directory only.
+  CreateDirectory "$INSTDIR\logs"
+  ExecWait '"$SYSDIR\icacls.exe" "$INSTDIR\logs" /grant:r *S-1-5-32-545:(OI)(CI)M /T /C' $0
   WriteRegStr HKCU "Software\Terminal-Agent" "InstallPath" "$INSTDIR"
 !macroend
 

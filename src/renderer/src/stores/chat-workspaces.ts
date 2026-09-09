@@ -58,18 +58,22 @@ export function workbenchOpenedAttachmentTarget(
 
 export function createWorkbenchSessionOwnershipTracker<TSession extends { id: string }>() {
   let sequence = 0
-  const operations = new Map<number, { targetChatId: string; sessionId?: string }>()
+  const operations = new Map<number, { targetChatId: string; sessionId?: string; isCurrent?: () => boolean }>()
   const observed = new Set<string>()
-  const owners = new Map<string, string>()
+  const owners = new Map<string, { targetChatId: string; isCurrent?: () => boolean }>()
   return {
-    begin(targetChatId: string) {
+    begin(targetChatId: string, isCurrent?: () => boolean) {
       const operation = ++sequence
-      operations.set(operation, { targetChatId })
+      operations.set(operation, { targetChatId, ...(isCurrent ? { isCurrent } : {}) })
       return operation
     },
-    observe(session: TSession): { tracked: true; targetChatId?: string; pending?: boolean } {
-      const targetChatId = owners.get(session.id)
-      if (targetChatId) return { tracked: true, targetChatId }
+    observe(session: TSession): { tracked: true; targetChatId?: string; pending?: boolean; isCurrent?: () => boolean } {
+      const owner = owners.get(session.id)
+      if (owner) return {
+        tracked: true,
+        targetChatId: owner.targetChatId,
+        ...(owner.isCurrent ? { isCurrent: owner.isCurrent } : {}),
+      }
       observed.add(session.id)
       return { tracked: true, pending: [...operations.values()].some(entry => !entry.sessionId) }
     },
@@ -77,7 +81,10 @@ export function createWorkbenchSessionOwnershipTracker<TSession extends { id: st
       const entry = operations.get(operation)
       if (!entry) throw new Error('Unknown workbench session operation.')
       entry.sessionId = session.id
-      owners.set(session.id, entry.targetChatId)
+      owners.set(session.id, {
+        targetChatId: entry.targetChatId,
+        ...(entry.isCurrent ? { isCurrent: entry.isCurrent } : {}),
+      })
       observed.delete(session.id)
       return { targetChatId: entry.targetChatId, queued: true }
     },
@@ -92,19 +99,19 @@ export async function runWorkbenchOpenedSessionEvent<TSession extends { id: stri
   tracker: ReturnType<typeof createWorkbenchSessionOwnershipTracker<TSession>>
   session: TSession
   currentChatId: string | null
-  attach(session: TSession, targetChatId: string | null): Promise<void>
+  attach(session: TSession, targetChatId: string | null, isCurrent: () => boolean): Promise<void>
 }): Promise<boolean> {
   const observed = options.tracker.observe(options.session)
   if (observed.pending && !options.session.chatId) return false
   const target = workbenchOpenedAttachmentTarget(options.session.chatId, observed.targetChatId ?? null, options.currentChatId)
-  await options.attach(options.session, target)
+  await options.attach(options.session, target, observed.isCurrent ?? (() => true))
   return true
 }
 
 export function createWorkbenchOpenedSessionHandler<TSession extends { id: string; chatId?: string }>(options: {
   tracker: ReturnType<typeof createWorkbenchSessionOwnershipTracker<TSession>>
   currentChatId(): string | null
-  attach(session: TSession, targetChatId: string | null): Promise<void>
+  attach(session: TSession, targetChatId: string | null, isCurrent: () => boolean): Promise<void>
 }): (session: TSession) => Promise<boolean> {
   return session => runWorkbenchOpenedSessionEvent({ tracker: options.tracker, session, currentChatId: options.currentChatId(), attach: options.attach })
 }
