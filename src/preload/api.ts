@@ -95,6 +95,24 @@ import {
   type SsoConfiguration,
   type SsoSaveIntent,
 } from '../shared/sso-contracts'
+import {
+  skillCatalogSchema,
+  skillCommandRequestSchema,
+  skillCommandResultSchema,
+  skillFileReadRequestSchema,
+  skillFileSchema,
+  skillLoadRequestSchema,
+  skillSetEnabledRequestSchema,
+  skillDocumentSchema,
+  type SkillCatalog,
+  type SkillCommandRequest,
+  type SkillCommandResult,
+  type SkillFile,
+  type SkillFileReadRequest,
+  type SkillId,
+  type SkillDocument,
+  type SkillSetEnabledRequest,
+} from '../shared/skill-contracts'
 
 export const terminalAgentNamespace = 'terminalAgent' as const
 
@@ -127,6 +145,16 @@ export type TerminalAgentApi = {
       cancel(request: ChatPlanCancelRequest): Promise<ChatWorkspaceSnapshot>
       execute(request: ChatPlanExecuteRequest): Promise<ChatWorkspaceSnapshot>
     }
+  }
+  skills: {
+    list(): Promise<SkillCatalog>
+    refresh(): Promise<SkillCatalog>
+    setEnabled(request: SkillSetEnabledRequest): Promise<SkillCatalog>
+    load(request: { id: SkillId }): Promise<SkillDocument>
+    readFile(request: SkillFileReadRequest): Promise<SkillFile>
+    run(request: SkillCommandRequest): Promise<SkillCommandResult>
+    cancel(invocationId: string): Promise<boolean>
+    onChanged(listener: (catalog: SkillCatalog) => void): () => void
   }
   diagnostics: {
     openRendererDevTools(): Promise<void>
@@ -277,6 +305,28 @@ export function createTerminalAgentApi(ipcRenderer: {
         cancel: (request: ChatPlanCancelRequest) => ipcRenderer.invoke('chat:plan:cancel', chatPlanCancelRequestSchema.parse(request)) as Promise<ChatWorkspaceSnapshot>,
         execute: (request: ChatPlanExecuteRequest) => ipcRenderer.invoke('chat:plan:execute', chatPlanExecuteRequestSchema.parse(request)) as Promise<ChatWorkspaceSnapshot>,
       }),
+    }),
+    skills: Object.freeze({
+      list: async () => skillCatalogSchema.parse(await ipcRenderer.invoke('skills:list')),
+      refresh: async () => skillCatalogSchema.parse(await ipcRenderer.invoke('skills:refresh')),
+      setEnabled: async (request: SkillSetEnabledRequest) => skillCatalogSchema.parse(
+        await ipcRenderer.invoke('skills:set-enabled', skillSetEnabledRequestSchema.parse(request)),
+      ),
+      load: async (request: { id: SkillId }) => skillDocumentSchema.parse(
+        await ipcRenderer.invoke('skills:load', skillLoadRequestSchema.parse(request)),
+      ),
+      readFile: async (request: SkillFileReadRequest) => skillFileSchema.parse(
+        await ipcRenderer.invoke('skills:read-file', skillFileReadRequestSchema.parse(request)),
+      ),
+      run: async (request: SkillCommandRequest) => skillCommandResultSchema.parse(
+        await ipcRenderer.invoke('skills:run', skillCommandRequestSchema.parse(request)),
+      ),
+      cancel: async (invocationId: string) => Boolean(await ipcRenderer.invoke('skills:cancel', invocationId)),
+      onChanged: (listener: (catalog: SkillCatalog) => void) => {
+        const handler = (_event: unknown, payload: unknown) => listener(skillCatalogSchema.parse(payload))
+        ipcRenderer.on('skills:changed', handler)
+        return () => ipcRenderer.removeListener('skills:changed', handler)
+      },
     }),
     diagnostics: Object.freeze({
       openRendererDevTools: async () => { await ipcRenderer.invoke('diagnostics:open-renderer-devtools') },

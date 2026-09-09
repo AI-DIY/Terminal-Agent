@@ -55,6 +55,29 @@ describe('ChatService', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 
+  it('drains pending repository mutations before allowing application shutdown to continue', async () => {
+    const { repository, service: chatService } = service()
+    const workspace = {
+      id: '11111111-1111-4111-8111-111111111111', title: 'chat', titleState: 'custom' as const,
+      pinnedAt: null, createdAt: '2026-08-16T08:00:00.000Z', updatedAt: '2026-08-16T08:00:00.000Z',
+      shellCount: 0, mode: 'copilot' as const, live: false, messages: [], shells: [],
+    }
+    const pending = deferred<{ value: typeof workspace; changed: true; liveChatId: string }>()
+    repository.create.mockReturnValueOnce(pending.promise)
+
+    const create = chatService.create({ requestId: 'create-before-shutdown' })
+    const drained = chatService.drain()
+    let drainFinished = false
+    void drained.then(() => { drainFinished = true })
+    await Promise.resolve()
+
+    expect(drainFinished).toBe(false)
+    pending.resolve({ value: workspace, changed: true, liveChatId: workspace.id })
+    await expect(create).resolves.toMatchObject({ revision: 1, chat: workspace })
+    await expect(drained).resolves.toBeUndefined()
+    expect(drainFinished).toBe(true)
+  })
+
   it('returns revisioned snapshots and publishes full workspaces in revision order', async () => {
     const { repository, service: chatService } = service()
     const workspace = {

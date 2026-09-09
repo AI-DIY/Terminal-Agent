@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { BUILT_IN_SKILL_IDS, builtInSkillIdSchema } from './built-in-skills'
+import { selectedSkillIdsSchema } from './skill-contracts'
 
 const chatIdentifierSchema = z.string().trim().min(1).max(128)
 const hostnameSchema = z.string().trim().min(1).max(255)
@@ -86,6 +87,8 @@ const planExecutionContextSchema = {
   skillIds: z.array(builtInSkillIdSchema).max(BUILT_IN_SKILL_IDS.length).superRefine((ids, context) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'skillIds must be unique' })
   }).optional(),
+  /** Standard Skills selected for the follow-up analysis turn. */
+  selectedSkillIds: selectedSkillIdsSchema.optional(),
 }
 
 export const chatPlanExecuteRequestSchema = chatPlanRequestSchema.extend(planExecutionContextSchema).strict()

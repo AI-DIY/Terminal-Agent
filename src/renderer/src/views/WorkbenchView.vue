@@ -837,10 +837,10 @@ async function initializeWorkbench(): Promise<void> {
           await selectChat(selectedChatId, false)
         }
       },
-      shouldCreate: () => {
-        const selectedChatId = navigationHandoff?.selectedChatId
-        return !selectedChatId || !chatStore.state.chats.some(chat => chat.id === selectedChatId)
-      },
+      // A normal restart has no navigation handoff.  Existing durable tasks
+      // must remain selected by chatStore.load() instead of causing a new,
+      // empty task to be created merely because there was no handoff source.
+      shouldCreate: () => chatStore.state.chats.length === 0,
       restore: async () => {
         const selected = chatStore.state.selected
         if (selected) restoreAssociatedShellView(selected)
@@ -1088,7 +1088,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .header-button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; font-weight: 600; }.header-button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
-.empty-state { display: grid; align-content: safe center; height: 100%; min-width: 0; min-height: 0; overflow: auto; padding: clamp(28px, 5vh, 64px) clamp(20px, 3vw, 48px); background: var(--surface); }
+.empty-state { display: grid; align-content: safe center; box-sizing: border-box; height: 100%; min-width: 0; min-height: 0; overflow: hidden; padding: clamp(28px, 5vh, 64px) clamp(20px, 3vw, 48px); background: var(--surface); }
 .agent-empty { display: grid; gap: 7px; padding: 16px; }
 .read-only { background: var(--surface-soft); }
 .agent-empty strong { color: var(--text-strong); font-size: 12px; }

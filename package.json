@@ -1,6 +1,6 @@
 {
   "name": "terminal-agent-v2",
-  "version": "3.3.2",
+  "version": "3.3.3",
   "description": "",
   "main": "./out/main/main.js",
   "scripts": {
@@ -39,6 +39,10 @@
       "node_modules/ssh2/**"
     ],
     "extraFiles": [
+      {
+        "from": ".skills",
+        "to": ".skills"
+      },
       {
         "from": "build/launcher/putty.exe",
         "to": "putty.exe"

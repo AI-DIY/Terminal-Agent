@@ -131,7 +131,9 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
     ipcMain.handle('chat:send', async (event, request: unknown) => {
       assertTrustedSender(event, trustedSender)
       const parsed = chatRunRequestSchema.parse(request)
-      const guarded = skillsAuthenticated(options) ? parsed : { ...parsed, skillIds: [] }
+      const guarded = skillsAuthenticated(options)
+        ? parsed
+        : { ...parsed, skillIds: [], selectedSkillIds: [] }
       await runtime.send(guarded, payload => {
         const safe = chatRuntimeEventSchema.parse(payload)
         if (!trustedSender.isDestroyed()) trustedSender.send('chat:event', safe)
@@ -144,7 +146,9 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
     ipcMain.handle('chat:compact', async (event, request: unknown) => {
       assertTrustedSender(event, trustedSender)
       const parsed = chatCompactRequestSchema.parse(request)
-      const guarded = skillsAuthenticated(options) ? parsed : { ...parsed, skillIds: [] }
+      const guarded = skillsAuthenticated(options)
+        ? parsed
+        : { ...parsed, skillIds: [], selectedSkillIds: [] }
       const persistSummary = (summary: string) => service.appendMessage({
         requestId: parsed.requestId,
         chatId: parsed.chatId,
@@ -172,7 +176,9 @@ export function registerChatHandlers(service: ChatHandlerService, trustedSender:
       // A confirmed plan can carry the renderer's enabled skills into its
       // result-analysis turn. Apply the same authentication gate as ordinary
       // chat sends so a forged IPC payload cannot enable product skills.
-      return plans.execute(skillsAuthenticated(options) ? parsed : { ...parsed, skillIds: [] })
+      return plans.execute(skillsAuthenticated(options)
+        ? parsed
+        : { ...parsed, skillIds: [], selectedSkillIds: [] })
     })
   }
 

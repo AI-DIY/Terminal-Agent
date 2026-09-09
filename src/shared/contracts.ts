@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { chatMessageContentSchema } from './chat-content'
 import { chatExecutionPlanSchema } from './chat-plan'
 import { BUILT_IN_SKILL_IDS, builtInSkillIdSchema } from './built-in-skills'
+import { selectedSkillIdsSchema, skillRuntimeEventSchema } from './skill-contracts'
 import { containsSensitiveHostMemoryData, normalizeSafeHostMemoryConnectionIp, normalizeSafeHostMemoryConnectionLabel, normalizeSafeHostMemoryIdentity } from './host-memory-safety'
 import { modelEndpointSchema, modelProfileIdSchema } from './validation'
 
@@ -332,6 +333,8 @@ export const chatRunRequestSchema = z.object({
   skillIds: z.array(builtInSkillIdSchema).max(BUILT_IN_SKILL_IDS.length).superRefine((ids, context) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'skillIds must be unique' })
   }).optional(),
+  /** Standard Skills explicitly selected with the `$` composer affordance. */
+  selectedSkillIds: selectedSkillIdsSchema.optional(),
 }).strict()
 export type ChatRunRequest = z.infer<typeof chatRunRequestSchema>
 
@@ -346,6 +349,8 @@ export const chatSkillIdsSchema = z.array(builtInSkillIdSchema).max(BUILT_IN_SKI
   if (new Set(ids).size !== ids.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'skillIds must be unique' })
 })
 
+export const chatSelectedSkillIdsSchema = selectedSkillIdsSchema
+
 export const chatCompactRequestSchema = z.object({
   requestId: chatRequestIdSchema,
   chatId: chatIdentifierSchema,
@@ -354,6 +359,7 @@ export const chatCompactRequestSchema = z.object({
   sshContextSessionIds: chatSshContextSessionIdsSchema.optional(),
   /** Product-owned skills whose instructions should guide this AI turn. */
   skillIds: chatSkillIdsSchema.optional(),
+  selectedSkillIds: chatSelectedSkillIdsSchema.optional(),
 }).strict()
 export type ChatCompactRequest = z.infer<typeof chatCompactRequestSchema>
 
@@ -369,6 +375,7 @@ export const chatRuntimeEventSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('chat:delta'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, content: z.string().max(100_000) }).strict(),
   z.object({ kind: z.literal('chat:completed'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, content: z.string().max(1_000_000), executionPlan: chatExecutionPlanSchema.optional() }).strict(),
   z.object({ kind: z.literal('chat:error'), chatId: chatIdentifierSchema, runId: z.string().uuid(), messageId: chatIdentifierSchema, error: z.string().max(4_000), retryable: z.boolean() }).strict(),
+  skillRuntimeEventSchema,
 ])
 export type ChatRuntimeEvent = z.infer<typeof chatRuntimeEventSchema>
 

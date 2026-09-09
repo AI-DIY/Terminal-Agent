@@ -14,8 +14,8 @@ describe('SkillsView SSO restrictions', () => {
     for (const removedText of ['欢迎语', '显示姓名', '预览', '本地保存', '演示', '开发中']) {
       expect(view).not.toContain(removedText)
     }
-    expect(view).toContain('内置技能')
-    expect(view).toContain('选择需要在 AI 工作区中使用的内置能力。')
+    expect(view).toContain('可用技能')
+    expect(view).toContain('选择需要在 AI 工作区中使用的标准 Skill。')
     expect(view).toContain("skillControl(skill.id).enabled ? '已启用' : '未启用'")
   })
 

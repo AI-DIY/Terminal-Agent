@@ -1441,13 +1441,15 @@ describe('durable chat workbench components', () => {
     expect(workbenchOpenedAttachmentTarget(undefined, captured, selected)).toBe('history-task')
   })
 
-  it('starts the workbench on a fresh task after restoring persisted Shell ownership', () => {
+  it('creates a fresh workbench task only when no persisted task exists', () => {
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
     const initialize = view.slice(view.indexOf('async function initializeWorkbench'), view.indexOf('function restoreAssociatedShellView'))
 
     expect(initialize).toContain('initializeWorkbenchTask({')
     expect(initialize).toContain('load: async () =>')
     expect(initialize).toContain('shouldCreate: () =>')
+    expect(initialize).toContain('chatStore.state.chats.length === 0')
+    expect(initialize).not.toContain('return !selectedChatId')
     expect(initialize).toContain('restore: async () =>')
     expect(initialize).toContain('create: () => createChat(false)')
   })

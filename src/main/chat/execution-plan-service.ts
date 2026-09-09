@@ -101,6 +101,7 @@ export class ExecutionPlanService {
           ...(request.sshContextLines === undefined ? {} : { sshContextLines: request.sshContextLines }),
           ...(continuationSessionIds === undefined ? {} : { sshContextSessionIds: continuationSessionIds }),
           ...(request.skillIds === undefined ? {} : { skillIds: [...request.skillIds] }),
+          ...(request.selectedSkillIds === undefined ? {} : { selectedSkillIds: [...request.selectedSkillIds] }),
         })
         const blockedSessions = new Set<string>()
         const sessionTails = new Map<string, Promise<void>>()

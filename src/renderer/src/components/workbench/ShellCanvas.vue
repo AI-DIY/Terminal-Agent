@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Expand, Files, History, LayoutGrid, Plus, X } from '@lucide/vue'
+import { Expand, Files, History, LayoutGrid, Plus, Upload, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { broadcastCommandPayload } from './broadcast-command'
 import SessionTabs from '../SessionTabs.vue'
@@ -57,6 +57,8 @@ const broadcastEnabled = ref(false)
 const broadcastInput = ref('')
 const broadcastSending = ref(false)
 const broadcastStatus = ref('')
+const globalUploadBusy = ref(false)
+const globalUploadStatus = ref('')
 const broadcastEditorOpen = ref(false)
 const broadcastEditor = ref<HTMLTextAreaElement | null>(null)
 type BroadcastRequest = {
@@ -82,6 +84,15 @@ const displayedSessionIds = computed(() => orderedCurrentSessions.value.map(sess
 const gridColumns = computed(() => Math.max(1, Math.min(layout.state.columns, orderedCurrentSessions.value.length || 1)))
 const gridStyle = computed(() => shellGridStyle(gridColumns.value, layout.state.rowHeightPercent))
 const hasOnlineSessions = computed(() => props.currentSessions.length > 0)
+/**
+ * File uploads intentionally target every live session known by the
+ * workbench, not only the sessions currently attached to this task's canvas.
+ * Keep the list de-duplicated because the IPC contract rejects duplicate ids.
+ */
+const globalUploadSessionIds = computed(() => [...new Set(
+  props.sessions.map(session => session.id).filter(sessionId => Boolean(sessionId)),
+)])
+const broadcastDisplayStatus = computed(() => globalUploadStatus.value || broadcastStatus.value)
 const layoutItemCount = computed(() => hasOnlineSessions.value
   ? orderedCurrentSessions.value.length
   : props.historyHosts.length)
@@ -245,6 +256,41 @@ function sendBroadcast(): void {
   const data = broadcastCommandPayload(value)
   if (!data) return
   sendBroadcastData(data, value)
+}
+
+/** Select one local file and fan it out to every connected SSH session. */
+async function uploadFileToAllConnectedSessions(): Promise<void> {
+  if (globalUploadBusy.value) return
+  const sessionIds = [...globalUploadSessionIds.value]
+  if (!sessionIds.length) {
+    globalUploadStatus.value = '当前没有可用的 SSH 会话。'
+    return
+  }
+
+  const uploadAll = window.terminalAgent.fileTransfer?.uploadAll
+  if (typeof uploadAll !== 'function') {
+    globalUploadStatus.value = '当前版本不支持上传文件到所有会话。'
+    return
+  }
+
+  globalUploadBusy.value = true
+  globalUploadStatus.value = `正在选择文件并上传到 ${sessionIds.length} 个会话…`
+  try {
+    const result = await uploadAll({ sessionIds, remotePath: './' })
+    const completed = result.results.filter(item => item.status === 'completed').length
+    const failed = result.results.length - completed
+    globalUploadStatus.value = result.status === 'canceled'
+      ? '已取消上传。'
+      : failed
+        ? `已上传到 ${completed} 个会话，${failed} 个会话失败。`
+        : `已上传到 ${completed} 个会话。`
+  } catch (cause) {
+    globalUploadStatus.value = cause instanceof Error
+      ? cause.message
+      : '上传文件到所有会话失败。'
+  } finally {
+    globalUploadBusy.value = false
+  }
 }
 
 function isBroadcastInputSendable(value: string): boolean {
@@ -625,7 +671,6 @@ watch(
             ><span aria-hidden="true" /></button>
             <FileTransferPanel
               :session-id="session.id"
-              :session-ids="orderedCurrentSessions.map(item => item.id)"
               :hostname="sessionDisplayLabel(session, orderedCurrentSessions)"
               @hide="hideFileTransfer(session.id)"
               @close="hideFileTransfer(session.id)"
@@ -677,7 +722,15 @@ watch(
         :disabled="!broadcastEnabled || !isBroadcastInputSendable(broadcastInput) || broadcastSending || !currentSessions.length"
         @click="sendBroadcast"
       >{{ broadcastSending ? '发送中…' : '发送所有会话执行' }}</button>
-      <span class="broadcast-status" role="status" aria-live="polite">{{ broadcastStatus }}</span>
+      <button
+        type="button"
+        class="broadcast-upload-all-button"
+        :disabled="globalUploadBusy || !globalUploadSessionIds.length"
+        aria-label="上传文件到所有会话"
+        title="选择一个本地文件，上传到所有已连接会话的用户目录"
+        @click="uploadFileToAllConnectedSessions"
+      ><Upload :size="13" aria-hidden="true" /><span>{{ globalUploadBusy ? '上传中…' : '上传到所有会话' }}</span></button>
+      <span class="broadcast-status" role="status" aria-live="polite">{{ broadcastDisplayStatus }}</span>
     </section>
 
     <div v-if="broadcastEditorOpen" class="broadcast-editor-backdrop" role="presentation" @pointerdown.self="closeBroadcastEditor">
@@ -694,7 +747,7 @@ watch(
           :disabled="!broadcastEnabled"
         />
         <footer>
-          <span>{{ broadcastStatus }}</span>
+          <span>{{ broadcastDisplayStatus }}</span>
           <button
             type="button"
             class="broadcast-editor-send-button"
@@ -770,7 +823,7 @@ watch(
 .history-session-tab > .history-shell-tab { display: flex; min-width: 0; align-items: center; gap: 5px; height: 100%; padding: 0 6px 0 8px; border: 0; background: transparent; color: inherit; font-size: 9px; text-align: left; white-space: nowrap; }
 .history-session-tab > .history-shell-tab:hover,.history-session-tab > .history-shell-tab:focus-visible { outline: 0; }.history-session-tab > .history-shell-tab strong { max-width: 112px; overflow: hidden; color: var(--text-strong); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .host-status { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }.history-session-tab.active .host-status { background: var(--accent); }
-.broadcast-bar { display: grid; grid-row: 4; grid-template-columns: auto minmax(180px, 1fr) auto minmax(0, 220px); align-items: center; gap: 6px; min-width: 0; min-height: 36px; padding: 4px 8px; border-top: 1px solid var(--line); background: var(--panel); }
+.broadcast-bar { display: grid; grid-row: 4; grid-template-columns: auto minmax(180px, 1fr) auto auto minmax(0, 220px); align-items: center; gap: 6px; min-width: 0; min-height: 36px; padding: 4px 8px; border-top: 1px solid var(--line); background: var(--panel); }
 .broadcast-bar > * { align-self: center; }
 .broadcast-toggle { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 27px; color: var(--text-strong); font-size: 10px; font-weight: 650; line-height: 1; white-space: nowrap; cursor: pointer; }
 .broadcast-toggle-label { display: inline-flex; align-items: center; min-height: 27px; }
@@ -781,6 +834,7 @@ watch(
 .broadcast-input-group { display: grid; grid-template-columns: minmax(0, 1fr) 27px; min-width: 0; gap: 4px; }.broadcast-input { box-sizing: border-box; display: block; width: 100%; min-width: 0; height: 27px; margin: 0; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 10px; line-height: 25px; }.broadcast-input:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 22%, transparent); }.broadcast-input:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }
 .broadcast-expand-button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.broadcast-expand-button:hover:not(:disabled) { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }.broadcast-expand-button:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }
 .broadcast-send-button { display: inline-flex; align-items: center; justify-content: center; height: 27px; margin: 0; padding: 0 9px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 680; line-height: 1; white-space: nowrap; }.broadcast-send-button:disabled { cursor: not-allowed; border-color: var(--line); background: var(--surface-soft); color: var(--faint); }
+.broadcast-upload-all-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 27px; margin: 0; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 9px; font-weight: 680; line-height: 1; white-space: nowrap; }.broadcast-upload-all-button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: #fff; }.broadcast-upload-all-button:disabled { cursor: not-allowed; border-color: var(--line); background: var(--surface-soft); color: var(--faint); opacity: .72; }
 .broadcast-status { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .broadcast-editor-backdrop { position: absolute; z-index: 15; inset: 0; display: grid; place-items: center; padding: 16px; background: rgb(20 24 29 / 48%); backdrop-filter: blur(1px); }.broadcast-editor-dialog { display: grid; grid-template-rows: auto minmax(180px, 1fr) auto; width: min(760px, 100%); height: min(520px, 100%); min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 20px 48px rgb(20 24 29 / 28%); }.broadcast-editor-dialog header,.broadcast-editor-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 9px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }.broadcast-editor-dialog header strong { color: var(--text-strong); font-size: 12px; }.broadcast-editor-dialog header button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.broadcast-editor-dialog header button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }.broadcast-editor-dialog textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; padding: 12px; resize: none; border: 0; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 12px; line-height: 1.55; outline: 0; }.broadcast-editor-dialog textarea:focus { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus) 32%, transparent); }.broadcast-editor-dialog textarea:disabled { cursor: not-allowed; background: var(--surface-soft); color: var(--faint); }.broadcast-editor-dialog footer { min-height: 46px; border-top: 1px solid var(--line); border-bottom: 0; }.broadcast-editor-dialog footer span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.broadcast-editor-send-button { flex: 0 0 auto; min-height: 28px; padding: 0 10px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 680; }.broadcast-editor-send-button:disabled { cursor: not-allowed; border-color: var(--line); background: var(--surface-soft); color: var(--faint); }
 @media (max-width: 1180px) {
@@ -791,11 +845,11 @@ watch(
 @media (max-width: 980px) {
   .hostbar-tools button span { display: none; }
   .hostbar-tools button { width: 29px; padding: 0; }
-  .broadcast-bar { grid-template-columns: auto minmax(120px, 1fr) auto; }
+  .broadcast-bar { grid-template-columns: auto minmax(120px, 1fr) auto auto; }
   .broadcast-status { grid-column: 2 / -1; }
 }
 @media (max-width: 680px) {
-  .broadcast-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .broadcast-bar { grid-template-columns: minmax(0, 1fr) auto auto; }
   .broadcast-toggle { grid-column: 1 / -1; }
   .broadcast-status { grid-column: 1 / -1; }
 }

@@ -455,6 +455,29 @@ describe('global chat store', () => {
     expect(store.state.messages.c2?.[0]?.messageType).toBe('execution_audit')
   })
 
+  it('keeps Skill progress run-scoped and clears cards on terminal chat events', () => {
+    const store = createGlobalChatStore(api())
+    const invocationId = '550e8400-e29b-41d4-a716-446655440000'
+    store.beginRun('c1', '550e8400-e29b-41d4-a716-446655440001')
+    store.apply({
+      kind: 'chat:skill', chatId: 'c1', runId: '550e8400-e29b-41d4-a716-446655440001', invocationId,
+      skillId: 'echo-hello', stage: 'loading', detail: '加载中',
+    })
+    expect(store.state.skillEvents.c1).toHaveLength(1)
+
+    // A delayed event from a superseded run cannot resurrect a card.
+    store.apply({
+      kind: 'chat:skill', chatId: 'c1', runId: '550e8400-e29b-41d4-a716-446655440002', invocationId,
+      skillId: 'echo-hello', stage: 'executing', detail: '执行中',
+    })
+    expect(store.state.skillEvents.c1).toHaveLength(1)
+
+    store.apply({
+      kind: 'chat:error', chatId: 'c1', runId: '550e8400-e29b-41d4-a716-446655440001', messageId: 'm1', error: '已取消。', retryable: false,
+    })
+    expect(store.state.skillEvents.c1).toBeUndefined()
+  })
+
   it('renders plan targets from the same user-facing Shell labels as the terminal', () => {
     const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
 

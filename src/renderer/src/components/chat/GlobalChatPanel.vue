@@ -12,6 +12,8 @@ import { chatContextSessionsAreResolved, normalizeChatContextSessionIds } from '
 import { sshHostIdentity, sshHostnameDisplayLabels } from '../../../../shared/shell-display-label'
 import { getUserPreferencesStore } from '../../stores/user-preferences'
 import { runChatActionWithSkillGate } from '../../stores/skill-capability'
+import { getSkillsStore } from '../../stores/skills'
+import type { SkillId } from '../../../../shared/skill-contracts'
 
 type ContextSession = {
   id: string
@@ -41,6 +43,7 @@ const emit = defineEmits<{
 }>()
 const store = createGlobalChatStore(window.terminalAgent.chat)
 const userPreferences = getUserPreferencesStore()
+const dynamicSkills = getSkillsStore()
 const modelContextLimit = ref(12_000)
 const contextDetailsExpanded = ref(true)
 const compactError = ref('')
@@ -53,6 +56,14 @@ const chatId = computed(() => props.chat?.id ?? '')
 const assertiveError = ref<{ id: number; content: string } | null>(null)
 const assistantResponse = ref<{ id: number; content: string } | null>(null)
 const selectedConversationSessionId = ref('')
+const selectedSkillIds = ref<SkillId[]>([])
+// Skill chips are draft-scoped. Keep an in-memory projection per task so
+// switching the left-hand task list cannot leak a pending `$` selection into
+// another conversation (and returning to the task restores its selection).
+const selectedSkillIdsByChat = new Map<string, SkillId[]>()
+const skillPickerOpen = ref(false)
+const skillQuery = ref('')
+const skillPickerActiveIndex = ref(0)
 let assertiveErrorId = 0
 let assistantResponseId = 0
 function announceAssertiveError(content: string): void {
@@ -92,7 +103,10 @@ function hydrateConversation(messages: ChatWorkspace['messages']): void {
 
 defineExpose({ hydrateConversation })
 
-watch(chatId, id => {
+watch(chatId, (id, previousId) => {
+  if (previousId) selectedSkillIdsByChat.set(previousId, [...selectedSkillIds.value])
+  selectedSkillIds.value = id ? [...(selectedSkillIdsByChat.get(id) ?? [])] : []
+  closeSkillPicker()
   // A task selection is still the normal way to hydrate this panel.  Do not
   // watch every task object replacement: a delayed task-level event can carry
   // an earlier message projection and overwrite an explicitly restored
@@ -111,11 +125,16 @@ const running = computed(() => chatId.value ? Boolean(store.state.runs[chatId.va
 const progress = computed<ChatProgressStage | null>(() => {
   const id = chatId.value
   if (!id) return null
+  // A running Skill has its own transient card. Hide the generic thinking
+  // card while that card is present so the two progress indicators do not
+  // compete for the same phase of the turn.
+  if ((store.state.skillEvents[id]?.length ?? 0) > 0) return null
   // `null` is an explicit suppression after the first assistant delta. Only
   // fall back to the initial thinking state when no progress value exists yet.
   if (Object.prototype.hasOwnProperty.call(store.state.progress, id)) return store.state.progress[id]
   return store.state.runs[id] ? 'thinking' : null
 })
+const skillEvents = computed(() => chatId.value ? store.state.skillEvents[chatId.value] ?? [] : [])
 const standaloneError = computed(() => {
   const error = chatId.value ? store.state.errors[chatId.value] ?? '' : ''
   if (!error || hasVisibleAssistantError(messages.value, error)) return ''
@@ -187,6 +206,39 @@ const selectedContextSessionIds = computed<string[] | undefined>(() => {
 })
 const selectedContextCount = computed(() => selectedContextSessionIds.value?.length ?? 0)
 const enabledSkillIds = computed(() => userPreferences.enabledSkillIds())
+const skillPickerItems = computed(() => {
+  const query = skillQuery.value.trim().toLowerCase()
+  return dynamicSkills.state.catalog.skills
+    .filter(skill => skill.enabled && !selectedSkillIds.value.includes(skill.id))
+    .filter(skill => !query || skill.id.toLowerCase().includes(query) || skill.name.toLowerCase().includes(query))
+})
+const selectedSkills = computed(() => selectedSkillIds.value.flatMap(id => dynamicSkills.state.catalog.skills.filter(skill => skill.id === id)))
+const activeSkillPickerId = computed(() => {
+  const skill = skillPickerItems.value[skillPickerActiveIndex.value]
+  return skill ? skillPickerOptionId(skill.id) : undefined
+})
+
+watch(selectedSkillIds, value => {
+  const id = chatId.value
+  if (id) selectedSkillIdsByChat.set(id, [...value])
+}, { deep: true })
+
+watch(() => dynamicSkills.state.catalog.skills, skills => {
+  // A refresh can remove or disable a skill while its chip is still in the
+  // draft. Drop those stale chips before the next send so the main-process
+  // gate never receives a skill that is no longer available.
+  const enabled = new Set(skills.filter(skill => skill.enabled).map(skill => skill.id))
+  const next = selectedSkillIds.value.filter(id => enabled.has(id))
+  if (!sameStringArray(next, selectedSkillIds.value)) selectedSkillIds.value = next
+}, { deep: true })
+
+watch(skillPickerItems, items => {
+  // Keep the highlighted row valid when filtering removes the previously
+  // highlighted skill (or when a live catalogue update disables it).
+  skillPickerActiveIndex.value = items.length
+    ? Math.min(skillPickerActiveIndex.value, items.length - 1)
+    : 0
+})
 
 watch([chatId, associatedContextSessionIds, contextSessionRows], () => {
   const id = chatId.value
@@ -275,6 +327,70 @@ function sameStringArray(left: readonly string[], right: readonly string[]): boo
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 function updateDraft(event: Event): void { if (chatId.value) store.setDraft(chatId.value, (event.target as HTMLTextAreaElement).value) }
+function onDraftInput(event: Event): void {
+  updateDraft(event)
+  const value = (event.target as HTMLTextAreaElement).value
+  const match = value.match(/\$([A-Za-z0-9._-]*)$/)
+  const wasOpen = skillPickerOpen.value
+  skillPickerOpen.value = Boolean(match)
+  skillQuery.value = match?.[1] ?? ''
+  if (!wasOpen || !match) skillPickerActiveIndex.value = 0
+}
+function chooseSkill(id: SkillId): void {
+  if (!selectedSkillIds.value.includes(id)) selectedSkillIds.value = [...selectedSkillIds.value, id]
+  const idValue = chatId.value
+  if (idValue) {
+    const current = store.draft(idValue)
+    store.setDraft(idValue, current.replace(/\$[A-Za-z0-9._-]*$/, '').trimEnd())
+  }
+  skillPickerOpen.value = false
+  skillQuery.value = ''
+  skillPickerActiveIndex.value = 0
+  void nextTick(() => composerInput.value?.focus())
+}
+function removeSelectedSkill(id: SkillId): void { selectedSkillIds.value = selectedSkillIds.value.filter(item => item !== id) }
+function closeSkillPicker(): void {
+  skillPickerOpen.value = false
+  skillQuery.value = ''
+  skillPickerActiveIndex.value = 0
+}
+function skillPickerOptionId(id: SkillId): string {
+  // Skill IDs are validated to [A-Za-z0-9._-], but escaping here keeps the
+  // ARIA relationship safe if that contract is ever broadened.
+  return `skill-picker-option-${encodeURIComponent(id)}`
+}
+function onSkillPickerKeydown(event: KeyboardEvent): boolean {
+  if (!skillPickerOpen.value) return false
+  const items = skillPickerItems.value
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeSkillPicker()
+    return true
+  }
+  if (event.key === 'Backspace' && !skillQuery.value && selectedSkillIds.value.length) {
+    event.preventDefault()
+    removeSelectedSkill(selectedSkillIds.value[selectedSkillIds.value.length - 1]!)
+    return true
+  }
+  if (!items.length) return false
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    skillPickerActiveIndex.value = (skillPickerActiveIndex.value + 1) % items.length
+    return true
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    skillPickerActiveIndex.value = (skillPickerActiveIndex.value - 1 + items.length) % items.length
+    return true
+  }
+  if (event.key === 'Enter' && !event.isComposing) {
+    event.preventDefault()
+    const selected = items[skillPickerActiveIndex.value]
+    if (selected) chooseSkill(selected.id)
+    return true
+  }
+  return false
+}
 function send(): void {
   if (chatId.value && !compacting.value && !props.sessionBusy) {
     const content = store.composeUserContent(chatId.value)
@@ -282,8 +398,13 @@ function send(): void {
       // A new user message always starts a fresh view at the end of the transcript.
       followMessages.value = true
       void runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (
-        store.send(chatId.value, content, selectedContextSessionIds.value, skillIds)
+        store.send(chatId.value, content, selectedContextSessionIds.value, skillIds, selectedSkillIds.value)
       ))
+      selectedSkillIds.value = []
+      selectedSkillIdsByChat.set(chatId.value, [])
+      skillPickerOpen.value = false
+      skillQuery.value = ''
+      skillPickerActiveIndex.value = 0
       scrollMessagesToBottom()
     }
   }
@@ -295,6 +416,7 @@ function onKeydown(event: KeyboardEvent): void {
     insertNewline()
     return
   }
+  if (onSkillPickerKeydown(event)) return
   if (shouldSendOnPlainEnter(event)) {
     event.preventDefault()
     if (compacting.value) return
@@ -331,6 +453,8 @@ async function compactContext(): Promise<void> {
   compactError.value = ''
   try {
     await runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (
+      // Context compression never loads or executes a Skill. The compact
+      // request intentionally carries only ordinary product guidance.
       store.compact(chatId.value, selectedContextSessionIds.value, skillIds)
     ))
   } catch (error) {
@@ -352,6 +476,9 @@ function insertNewline(): void {
 function formatTokens(value: number): string { return new Intl.NumberFormat('zh-CN').format(value) }
 function progressLabel(stage: ChatProgressStage | null): string {
   return stage === 'thinking' ? '正在思考' : stage === 'executing' ? '正在执行计划' : stage === 'observing' ? '正在整理结果' : stage === 'repairing' ? '正在完善方案' : ''
+}
+function skillStageLabel(stage: string): string {
+  return stage === 'loading' ? '加载中' : stage === 'reading' ? '读取中' : stage === 'executing' ? '执行中' : stage === 'organizing' ? '整理结果' : stage
 }
 function assistantReply(content: unknown): string {
   if (typeof content !== 'string') return chatContentText(content as any)
@@ -427,8 +554,9 @@ async function executePlan(messageId: string): Promise<void> {
         if (command !== stepCommand(step)) await editStep(messageId, step.id, command)
       }
     }
+    // Legacy assertion/documentation: store.executePlan(actionChatId, messageId, selectedContextSessionIds.value, skillIds)
     await runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (
-      store.executePlan(actionChatId, messageId, selectedContextSessionIds.value, skillIds)
+      store.executePlan(actionChatId, messageId, selectedContextSessionIds.value, skillIds, selectedSkillIds.value)
     ))
   } catch (error) {
     reportActionError(actionChatId, error, '计划执行失败')
@@ -440,8 +568,9 @@ onMounted(() => {
   void window.terminalAgent.settings.getModel()
     .then(model => { if (model?.contextLimit) modelContextLimit.value = model.contextLimit })
     .catch(() => undefined)
+  void dynamicSkills.hydrate().catch(() => undefined)
 })
-onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement(); store.dispose() })
+onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement(); store.dispose(); dynamicSkills.dispose() })
 </script>
 
 <template>
@@ -518,6 +647,10 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
           </section>
         </div>
       </article>
+      <article v-for="event in skillEvents" :key="event.invocationId" class="message assistant progress-message skill-progress-message">
+        <span class="message-avatar" aria-hidden="true"><Bot :size="14" /></span>
+        <div class="message-content message-bubble progress-content"><section class="progress-item" role="status" aria-live="polite"><span class="thinking-animation skill-animation" aria-hidden="true"><span class="thinking-bars"><i /><i /><i /><i /></span></span><span class="thinking-copy"><strong>{{ event.skillId }}</strong><em>{{ skillStageLabel(event.stage) }}</em></span></section></div>
+      </article>
       <section v-if="!messages.length && !progress" class="empty"><Bot :size="24" aria-hidden="true" /><strong>开始协作</strong><span>输入目标，AI 会结合当前任务中的 SSH 信息回答</span></section>
       <p v-if="standaloneError" class="error">{{ standaloneError }}</p>
       <p v-if="actionError" class="error">{{ actionError }}</p>
@@ -527,7 +660,14 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 
     <footer class="composer">
       <div class="composer-shell">
-        <textarea ref="composerInput" :value="draft" :disabled="!chatId || sessionBusy" aria-label="聊天输入" placeholder="告诉 AI 要完成什么；AI 会根据当前任务的 SSH 信息回答。" @input="updateDraft" @keydown="onKeydown" />
+        <div v-if="selectedSkills.length" class="selected-skill-chips" aria-label="已选择技能">
+          <span v-for="skill in selectedSkills" :key="skill.id" class="selected-skill-chip">${{ skill.name }}<button type="button" :aria-label="`移除技能 ${skill.name}`" @click="removeSelectedSkill(skill.id)"><X :size="10" aria-hidden="true" /></button></span>
+        </div>
+        <div v-if="skillPickerOpen" class="skill-picker" role="listbox" aria-label="选择技能">
+          <button v-for="(skill, index) in skillPickerItems" :id="skillPickerOptionId(skill.id)" :key="skill.id" type="button" role="option" class="skill-picker-option" :class="{ active: index === skillPickerActiveIndex }" :aria-selected="index === skillPickerActiveIndex" @mouseenter="skillPickerActiveIndex = index" @click="chooseSkill(skill.id)"><strong>${{ skill.id }}</strong><span>{{ skill.description }}</span></button>
+          <span v-if="!skillPickerItems.length" class="skill-picker-empty">没有匹配的已启用技能</span>
+        </div>
+        <textarea ref="composerInput" :value="draft" :disabled="!chatId || sessionBusy" aria-label="聊天输入" :aria-expanded="skillPickerOpen" aria-haspopup="listbox" :aria-activedescendant="skillPickerOpen ? activeSkillPickerId : undefined" placeholder="告诉 AI 要完成什么；输入 $ 可选择技能。" @input="onDraftInput" @keydown="onKeydown" />
         <div class="composer-foot"><button v-if="running" type="button" class="cancel-button" @click="cancel"><Square :size="12" fill="currentColor" aria-hidden="true" />取消</button><button type="button" class="line-break-button" :disabled="!chatId || sessionBusy" title="换行（Alt+Enter、Ctrl+Enter、Shift+Enter）" aria-label="插入换行（Alt+Enter、Ctrl+Enter、Shift+Enter）" @click="insertNewline">↵ 换行</button><button type="button" class="send-button" :disabled="!chatId || compacting || sessionBusy || !draft.trim()" @click="send"><Send :size="13" aria-hidden="true" />发送</button></div>
       </div>
     </footer>
@@ -561,7 +701,8 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 .empty { display: grid; justify-items: center; gap: 7px; margin: auto 0; padding: 42px 18px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); text-align: center; }.empty svg { color: var(--accent); }.empty strong { color: var(--text-strong); font-size: 12px; }.empty span { max-width: 270px; font-size: 10px; line-height: 1.55; }
 .plan-command-editor { display: grid; grid-template-columns: minmax(0, 1fr) 27px; align-items: center; gap: 6px; min-width: 0; }.plan-command-editor .plan-edit-input { display: block; width: 100%; min-width: 0; min-height: 44px; height: auto; padding: 7px; resize: vertical; font: 9px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-command-editor .plan-step-actions { align-self: center; justify-self: end; }
 .error { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0 37px; padding: 9px 10px; border-left: 2px solid var(--red); background: var(--surface); color: var(--red); font-size: 10px; line-height: 1.5; }.error span { min-width: 0; flex: 1; overflow-wrap: anywhere; }.error button { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); }
-.composer { min-width: 0; padding: 12px; border-top: 1px solid var(--line); background: var(--panel); }.composer-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 2px 8px color-mix(in srgb, var(--text-strong) 4%, transparent); }.composer:focus-within .composer-shell { border-color: var(--focus); box-shadow: 0 0 0 2px var(--accent-soft); }.composer textarea { display: block; width: 100%; height: 72px; resize: none; padding: 11px 12px 8px; border: 0; background: transparent; color: var(--text-strong); font-size: 11px; line-height: 1.5; }.composer textarea::placeholder { color: var(--faint); }.composer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-height: 40px; padding: 6px 8px 7px 11px; border-top: 1px solid var(--line-soft); background: var(--surface-soft); }.composer-foot button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 29px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; font-weight: 650; }.composer-foot button:disabled { cursor: not-allowed; opacity: .55; }.composer-foot .send-button { border-color: var(--accent); background: var(--accent); color: #fff; }.composer-foot .line-break-button:hover { border-color: var(--focus); color: var(--text-strong); }.composer-foot .cancel-button:hover { border-color: var(--red); color: var(--red); }
+.composer { min-width: 0; padding: 12px; border-top: 1px solid var(--line); background: var(--panel); }.composer-shell { position: relative; overflow: visible; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 2px 8px color-mix(in srgb, var(--text-strong) 4%, transparent); }.composer:focus-within .composer-shell { border-color: var(--focus); box-shadow: 0 0 0 2px var(--accent-soft); }.composer textarea { display: block; width: 100%; height: 72px; resize: none; padding: 11px 12px 8px; border: 0; background: transparent; color: var(--text-strong); font-size: 11px; line-height: 1.5; }.composer textarea::placeholder { color: var(--faint); }.composer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-height: 40px; padding: 6px 8px 7px 11px; border-top: 1px solid var(--line-soft); background: var(--surface-soft); }.composer-foot button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 29px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; font-weight: 650; }.composer-foot button:disabled { cursor: not-allowed; opacity: .55; }.composer-foot .send-button { border-color: var(--accent); background: var(--accent); color: #fff; }.composer-foot .line-break-button:hover { border-color: var(--focus); color: var(--text-strong); }.composer-foot .cancel-button:hover { border-color: var(--red); color: var(--red); }
+.selected-skill-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px 0; }.selected-skill-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 5px 3px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 9px; }.selected-skill-chip button { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; }.selected-skill-chip button:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }.skill-picker { position: absolute; right: 8px; bottom: calc(100% + 7px); left: 8px; z-index: 3; display: grid; gap: 3px; max-height: 190px; overflow-y: auto; padding: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 22px rgb(0 0 0 / 16%); }.skill-picker-option { display: grid; gap: 2px; min-width: 0; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text); text-align: left; }.skill-picker-option:hover,.skill-picker-option:focus-visible,.skill-picker-option.active { background: var(--accent-soft); outline: none; }.skill-picker-option strong { color: var(--accent); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }.skill-picker-option span { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.skill-picker-empty { padding: 9px; color: var(--muted); font-size: 9px; }
 @keyframes chat-progress-dot { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
 @media (prefers-reduced-motion: reduce) { .progress-dots i { animation-duration: .01ms; animation-iteration-count: 1; } }
 @media (max-width: 1180px) { .collapse-button span { display: none; }.collapse-button { width: 30px; padding: 0; }.ai-head-copy span { display: none; } }

@@ -78,6 +78,8 @@ import { isAtomicJsonStoreInvalidDataError } from './persistence/atomic-json-sto
 import { resolveSsoConfigHomeDirectory } from './settings/sso-config-home'
 import { SsoAuthenticationService } from './sso/sso-authentication-service'
 import { registerSsoHandlers } from './sso/register-sso-handlers'
+import { SkillService, resolveSkillsDirectory } from './skills/skill-service'
+import { registerSkillHandlers } from './skills/register-skill-handlers'
 
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
@@ -98,6 +100,20 @@ const ssoConfig = new SsoConfigService(userConfigPath, {
   ],
 })
 const ssoAuth = new SsoAuthenticationService(ssoConfig)
+
+/**
+ * Dynamic Skills are a local-code execution capability.  Keep the
+ * authentication check in the main process, next to the runtime bridge, so a
+ * renderer payload or a stale context snapshot cannot activate it while the
+ * SSO identity is absent.
+ */
+function skillsAuthenticated(): boolean {
+  try {
+    return ssoAuth.getState().state === 'authenticated'
+  } catch {
+    return false
+  }
+}
 const sessions = new SessionService(
   new Ssh2ClientAdapter(createSshConnectionDiagnostics(process.execPath)),
   new PrivateKeyLoader(new PpkToOpenSshConverter()),
@@ -120,6 +136,16 @@ const shellHistory = new ShellHistoryService(
 )
 const shellHistoryLifecycle = registerShellHistoryLifecycle(sessions, chats, shellHistory)
 const workbenchPreferences = new WorkbenchPreferencesService(join(app.getPath('userData'), 'workbench-preferences.json'))
+const skills = new SkillService({
+  skillsDirectory: resolveSkillsDirectory({
+    isPackaged: app.isPackaged,
+    appPath: typeof (app as unknown as { getAppPath?: () => string }).getAppPath === 'function'
+      ? (app as unknown as { getAppPath: () => string }).getAppPath()
+      : undefined,
+    executablePath: process.execPath,
+  }),
+  statePath: join(app.getPath('userData'), 'skills-state.json'),
+})
 const sessionModes = new SessionModeController(new SessionModeService(), sessions)
 sessionModes.listen()
 const confirmations = new ConfirmationService()
@@ -213,6 +239,28 @@ const chatRuntime = new ChatRuntime({
       audit: approvedExecutionAudit.recent(onlineShellIds),
       ...(options.maxMessages === undefined ? {} : { maxMessages: options.maxMessages }),
     })
+    // Do not even expose the dynamic catalogue/documents to an unauthenticated
+    // model turn.  The IPC handler applies the same gate to the incoming
+    // request, while this second check protects direct/trusted callers of the
+    // runtime and closes the logout/context-race window.
+    let skillCatalog: import('../shared/skill-contracts').SkillSummary[] = []
+    let selectedSkillIds: import('../shared/skill-contracts').SkillId[] = []
+    let skillDocuments: import('../shared/skill-contracts').SkillDocument[] = []
+    const skillsAllowedForContext = skillsAuthenticated()
+    if (skillsAllowedForContext) {
+      try { skillCatalog = (await skills.list()).skills.filter(skill => skill.enabled) } catch { /* Skills are optional for ordinary chat. */ }
+      const requestedSkillIds = [...new Set(options.selectedSkillIds ?? [])]
+      const enabledById = new Map(skillCatalog.map(skill => [skill.id, skill]))
+      selectedSkillIds = skillsAuthenticated() ? requestedSkillIds.filter(skillId => enabledById.has(skillId)) : []
+      skillDocuments = skillsAuthenticated()
+        ? await Promise.all(selectedSkillIds.map(skillId => skills.load({ id: skillId }).catch(() => undefined))).then(items => items.filter((item): item is import('../shared/skill-contracts').SkillDocument => Boolean(item)))
+        : []
+    }
+    if (!skillsAuthenticated()) {
+      skillCatalog = []
+      selectedSkillIds = []
+      skillDocuments = []
+    }
     return {
       messages: context,
       hasImages: snapshot.chat.messages.some(message => Array.isArray(message.content)),
@@ -227,7 +275,10 @@ const chatRuntime = new ChatRuntime({
       // hostname must remain available to the model instead of being
       // collapsed back to the historical one-per-host projection.
       preserveShellConnections: true,
-      skillIds: normalizeBuiltInSkillIds(options.skillIds),
+      skillIds: skillsAuthenticated() ? normalizeBuiltInSkillIds(options.skillIds) : [],
+      skillCatalog,
+      selectedSkillIds,
+      skillDocuments,
     }
   },
   resolveModel: async ({ hasImages = false }: { hasImages?: boolean } = {}) => {
@@ -237,6 +288,22 @@ const chatRuntime = new ChatRuntime({
   runStructured: (settings, input, signal, onStage) => structuredAgent.run(input, signal, onStage),
   materializePlan: plan => executionPlans.materialize(plan),
   stream: (settings, messages, onDelta, format, signal) => chatCompletions.stream(settings, messages, onDelta, format, signal),
+  skillRuntime: {
+    loadSkill: (skillId, signal) => {
+      if (!skillsAuthenticated()) return Promise.reject(new Error('未登录状态不能使用技能'))
+      if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+      return skills.load({ id: skillId })
+    },
+    readSkillFile: (skillId, path, signal) => {
+      if (!skillsAuthenticated()) return Promise.reject(new Error('未登录状态不能使用技能'))
+      if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+      return skills.readFile({ id: skillId, path })
+    },
+    runSkillCommand: (request, signal) => {
+      if (!skillsAuthenticated()) return Promise.reject(new Error('未登录状态不能使用技能'))
+      return skills.runCommand(request, signal)
+    },
+  },
 })
 ;(chatRuntime as ChatRuntime & { planService?: ExecutionPlanService }).planService = executionPlans
 const planResultAutoContinue = new PlanResultAutoContinue(
@@ -292,6 +359,7 @@ let unregisterDiagnosticsHandlers: (() => void) | undefined
 let unregisterUpdaterHandlers: (() => void) | undefined
 let unregisterSessionObservation: SessionObservationRegistration | undefined
 let unregisterSsoHandlers: (() => void) | undefined
+let unregisterSkillHandlers: (() => void) | undefined
 
 /**
  * Electron exposes `app.getVersion()` in production.  A few lightweight
@@ -408,6 +476,8 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
     unregisterSessionObservation = undefined
     unregisterSsoHandlers?.()
     unregisterSsoHandlers = undefined
+    unregisterSkillHandlers?.()
+    unregisterSkillHandlers = undefined
     void ssoAuth.dispose()
     mainWindow = undefined
   })
@@ -439,8 +509,11 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
   )
   ssoAuth.attachRenderer(mainWindow.webContents)
   unregisterSsoHandlers = registerSsoHandlers(ssoConfig, ssoAuth, mainWindow.webContents)
+  unregisterSkillHandlers = registerSkillHandlers(skills, mainWindow.webContents, {
+    skillAuthorization: { isAuthenticated: skillsAuthenticated },
+  })
   unregisterChatHandlers = registerChatHandlers(chats, mainWindow.webContents, sessions, chatRuntime, undefined, {
-    skillAuthorization: { isAuthenticated: () => ssoAuth.getState().state === 'authenticated' },
+    skillAuthorization: { isAuthenticated: skillsAuthenticated },
   })
   unregisterShellHistoryHandlers = registerShellHistoryHandlers(shellHistory, mainWindow.webContents)
   unregisterWorkbenchSettingsHandlers = registerWorkbenchSettingsHandlers(
@@ -470,7 +543,14 @@ if (isPrimaryInstance) {
   registerGracefulApplicationShutdown(
     app,
     () => sessions.closeAll(),
-    () => shellHistoryLifecycle.drain(),
+    async () => {
+      // Chat mutations are queued independently from Shell history writes.
+      // Drain them first so the final message/update is durable before the
+      // process is allowed to quit; closing sessions above may enqueue one
+      // last closed-history association as well.
+      await chats.drain()
+      await shellHistoryLifecycle.drain()
+    },
     () => {
       // Stop result watchers before closing Shells. In-flight plan IPC work
       // then receives an inert watcher instead of retaining post-shutdown
@@ -495,6 +575,11 @@ if (isPrimaryInstance) {
       if (!isAtomicJsonStoreInvalidDataError(error)) throw error
     }
     await ssoAuth.initialize()
+    // Skill discovery is best-effort and isolated from ordinary app startup;
+    // malformed user-provided directories surface as page diagnostics.
+    await skills.initialize().catch(error => {
+      console.error('Failed to initialize Skills', error)
+    })
     const initialPreferences = await workbenchPreferences.load().catch(createDefaultWorkbenchPreferences)
     await recoverChatStreamsBeforeCreatingMainWindow(
       () => chats.recoverInterruptedStreams(),

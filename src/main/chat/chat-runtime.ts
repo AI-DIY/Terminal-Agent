@@ -6,6 +6,8 @@ import type { AssistantPlanOutput } from '../../shared/chat-plan'
 import type { StructuredChatRequest, StructuredChatShell } from './structured-chat-agent'
 import type { ChatCompactRequest, ChatProgressStage } from '../../shared/contracts'
 import type { BuiltInSkillId } from '../../shared/built-in-skills'
+import type { SkillDocument, SkillId, SkillSummary, SkillRuntimeEvent } from '../../shared/skill-contracts'
+import type { StructuredSkillRuntime } from './structured-chat-agent'
 import { estimateChatMessages } from './token-estimator'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -17,6 +19,7 @@ export type ChatRuntimeRequest = {
   sshContextLines?: number
   sshContextSessionIds?: string[]
   skillIds?: BuiltInSkillId[]
+  selectedSkillIds?: SkillId[]
   /** Trusted main-process continuation: do not persist a synthetic user turn. */
   skipUserMessage?: true
   /** Trusted prompt appended only to the model request, never to the transcript. */
@@ -34,12 +37,14 @@ export type ChatRuntimeEvent =
   | { kind: 'chat:delta'; chatId: string; runId: string; messageId: string; content: string }
   | { kind: 'chat:completed'; chatId: string; runId: string; messageId: string; content: string; executionPlan?: import('../../shared/chat-plan').ChatExecutionPlan }
   | { kind: 'chat:error'; chatId: string; runId: string; messageId: string; error: string; retryable: boolean }
+  | SkillRuntimeEvent
 
 export type ChatPlanResultContinuationRequest = {
   chatId: string
   sshContextLines?: number
   sshContextSessionIds?: string[]
   skillIds?: BuiltInSkillId[]
+  selectedSkillIds?: SkillId[]
 }
 
 type RuntimeDeps = {
@@ -50,6 +55,7 @@ type RuntimeDeps = {
     sshContextLines?: number
     sshContextSessionIds?: readonly string[]
     skillIds?: readonly BuiltInSkillId[]
+    selectedSkillIds?: readonly SkillId[]
     maxMessages?: number
   }): Promise<ChatMessage[] | {
     messages: ChatMessage[]
@@ -58,11 +64,15 @@ type RuntimeDeps = {
     availableShells?: StructuredChatShell[]
     preserveShellConnections?: boolean
     skillIds?: BuiltInSkillId[]
+    selectedSkillIds?: SkillId[]
+    skillCatalog?: SkillSummary[]
+    skillDocuments?: SkillDocument[]
   }>
   resolveModel(input?: { hasImages: boolean }): Promise<ProviderModelSettings>
   runStructured?(settings: ProviderModelSettings, input: StructuredChatRequest, signal: AbortSignal, onStage?: (stage: ChatProgressStage) => void): Promise<AssistantPlanOutput>
   materializePlan?(plan: NonNullable<AssistantPlanOutput['plan']>): import('../../shared/chat-plan').ChatExecutionPlan
   stream(settings: ProviderModelSettings, messages: ChatMessage[], onDelta: (content: string) => void, responseFormat?: ChatCompletionResponseFormat, signal?: AbortSignal): Promise<void>
+  skillRuntime?: StructuredSkillRuntime
   timeoutMs?: number
 }
 
@@ -162,6 +172,7 @@ export class ChatRuntime {
         sshContextLines: request.sshContextLines,
         ...(request.sshContextSessionIds === undefined ? {} : { sshContextSessionIds: request.sshContextSessionIds }),
         ...(request.skillIds === undefined ? {} : { skillIds: request.skillIds }),
+        ...(request.selectedSkillIds === undefined ? {} : { selectedSkillIds: request.selectedSkillIds }),
       })
       const structuredContext = Array.isArray(contextResult) ? null : contextResult
       const context = Array.isArray(contextResult) ? contextResult : contextResult.messages
@@ -173,6 +184,7 @@ export class ChatRuntime {
         ? [...context, { role: 'user' as const, content: request.transientPrompt }]
         : context
       const effectiveSkillIds = structuredContext?.skillIds ?? request.skillIds
+      const effectiveSelectedSkillIds = structuredContext?.selectedSkillIds ?? request.selectedSkillIds
       const preserveShellConnections = structuredContext?.preserveShellConnections ?? request.sshContextSessionIds !== undefined
       const settings = await this.deps.resolveModel({ hasImages: structuredContext?.hasImages ?? false })
       if (!isLiveOwner()) {
@@ -209,6 +221,13 @@ export class ChatRuntime {
             ...(structuredContext?.availableShells ? { availableShells: structuredContext.availableShells } : {}),
             ...(preserveShellConnections ? { preserveShellConnections: true } : {}),
             ...(effectiveSkillIds?.length ? { skillIds: effectiveSkillIds } : {}),
+            ...(effectiveSelectedSkillIds?.length ? { selectedSkillIds: effectiveSelectedSkillIds } : {}),
+            ...(structuredContext?.skillCatalog?.length ? { skillCatalog: structuredContext.skillCatalog } : {}),
+            ...(structuredContext?.skillDocuments?.length ? { skillDocuments: structuredContext.skillDocuments } : {}),
+            ...(this.deps.skillRuntime ? { skillRuntime: this.scopedSkillRuntime(request, controller, publish, isLiveOwner) } : {}),
+            chatId: request.chatId,
+            runId: request.runId,
+            contextLimit: settings.contextLimit,
           }, controller.signal, publishProgress)).then(result => { publishProgress('observing'); materializedPlan = result.plan && this.deps.materializePlan ? this.deps.materializePlan(result.plan) : undefined; output = JSON.stringify(result) })
           : Promise.resolve().then(() => this.deps.stream(settings, modelContext, delta => {
           if (!isLiveOwner()) return
@@ -360,6 +379,10 @@ export class ChatRuntime {
         sshContextLines: request.sshContextLines,
         ...(request.sshContextSessionIds === undefined ? {} : { sshContextSessionIds: request.sshContextSessionIds }),
         ...(request.skillIds === undefined ? {} : { skillIds: request.skillIds }),
+        // Context compression is deliberately non-executing: omit explicit
+        // standard Skill selections so the structured model cannot load or
+        // run local Skill commands while summarizing history.
+        selectedSkillIds: [],
         maxMessages: 100,
       })
       const structuredContext = Array.isArray(contextResult) ? null : contextResult
@@ -384,6 +407,8 @@ export class ChatRuntime {
           ...(structuredContext?.availableShells ? { availableShells: structuredContext.availableShells } : {}),
           ...(preserveShellConnections ? { preserveShellConnections: true } : {}),
           ...(effectiveSkillIds?.length ? { skillIds: effectiveSkillIds } : {}),
+          skillCatalog: [],
+          contextLimit: settings.contextLimit,
         }, controller.signal)
         const summary = result.reply.trim()
         if (summary) return summary
@@ -400,6 +425,32 @@ export class ChatRuntime {
       throw error
     } finally {
       clearTimeout(timeout)
+    }
+  }
+
+  private scopedSkillRuntime(
+    request: ChatRuntimeRequest,
+    _controller: AbortController,
+    publish: (event: ChatRuntimeEvent) => void,
+    isLiveOwner: () => boolean,
+  ): StructuredSkillRuntime {
+    const runtime = this.deps.skillRuntime!
+    return {
+      loadSkill: (skillId, signal) => runtime.loadSkill(skillId, signal),
+      readSkillFile: (skillId, path, signal) => runtime.readSkillFile(skillId, path, signal),
+      runSkillCommand: (command, signal) => runtime.runSkillCommand(command, signal),
+      onEvent: event => {
+        if (!isLiveOwner()) return
+        publish({
+          kind: 'chat:skill',
+          chatId: request.chatId,
+          runId: request.runId,
+          invocationId: event.invocationId,
+          skillId: event.skillId,
+          stage: event.stage,
+          detail: event.detail,
+        })
+      },
     }
   }
 
@@ -559,6 +610,7 @@ function raceProviderStreamWithAbort(providerStream: Promise<void>, signal: Abor
 function publicChatError(error: unknown): string {
   if (error instanceof ChatPersistenceError) return '聊天暂时无法保存，请稍后重试。'
   const raw = error instanceof Error ? error.message : ''
+  if (/技能内容|技能说明|执行结果/.test(raw)) return '所选技能说明或执行结果超出当前模型上下文限制，请减少技能选择或先压缩历史消息。'
   if (/context|上下文|压缩历史/i.test(raw)) return '聊天上下文超出当前模型限制，请先压缩历史消息。'
   if (/超时|timeout/i.test(raw)) return '聊天请求超时。'
   if (/未配置|configuration|model/i.test(raw)) return '未配置可用的 AI 模型，请前往设置完成模型连接后重试。'

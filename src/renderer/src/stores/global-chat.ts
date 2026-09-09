@@ -3,10 +3,12 @@ import type { ChatRuntimeEvent, ChatProgressStage, ChatWorkspaceSnapshot, ChatMe
 import type { ChatMessageContent, ChatImageUrlPart } from '../../../shared/chat-content'
 import type { ChatExecutionPlan, ChatPlanEditStepRequest, ChatPlanRemoveStepRequest, ChatPlanCancelRequest, ChatPlanExecuteRequest } from '../../../shared/chat-plan'
 import type { BuiltInSkillId } from '../../../shared/built-in-skills'
+import type { SkillId } from '../../../shared/skill-contracts'
+import type { SkillRuntimeEvent } from '../../../shared/skill-contracts'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 type Api = {
-  send(request: { chatId: string; runId: string; content: any; retry?: boolean; sshContextLines?: number; sshContextSessionIds?: string[]; skillIds?: BuiltInSkillId[] }): Promise<void>
+  send(request: { chatId: string; runId: string; content: any; retry?: boolean; sshContextLines?: number; sshContextSessionIds?: string[]; skillIds?: BuiltInSkillId[]; selectedSkillIds?: SkillId[] }): Promise<void>
   cancel(chatId: string): Promise<void>
   onEvent(listener: (event: ChatRuntimeEvent) => void): () => void
   // Compaction only needs the refreshed transcript. Keep this adapter's
@@ -111,6 +113,7 @@ export function createGlobalChatStore(api: Api) {
     runUserMessageIds: {} as Record<string, string | null>,
     pendingImages: {} as Record<string, ChatImageUrlPart[]>,
     progress: {} as Record<string, ChatProgressStage | null>,
+    skillEvents: {} as Record<string, SkillRuntimeEvent[]>,
     sshContextLines: loadSshContextLines(),
     sshContextSessionIds: {} as Record<string, string[]>,
   })
@@ -133,6 +136,28 @@ export function createGlobalChatStore(api: Api) {
   }
 
   function apply(event: ChatRuntimeEvent): void {
+    if (event.kind === 'chat:skill') {
+      const terminal = event.stage === 'completed' || event.stage === 'skipped' || event.stage === 'failed' || event.stage === 'cancelled'
+      const list = state.skillEvents[event.chatId] ?? (state.skillEvents[event.chatId] = [])
+      // Skill events are run-scoped. A delayed IPC event from a superseded
+      // run must never resurrect a progress card in the newly active turn;
+      // terminal events are still allowed to remove a matching stale card.
+      if (state.runs[event.chatId] !== event.runId) {
+        if (terminal) {
+          const staleIndex = list.findIndex(item => item.invocationId === event.invocationId)
+          if (staleIndex >= 0) list.splice(staleIndex, 1)
+          if (list.length === 0) delete state.skillEvents[event.chatId]
+        }
+        return
+      }
+      const index = list.findIndex(item => item.invocationId === event.invocationId)
+      if (terminal) {
+        if (index >= 0) list.splice(index, 1)
+      } else if (index >= 0) list[index] = event
+      else list.push(event)
+      if (list.length === 0) delete state.skillEvents[event.chatId]
+      return
+    }
     if (event.kind === 'chat:auto-started') {
       // Plan-result continuations originate in the trusted main process, so
       // there is no optimistic user message to establish this run locally.
@@ -145,6 +170,7 @@ export function createGlobalChatStore(api: Api) {
       state.runUserMessageIds[event.chatId] = null
       state.errors[event.chatId] = ''
       state.retryableErrors[event.chatId] = false
+      delete state.skillEvents[event.chatId]
       return
     }
     const acceptsCancelledRun = event.kind === 'chat:error'
@@ -174,6 +200,7 @@ export function createGlobalChatStore(api: Api) {
     if (event.kind === 'chat:completed') {
       state.runs[event.chatId] = null
       state.progress[event.chatId] = null
+      delete state.skillEvents[event.chatId]
       state.errors[event.chatId] = ''
       state.retryableErrors[event.chatId] = false
       state.activeMessageIds[event.chatId] = null
@@ -192,6 +219,7 @@ export function createGlobalChatStore(api: Api) {
 
     state.runs[event.chatId] = null
     state.progress[event.chatId] = null
+    delete state.skillEvents[event.chatId]
     state.errors[event.chatId] = event.error
     state.retryableErrors[event.chatId] = event.retryable
     state.activeMessageIds[event.chatId] = event.messageId
@@ -216,6 +244,7 @@ export function createGlobalChatStore(api: Api) {
       cancelledRuns.delete(chatId)
       state.runs[chatId] = runId
       state.progress[chatId] = 'thinking'
+      delete state.skillEvents[chatId]
       state.activeMessageIds[chatId] = null
       state.runUserMessageIds[chatId] = latestUserMessageId(state.messages[chatId])
     },
@@ -238,6 +267,9 @@ export function createGlobalChatStore(api: Api) {
     },
     sshContextSessionIds(chatId: string): string[] {
       return [...(state.sshContextSessionIds[chatId] ?? [])]
+    },
+    skillEvents(chatId: string): SkillRuntimeEvent[] {
+      return [...(state.skillEvents[chatId] ?? [])]
     },
     async compact(chatId: string, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[]): Promise<ChatCompactionSnapshot> {
       if (!api.compact) throw new Error('上下文压缩不可用')
@@ -312,7 +344,7 @@ export function createGlobalChatStore(api: Api) {
       state.activeMessageIds[chatId] = null
       state.runUserMessageIds[chatId] = null
     },
-    async send(chatId: string, content: any, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[]): Promise<void> {
+    async send(chatId: string, content: any, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[], selectedSkillIds?: readonly SkillId[]): Promise<void> {
       // Keep the draft intact while compaction is in flight.  The runtime also
       // enforces this ordering for non-renderer callers, but guarding here
       // avoids showing a new optimistic user message that would immediately
@@ -340,9 +372,10 @@ export function createGlobalChatStore(api: Api) {
         sshContextLines: state.sshContextLines,
         ...(selectedSessionIds === undefined ? {} : { sshContextSessionIds: [...new Set(selectedSessionIds)] }),
         ...(skillIds === undefined ? {} : { skillIds: [...new Set(skillIds)] }),
+        ...(selectedSkillIds === undefined ? {} : { selectedSkillIds: [...new Set(selectedSkillIds)] }),
       })
     },
-    async retry(chatId: string, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[]): Promise<void> {
+    async retry(chatId: string, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[], selectedSkillIds?: readonly SkillId[]): Promise<void> {
       if (state.compacting[chatId]) return
       const previous = lastUserMessage.get(chatId)
       if (!previous || !previous.content || !state.errors[chatId] || !state.retryableErrors[chatId]) return
@@ -363,6 +396,7 @@ export function createGlobalChatStore(api: Api) {
         sshContextLines: state.sshContextLines,
         ...(selectedSessionIds === undefined ? {} : { sshContextSessionIds: [...new Set(selectedSessionIds)] }),
         ...(skillIds === undefined ? {} : { skillIds: [...new Set(skillIds)] }),
+        ...(selectedSkillIds === undefined ? {} : { selectedSkillIds: [...new Set(selectedSkillIds)] }),
       })
     },
     canRetry(chatId: string): boolean {
@@ -430,7 +464,7 @@ export function createGlobalChatStore(api: Api) {
       this.hydrate(chatId, snapshot.chat.messages)
       return snapshot
     },
-    async executePlan(chatId: string, messageId: string, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[]): Promise<ChatWorkspaceSnapshot> {
+    async executePlan(chatId: string, messageId: string, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[], selectedSkillIds?: readonly SkillId[]): Promise<ChatWorkspaceSnapshot> {
       if (!api.plans) throw new Error('计划操作不可用')
       const selectedSessionIds = sessionIds ?? state.sshContextSessionIds[chatId]
       const snapshot = await api.plans.execute({
@@ -440,6 +474,7 @@ export function createGlobalChatStore(api: Api) {
         sshContextLines: state.sshContextLines,
         ...(selectedSessionIds === undefined ? {} : { sshContextSessionIds: [...new Set(selectedSessionIds)] }),
         ...(skillIds === undefined ? {} : { skillIds: [...new Set(skillIds)] }),
+        ...(selectedSkillIds === undefined ? {} : { selectedSkillIds: [...new Set(selectedSkillIds)] }),
       })
       this.hydrate(chatId, snapshot.chat.messages)
       return snapshot

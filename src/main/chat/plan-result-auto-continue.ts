@@ -1,4 +1,5 @@
 import type { BuiltInSkillId } from '../../shared/built-in-skills'
+import type { SkillId } from '../../shared/skill-contracts'
 import type { ChatPlanResultContinuationRequest, ChatRuntimeEvent } from './chat-runtime'
 
 export type PlanResultOutputWatchRequest = ChatPlanResultContinuationRequest & {
@@ -36,6 +37,7 @@ type ContinuationRuntime = {
       sshContextLines?: number
       sshContextSessionIds?: string[]
       skillIds?: BuiltInSkillId[]
+      selectedSkillIds?: SkillId[]
     },
     publish: (event: ChatRuntimeEvent) => void,
   ): Promise<boolean>
@@ -206,6 +208,7 @@ export class PlanResultAutoContinue implements PlanResultOutputWatcher {
         ...(request.sshContextLines === undefined ? {} : { sshContextLines: request.sshContextLines }),
         ...(request.sshContextSessionIds === undefined ? {} : { sshContextSessionIds: [...request.sshContextSessionIds] }),
         ...(request.skillIds === undefined ? {} : { skillIds: [...request.skillIds] }),
+        ...(request.selectedSkillIds === undefined ? { } : { selectedSkillIds: [...request.selectedSkillIds] }),
       }, this.publish)
     }).catch(() => undefined)
   }
@@ -280,5 +283,6 @@ function cloneRequest(request: PlanResultOutputWatchRequest): PlanResultOutputWa
     ...(request.sshContextLines === undefined ? {} : { sshContextLines: request.sshContextLines }),
     ...(request.sshContextSessionIds === undefined ? {} : { sshContextSessionIds: [...request.sshContextSessionIds] }),
     ...(request.skillIds === undefined ? {} : { skillIds: [...request.skillIds] }),
+    ...(request.selectedSkillIds === undefined ? {} : { selectedSkillIds: [...request.selectedSkillIds] }),
   }
 }

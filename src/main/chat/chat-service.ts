@@ -89,6 +89,19 @@ export class ChatService {
     })
   }
 
+  /**
+   * Wait until every repository mutation started by this service has settled.
+   *
+   * Repository writes are intentionally tracked at the service boundary so
+   * callers that need a consistent read can wait for them.  The same boundary
+   * is used by the graceful application shutdown path: without an explicit
+   * drain, Electron can tear down the process while an append/update is still
+   * being atomically written to chat-workspaces.json.
+   */
+  async drain(): Promise<void> {
+    await this.waitForMutations()
+  }
+
   async create(request: ChatCreateRequest): Promise<ChatWorkspaceSnapshot> {
     const parsed = chatCreateRequestSchema.parse(request)
     return this.trackMutation(() => this.apply(this.repository.create(parsed), 'created'))

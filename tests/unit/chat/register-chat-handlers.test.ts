@@ -79,6 +79,7 @@ describe('registerChatHandlers', () => {
       messageId: 'message-1',
       sshContextLines: 125,
       sshContextSessionIds: ['primary', 'alternate'],
+      selectedSkillIds: [],
       skillIds: [],
     })
     dispose()

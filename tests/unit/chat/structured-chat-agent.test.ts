@@ -233,4 +233,75 @@ describe('StructuredChatAgent', () => {
     expect(systems[0]).not.toContain('192.0.2.10')
     expect(systems[1]).not.toContain('192.0.2.10')
   })
+
+  it('runs one standard Skill action, feeds its result back, then returns the final reply', async () => {
+    const complete = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ action: { type: 'load_skill', skillId: 'echo-hello' } }))
+      .mockResolvedValueOnce('{"version":1,"reply":"技能已加载。","plan":null}')
+    const loadSkill = vi.fn().mockResolvedValue({ id: 'echo-hello', name: 'echo-hello', description: 'Echo', content: '# Echo' })
+    const events: string[] = []
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      skillCatalog: [{ id: 'echo-hello', name: 'echo-hello', description: 'Echo', enabled: true }],
+      skillRuntime: { loadSkill, readSkillFile: vi.fn(), runSkillCommand: vi.fn(), onEvent: event => events.push(event.stage) },
+    })).resolves.toMatchObject({ reply: '技能已加载。' })
+    expect(loadSkill).toHaveBeenCalledWith('echo-hello', undefined)
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(events).toEqual(['loading', 'organizing', 'completed'])
+    expect(String(complete.mock.calls[1]?.[0]?.at(-1)?.content)).toContain('技能动作结果')
+  })
+
+  it('skips disabled standard Skill actions without invoking the executor', async () => {
+    const complete = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ action: { type: 'run_skill_command', skillId: 'echo-hello', invocationId: crypto.randomUUID(), command: 'echo hi' } }))
+      .mockResolvedValueOnce('{"version":1,"reply":"未启用，未执行。","plan":null}')
+    const runSkillCommand = vi.fn()
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      skillCatalog: [{ id: 'echo-hello', name: 'echo-hello', description: 'Echo', enabled: false }],
+      skillRuntime: { loadSkill: vi.fn(), readSkillFile: vi.fn(), runSkillCommand },
+    })).resolves.toMatchObject({ reply: '未启用，未执行。' })
+    expect(runSkillCommand).not.toHaveBeenCalled()
+  })
+
+  it('feeds a structured failure back when the optional Skill runtime is unavailable', async () => {
+    const complete = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ action: { type: 'load_skill', skillId: 'echo-hello' } }))
+      .mockResolvedValueOnce('{"version":1,"reply":"当前环境不支持技能，继续普通回答。","plan":null}')
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      skillCatalog: [{ id: 'echo-hello', name: 'echo-hello', description: 'Echo', enabled: true }],
+    })).resolves.toMatchObject({ reply: '当前环境不支持技能，继续普通回答。' })
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(String(complete.mock.calls[1]?.[0]?.at(-1)?.content)).toContain('当前环境未启用技能执行器')
+  })
+
+  it('does not repeat a completed command when the provider replays its invocation id', async () => {
+    const invocationId = crypto.randomUUID()
+    const action = { type: 'run_skill_command', skillId: 'echo-hello', invocationId, executable: 'node', args: ['scripts/echo.js'] }
+    const complete = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ action }))
+      .mockResolvedValueOnce(JSON.stringify({ action }))
+      .mockResolvedValueOnce('{"version":1,"reply":"命令结果已整理。","plan":null}')
+    const runSkillCommand = vi.fn().mockResolvedValue({ id: 'echo-hello', invocationId, exitCode: 0, stdout: 'ok', stderr: '', timedOut: false, cancelled: false })
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      skillCatalog: [{ id: 'echo-hello', name: 'echo-hello', description: 'Echo', enabled: true }],
+      skillRuntime: { loadSkill: vi.fn(), readSkillFile: vi.fn(), runSkillCommand },
+    })).resolves.toMatchObject({ reply: '命令结果已整理。' })
+    expect(runSkillCommand).toHaveBeenCalledOnce()
+    expect(complete).toHaveBeenCalledTimes(3)
+  })
+
+  it('rejects an oversized Skill prompt before calling the model', async () => {
+    const complete = vi.fn()
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      contextLimit: 1,
+      skillCatalog: [{ id: 'echo-hello', name: 'echo-hello', description: 'Echo', enabled: true }],
+    })).rejects.toThrow('聊天上下文及技能说明超出当前模型限制')
+    expect(complete).not.toHaveBeenCalled()
+  })
 })

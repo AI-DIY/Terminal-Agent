@@ -9,7 +9,6 @@ import type {
 
 const props = defineProps<{
   sessionId: string
-  sessionIds?: string[]
   hostname?: string
 }>()
 
@@ -69,8 +68,6 @@ const remoteDropActive = ref(false)
 const error = ref('')
 const status = ref('正在准备文件传输目录。')
 const fullscreen = ref(false)
-const batchUploadBusy = ref(false)
-const batchUploadStatus = ref('')
 const clockNow = ref(Date.now())
 let elapsedTimer: ReturnType<typeof setInterval> | undefined
 let unsubscribeProgress: (() => void) | undefined
@@ -540,10 +537,8 @@ function onRemoteEntryDrop(entry: FileTransferDirectoryEntry, event: DragEvent):
 
 function setTransferProgress(event: FileTransferProgress): void {
   // Progress is broadcast over one renderer channel. A regular transfer row
-  // exists only in the card that started it; a batch action pre-creates one
-  // row per target session in its initiating card. Matching by transfer id
-  // therefore lets that card render an aggregate fan-out without every
-  // mounted card duplicating sibling rows.
+  // exists only in the card that started it, so matching by transfer id keeps
+  // other mounted cards from duplicating the row.
   const target = transfers.value.find(transfer => transfer.id === event.transferId)
   if (!target) return
   target.phase = event.phase
@@ -655,82 +650,6 @@ function applyTransferResult(result: FileTransferResult, transferId: string, dir
   }
   markTransferSettled(transferId)
   status.value = result.status === 'canceled' ? '已取消。' : `${direction === 'upload' ? '上传' : '下载'}完成。`
-}
-
-async function uploadFileToAllSessions(): Promise<void> {
-  if (batchUploadBusy.value) return
-  const sessionIds = [...new Set((props.sessionIds?.length ? props.sessionIds : [props.sessionId]).filter(Boolean))]
-  if (!sessionIds.length) {
-    error.value = '当前没有可用的 SSH 会话。'
-    return
-  }
-  const uploadAll = window.terminalAgent.fileTransfer?.uploadAll
-  if (typeof uploadAll !== 'function') {
-    error.value = '当前版本不支持上传文件到所有会话。'
-    return
-  }
-  batchUploadBusy.value = true
-  batchUploadStatus.value = ''
-  error.value = ''
-  status.value = `正在选择文件并上传到 ${sessionIds.length} 个会话…`
-  const transferIds = sessionIds.map(sessionId => ({ sessionId, transferId: createTransferId() }))
-  for (const item of transferIds) {
-    // The panel that starts the batch owns the aggregate rows. Other mounted
-    // panels do not have these ids and therefore ignore the shared progress
-    // notifications, avoiding duplicate rows while still showing every leg
-    // in one place.
-    addTransfer('upload', './', '批量上传文件', item.transferId, undefined, undefined, item.sessionId)
-    markTransferActive(item.transferId)
-  }
-  try {
-    const result = await uploadAll({ sessionIds, remotePath: './', transferIds })
-    const completed = result.results.filter(item => item.status === 'completed').length
-    const failed = result.results.length - completed
-    batchUploadStatus.value = failed ? `${completed} 个会话完成，${failed} 个会话失败` : `已上传到 ${completed} 个会话`
-    status.value = batchUploadStatus.value
-    for (const item of result.results) {
-      const transfer = transfers.value.find(existing => existing.id === item.transferId)
-      if (transfer) {
-        transfer.phase = item.status
-        transfer.transferredBytes = item.transferredBytes
-        if (item.transferredBytes > 0) transfer.totalBytes = item.transferredBytes
-        transfer.name = item.fileName || transfer.name
-        if (transfer.remotePath === './' && item.fileName) transfer.remotePath = `./${item.fileName}`
-        transfer.message = item.message
-        transfer.finishedAt = Date.now()
-      } else {
-        addTransfer('upload', './', item.fileName || '批量上传文件', item.transferId, undefined, undefined, item.sessionId)
-        const created = transfers.value.find(existing => existing.id === item.transferId)
-        if (created) {
-          created.phase = item.status
-          created.transferredBytes = item.transferredBytes
-          created.totalBytes = item.transferredBytes
-          created.message = item.message
-          created.finishedAt = Date.now()
-        }
-      }
-      markTransferSettled(item.transferId)
-    }
-    await refreshRemoteDirectory(remoteCurrentPath.value)
-  } catch (cause) {
-    const message = cause instanceof Error ? cause.message : '批量文件上传失败。'
-    for (const item of transferIds) {
-      const transfer = transfers.value.find(existing => existing.id === item.transferId)
-      if (transfer) {
-        transfer.phase = 'failed'
-        transfer.message = message
-        transfer.finishedAt = Date.now()
-      }
-      markTransferSettled(item.transferId)
-    }
-    error.value = message
-    status.value = '批量文件上传失败。'
-  } finally {
-    // A picker/validation failure can reject before per-session result rows
-    // are returned. Do not leave the parent terminal card stuck as busy.
-    for (const item of transferIds) markTransferSettled(item.transferId)
-    batchUploadBusy.value = false
-  }
 }
 
 function toggleFullscreen(): void {
@@ -875,9 +794,8 @@ onBeforeUnmount(() => {
 <template>
   <section class="file-transfer-panel" :class="{ fullscreen }" aria-label="文件传输" tabindex="-1" @click="onPanelClick" @keydown="onFullscreenKeydown">
     <header class="file-transfer-header">
-      <div class="file-transfer-title"><strong>文件传输</strong><span v-if="busy" class="file-transfer-busy">文件传输中</span><span v-if="hostname">{{ hostname }}</span><span v-if="batchUploadStatus" class="batch-upload-status">{{ batchUploadStatus }}</span></div>
+      <div class="file-transfer-title"><strong>文件传输</strong><span v-if="busy" class="file-transfer-busy">文件传输中</span><span v-if="hostname">{{ hostname }}</span></div>
       <div class="file-transfer-actions">
-        <button type="button" class="upload-all-button" :disabled="batchUploadBusy" aria-label="上传文件到所有会话" title="选择一个本地文件，上传到所有已连接会话的用户目录" @click.stop="uploadFileToAllSessions"><Upload :size="13" aria-hidden="true" /><span>{{ batchUploadBusy ? '上传中…' : '上传到所有会话' }}</span></button>
         <button type="button" class="close-button" :aria-label="fullscreen ? '退出文件传输全屏' : '文件传输全屏'" :title="fullscreen ? '退出全屏' : '全屏'" @click.stop="toggleFullscreen"><Minimize2 v-if="fullscreen" :size="14" aria-hidden="true" /><Maximize2 v-else :size="14" aria-hidden="true" /></button>
         <button type="button" class="close-button" aria-label="隐藏文件传输" title="隐藏文件传输" @click.stop="hidePanel"><ChevronDown :size="15" aria-hidden="true" /></button>
       </div>
@@ -1024,9 +942,13 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .file-transfer-panel { position: relative; display: grid; grid-template-rows: auto minmax(126px, 1fr) minmax(50px, .72fr) auto; gap: 6px; box-sizing: border-box; width: 100%; min-width: 0; min-height: 190px; max-height: 368px; padding: 8px 10px 9px; border-top: 1px solid var(--line); background: var(--panel); color: var(--text); }
-.file-transfer-panel.fullscreen { position: fixed; z-index: 40; inset: 18px; width: auto; height: auto; max-height: none; min-height: 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 24px 72px rgb(0 0 0 / 34%); }
+/* Native title-bar controls occupy the top overlay area. Keep a fullscreen
+   transfer surface below it so its header actions remain independently
+   clickable instead of sitting underneath the window buttons. */
+.file-transfer-panel.fullscreen { position: fixed; z-index: 40; top: max(52px, calc(env(titlebar-area-height, 0px) + 10px)); right: 18px; bottom: 18px; left: 18px; width: auto; height: auto; max-height: none; min-height: 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 24px 72px rgb(0 0 0 / 34%); }
 .file-transfer-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }.file-transfer-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden; }.file-transfer-title strong { flex: 0 0 auto; color: var(--text-strong); font-size: 11px; font-weight: 720; }.file-transfer-title span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.file-transfer-title .file-transfer-busy { flex: 0 0 auto; padding: 1px 4px; border: 1px solid var(--amber-line); border-radius: 3px; background: var(--amber-soft); color: var(--amber); font-size: 8px; font-weight: 700; }
-.file-transfer-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }.upload-all-button { display: inline-flex; align-items: center; gap: 4px; min-height: 25px; padding: 0 7px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 9px; font-weight: 680; white-space: nowrap; }.upload-all-button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: #fff; }.upload-all-button:disabled { cursor: not-allowed; opacity: .55; }.batch-upload-status { color: var(--accent) !important; font-size: 8px !important; }
+.file-transfer-panel.fullscreen .file-transfer-header { flex-wrap: wrap; }.file-transfer-panel.fullscreen .file-transfer-actions { flex: 0 0 auto; }
+.file-transfer-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .close-button,.icon-button { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.close-button:hover,.icon-button:hover:not(:disabled) { border-color: var(--focus); color: var(--text-strong); }.close-button:disabled,.icon-button:disabled { cursor: not-allowed; opacity: .52; }
 .file-transfer-browser { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; min-width: 0; min-height: 0; overflow: hidden; }.file-pane,.file-transfer-log { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line-soft); background: var(--surface); }.file-pane-header { display: grid; grid-template-rows: auto auto auto; min-width: 0; border-bottom: 1px solid var(--line-soft); }.file-transfer-log { min-height: 50px; }.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; min-height: 23px; padding: 0 7px; border-bottom: 1px solid var(--line-soft); color: var(--text-strong); font-size: 9px; font-weight: 650; }.file-pane-header .section-heading { border-bottom: 0; }.section-heading span:last-child { color: var(--muted); font-size: 8px; font-weight: 500; }
 .file-pane-pathbar { display: grid; grid-template-columns: auto minmax(0, 1fr) 25px 25px 25px; align-items: center; gap: 4px; min-width: 0; padding: 0 5px 4px; }.remote-file-pane .file-pane-pathbar { grid-template-columns: auto minmax(0, 1fr) 25px 25px; }.file-pane-pathbar label { color: var(--muted); font-size: 8px; }.file-pane-pathbar input { box-sizing: border-box; width: 100%; min-width: 0; height: 25px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--text-strong); font: inherit; font-size: 9px; }.file-pane-pathbar input:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 22%, transparent); }
@@ -1035,5 +957,5 @@ onBeforeUnmount(() => {
 .directory-context-menu { position: absolute; z-index: 5; display: grid; min-width: 164px; padding: 3px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); box-shadow: 0 10px 24px rgb(24 31 40 / 22%); }.directory-context-menu button { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 0 7px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 9px; text-align: left; }.directory-context-menu button:hover:not(:disabled) { background: var(--hover); }.directory-context-menu button:disabled { cursor: not-allowed; opacity: .52; }
 .transfer-table { min-width: 0; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: transparent transparent; }.transfer-table:hover,.transfer-table:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent; }.transfer-table::-webkit-scrollbar { width: 8px; height: 8px; }.transfer-table::-webkit-scrollbar-track { background: transparent; }.transfer-table::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }.transfer-table:hover::-webkit-scrollbar-thumb,.transfer-table:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 55%, transparent); }.transfer-row { display: grid; grid-template-columns: minmax(70px, .8fr) minmax(76px, .8fr) 68px minmax(160px, 1.4fr) 44px minmax(160px, 1.4fr) 78px 92px 76px; align-items: center; gap: 7px; min-width: 900px; min-height: 25px; padding: 0 7px; border-bottom: 1px solid var(--line-soft); color: var(--muted); font-size: 8px; }.transfer-row:last-child { border-bottom: 0; }.transfer-head { position: sticky; top: 0; z-index: 1; min-height: 23px; background: var(--surface-soft); color: var(--faint); font-size: 8px; }.transfer-name { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }.direction.upload { color: var(--accent); }.direction.download { color: var(--focus); }.transfer-state.completed { color: var(--accent); }.transfer-state.failed { color: var(--red); }.transfer-state.canceled { color: var(--muted); }.transfer-row small { color: var(--faint); }.log-empty { display: grid; place-items: center; margin: 0; padding: 8px; color: var(--muted); }
 .file-transfer-status,.file-transfer-error { min-width: 0; margin: 0; overflow: hidden; font-size: 9px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }.file-transfer-status { color: var(--muted); }.file-transfer-error { color: var(--red); }.spinning { animation: file-transfer-spin .9s linear infinite; }@keyframes file-transfer-spin { to { transform: rotate(360deg); } }
-@media (max-width: 760px) { .file-transfer-panel { max-height: 460px; }.file-transfer-panel.fullscreen { inset: 8px; }.file-transfer-browser { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 1fr) minmax(120px, 1fr); overflow: auto; }.transfer-row { grid-template-columns: minmax(70px, .8fr) minmax(76px, .8fr) 68px minmax(140px, 1.2fr) 44px minmax(140px, 1.2fr) 78px 76px 76px; } }
+@media (max-width: 760px) { .file-transfer-panel { max-height: 460px; }.file-transfer-panel.fullscreen { top: max(48px, calc(env(titlebar-area-height, 0px) + 8px)); right: 8px; bottom: 8px; left: 8px; }.file-transfer-browser { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 1fr) minmax(120px, 1fr); overflow: auto; }.transfer-row { grid-template-columns: minmax(70px, .8fr) minmax(76px, .8fr) 68px minmax(140px, 1.2fr) 44px minmax(140px, 1.2fr) 78px 76px 76px; } }
 </style>

@@ -1,43 +1,41 @@
 <script setup lang="ts">
-import { ArrowLeft, Bot, Braces, Check, ShieldCheck, Sparkles } from '@lucide/vue'
-import { computed, type Component } from 'vue'
-import { BUILT_IN_SKILLS, type VisibleBuiltInSkillId } from '../../../shared/built-in-skills'
-import { getUserPreferencesStore } from '../stores/user-preferences'
+import { ArrowLeft, Bot, Check, CircleAlert, CircleHelp, RefreshCw, Sparkles } from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
+import type { SkillSummary } from '../../../shared/skill-contracts'
 import { getSsoStore } from '../stores/sso'
-import { resolveBuiltInSkillControls, toggleBuiltInSkill } from '../stores/skill-capability'
+import { getSkillsStore } from '../stores/skills'
 
 const emit = defineEmits<{ close: [] }>()
-const preferences = getUserPreferencesStore()
 const sso = getSsoStore()
+const skills = getSkillsStore()
+const catalog = computed(() => skills.state.catalog)
+const skillList = computed(() => catalog.value.skills)
+const enabledCount = computed(() => skillList.value.filter(skill => skill.enabled).length)
 
-type SkillDefinition = (typeof BUILT_IN_SKILLS)[number] & { icon: Component }
-
-const SKILL_ICONS: Record<VisibleBuiltInSkillId, Component> = {
-  'teleagent-operations': Bot,
-  'codex-development': Braces,
-  'ssh-troubleshooting': ShieldCheck,
+function skillControl(id: string): SkillSummary {
+  return skillList.value.find(skill => skill.id === id) ?? { id: id as SkillSummary['id'], name: id as SkillSummary['name'], description: '', enabled: false }
 }
 
-const SKILLS: readonly SkillDefinition[] = BUILT_IN_SKILLS.map(skill => ({ ...skill, icon: SKILL_ICONS[skill.id] }))
-
-const skillControls = computed(() => resolveBuiltInSkillControls(sso.skillsAvailable.value, preferences.state.skills))
-const enabledCount = computed(() => skillControls.value.enabledCount)
-
-function skillControl(id: VisibleBuiltInSkillId): (typeof skillControls.value.controls)[number] {
-  return skillControls.value.controls.find(control => control.id === id) ?? {
-    id,
-    enabled: false,
-    disabled: true,
-  }
+function iconFor(_skill: SkillSummary): typeof Bot {
+  // Keep a stable, neutral icon while allowing arbitrary user-provided IDs.
+  return Bot
 }
 
-function toggleSkill(skill: SkillDefinition): void {
-  toggleBuiltInSkill(sso.skillsAvailable.value, skill.id, preferences.state.skills, preferences.setSkillEnabled)
+async function refreshSkills(): Promise<void> {
+  await skills.refresh().catch(() => undefined)
+}
+
+async function toggleSkill(skill: SkillSummary): Promise<void> {
+  if (!sso.skillsAvailable.value) return
+  await skills.setEnabled({ id: skill.id, enabled: !skill.enabled }).catch(() => undefined)
 }
 
 function closeSkills(): void {
   emit('close')
 }
+
+onMounted(() => { void skills.hydrate() })
+onBeforeUnmount(() => skills.dispose())
 </script>
 
 <template>
@@ -45,7 +43,8 @@ function closeSkills(): void {
     <header class="skills-top">
       <button type="button" class="back-button" @click="closeSkills"><ArrowLeft :size="15" aria-hidden="true" /><span>返回工作台</span></button>
       <h1><Sparkles :size="18" aria-hidden="true" />技能</h1>
-      <span class="skills-summary">已启用 {{ enabledCount }} / {{ SKILLS.length }}</span>
+      <button type="button" class="refresh-button" :disabled="skills.state.loading" @click="refreshSkills"><RefreshCw :size="13" :class="{ spinning: skills.state.loading }" aria-hidden="true" /><span>刷新</span></button>
+      <span class="skills-summary">已启用 {{ enabledCount }} / {{ skillList.length }}</span>
     </header>
 
     <section class="skills-content" aria-label="技能设置">
@@ -53,24 +52,30 @@ function closeSkills(): void {
         <p v-if="!sso.skillsAvailable" class="skills-restriction" role="alert">未登录状态不能使用技能</p>
         <div class="section-heading">
           <div>
-            <h2 id="catalog-title">内置技能</h2>
-            <p>选择需要在 AI 工作区中使用的内置能力。</p>
+            <h2 id="catalog-title">可用技能</h2>
+            <p>选择需要在 AI 工作区中使用的标准 Skill。将标准 Skill 放入 .skills 目录后可刷新发现。</p>
           </div>
         </div>
-        <div class="skill-grid">
-          <article v-for="skill in SKILLS" :key="skill.id" class="skill-card" :class="{ enabled: skillControl(skill.id).enabled }">
+        <p v-if="skills.state.error" class="skills-error" role="alert"><CircleAlert :size="14" aria-hidden="true" />{{ skills.state.error }}</p>
+        <div v-if="!skills.state.loading && skillList.length === 0" class="skills-empty" role="status"><CircleHelp :size="20" aria-hidden="true" /><strong>暂无可用技能</strong><span>请将包含 YAML 头部和正文的 SKILL.md 放入项目根目录 .skills/&lt;skill-name&gt;。</span></div>
+        <div v-else class="skill-grid">
+          <article v-for="skill in skillList" :key="skill.id" class="skill-card" :class="{ enabled: skill.enabled }">
             <div class="skill-card-head">
-              <span class="skill-icon"><component :is="skill.icon" :size="17" aria-hidden="true" /></span>
-              <div class="skill-card-title"><h3>{{ skill.name }}</h3><span>{{ skill.source }}</span></div>
+              <span class="skill-icon"><component :is="iconFor(skill)" :size="17" aria-hidden="true" /></span>
+              <div class="skill-card-title"><h3>{{ skill.name }}</h3><span>{{ skill.id }}</span></div>
               <label class="skill-toggle">
-                <input type="checkbox" :checked="skillControl(skill.id).enabled" :disabled="skillControl(skill.id).disabled" :aria-label="`${skillControl(skill.id).enabled ? '停用' : '启用'} ${skill.name}`" @change="toggleSkill(skill)">
+                <input type="checkbox" :checked="skillControl(skill.id).enabled" :disabled="!sso.skillsAvailable || skills.state.loading" :aria-label="`${skillControl(skill.id).enabled ? '停用' : '启用'} ${skill.name}`" @change="toggleSkill(skill)">
                 <span aria-hidden="true" class="toggle-track"><span class="toggle-thumb" /></span>
               </label>
             </div>
             <p>{{ skill.description }}</p>
-            <small><Check :size="12" aria-hidden="true" />{{ skill.detail }}</small>
+            <small><Check :size="12" aria-hidden="true" />标准 SKILL.md</small>
             <span class="skill-status">{{ skillControl(skill.id).enabled ? '已启用' : '未启用' }}</span>
           </article>
+        </div>
+        <div v-if="catalog.diagnostics.length" class="skills-diagnostics" role="status">
+          <strong><CircleAlert :size="13" aria-hidden="true" />发现 {{ catalog.diagnostics.length }} 个目录问题</strong>
+          <p v-for="item in catalog.diagnostics" :key="`${item.directory}:${item.code}`">{{ item.directory }}：{{ item.message }}</p>
         </div>
       </section>
     </section>
@@ -84,6 +89,10 @@ function closeSkills(): void {
 .back-button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; font-weight: 600; -webkit-app-region: no-drag; }
 .back-button:hover { border-color: var(--focus); background: var(--hover); color: var(--text-strong); }
 .skills-summary { margin-left: auto; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.refresh-button { display: inline-flex; align-items: center; gap: 5px; height: 27px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; -webkit-app-region: no-drag; }
+.refresh-button:hover:not(:disabled) { border-color: var(--focus); color: var(--text-strong); }
+.refresh-button:disabled { cursor: wait; opacity: .6; }
+.refresh-button .spinning { animation: skills-spin .8s linear infinite; }
 .skills-content { min-width: 0; min-height: 0; overflow-y: auto; padding: 28px 34px 38px; background: var(--surface); }
 .catalog-panel { display: grid; gap: 14px; width: 100%; max-width: 1120px; margin: 0 auto; }
 .catalog-panel { margin-bottom: 0; }
@@ -110,5 +119,11 @@ function closeSkills(): void {
 .toggle-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 20%); transition: transform .15s ease; }
 .skill-toggle input:checked + .toggle-track { background: var(--accent); }
 .skill-toggle input:checked + .toggle-track .toggle-thumb { transform: translateX(14px); }
+.skills-error { display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--red) 40%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--red) 8%, var(--surface)); color: var(--red); font-size: 10px; }
+.skills-empty { display: grid; justify-items: center; gap: 7px; padding: 38px 18px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); text-align: center; }
+.skills-empty svg { color: var(--accent); }.skills-empty strong { color: var(--text-strong); font-size: 12px; }.skills-empty span { max-width: 360px; font-size: 10px; line-height: 1.55; }
+.skills-diagnostics { display: grid; gap: 4px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: 9px; line-height: 1.45; }
+.skills-diagnostics strong { display: inline-flex; align-items: center; gap: 5px; color: var(--amber); font-size: 10px; }.skills-diagnostics p { margin: 0; overflow-wrap: anywhere; }
+@keyframes skills-spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) { .skills-content { padding: 22px 18px 30px; }.section-heading { display: grid; gap: 8px; }.skills-summary { margin-left: 0; } }
 </style>
