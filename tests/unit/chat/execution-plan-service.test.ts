@@ -141,16 +141,19 @@ describe('ExecutionPlanService', () => {
     expect(write).toHaveBeenCalledWith('session-1', 'systemctl status api\n')
   })
 
-  it('waits for each transport completion before sending the next plan command', async () => {
+  it('dispatches distinct sessions concurrently while preserving order within each session', async () => {
     const targetPlan = {
       ...plan(),
       steps: [
         plan().steps[0],
         { id: 'step-2', target: 'db-01', explanation: '查看数据库状态', originalCommand: 'systemctl status db', sendState: 'pending' as const },
+        { id: 'step-3', target: 'web-01', explanation: '查看最近日志', originalCommand: 'journalctl -n 20 api', sendState: 'pending' as const },
       ],
     }
-    const resolvers: Array<(result: { completed: boolean; timedOut: boolean }) => void> = []
-    const writeAndWaitForCompletion = vi.fn(() => new Promise<{ completed: boolean; timedOut: boolean }>(resolve => { resolvers.push(resolve) }))
+    const resolvers = new Map<string, (result: { completed: boolean; timedOut: boolean }) => void>()
+    const writeAndWaitForCompletion = vi.fn((sessionId: string, command: string) => new Promise<{ completed: boolean; timedOut: boolean }>(resolve => {
+      resolvers.set(`${sessionId}:${command}`, resolve)
+    }))
     const updateMessage = vi.fn(async () => undefined)
     const service = new ExecutionPlanService({
       get: vi.fn(async () => ({ chat: {
@@ -170,23 +173,33 @@ describe('ExecutionPlanService', () => {
       writeAndWaitForCompletion,
     }, { match: () => null })
 
-    const execution = service.execute({ requestId: 'serial-completion', chatId: 'chat-1', messageId: 'message-1' })
-    // Let the queued execution reach its first transport call.
-    for (let attempt = 0; attempt < 12 && writeAndWaitForCompletion.mock.calls.length === 0; attempt += 1) await Promise.resolve()
-    expect(writeAndWaitForCompletion).toHaveBeenCalledOnce()
-    expect(writeAndWaitForCompletion).toHaveBeenCalledWith('session-web', 'systemctl status api\n')
+    const execution = service.execute({ requestId: 'parallel-completion', chatId: 'chat-1', messageId: 'message-1' })
+    // Let both independent session chains reach their first transport call.
+    for (let attempt = 0; attempt < 20 && writeAndWaitForCompletion.mock.calls.length < 2; attempt += 1) await Promise.resolve()
+    expect(writeAndWaitForCompletion).toHaveBeenCalledTimes(2)
+    expect(writeAndWaitForCompletion).toHaveBeenNthCalledWith(1, 'session-web', 'systemctl status api\n')
+    expect(writeAndWaitForCompletion).toHaveBeenNthCalledWith(2, 'session-db', 'systemctl status db\n')
 
-    resolvers[0]!({ completed: true, timedOut: false })
+    // Completing the database chain must not release the plan while the web
+    // chain is still running, and it must not affect the web step order.
+    resolvers.get('session-db:systemctl status db\n')!({ completed: true, timedOut: false })
     await Promise.resolve()
     await Promise.resolve()
     expect(writeAndWaitForCompletion).toHaveBeenCalledTimes(2)
-    expect(writeAndWaitForCompletion).toHaveBeenLastCalledWith('session-db', 'systemctl status db\n')
+    expect(updateMessage.mock.calls.map(call => ((call as unknown as [{ requestId: string }])[0]).requestId)).toEqual([
+      'parallel-completion:executing',
+    ])
 
-    resolvers[1]!({ completed: true, timedOut: false })
+    resolvers.get('session-web:systemctl status api\n')!({ completed: true, timedOut: false })
+    for (let attempt = 0; attempt < 12 && writeAndWaitForCompletion.mock.calls.length < 3; attempt += 1) await Promise.resolve()
+    expect(writeAndWaitForCompletion).toHaveBeenCalledTimes(3)
+    expect(writeAndWaitForCompletion).toHaveBeenCalledWith('session-web', 'journalctl -n 20 api\n')
+
+    resolvers.get('session-web:journalctl -n 20 api\n')!({ completed: true, timedOut: false })
     await expect(execution).resolves.toBeUndefined()
     expect(updateMessage.mock.calls.map(call => ((call as unknown as [{ requestId: string }])[0]).requestId)).toEqual([
-      'serial-completion:executing',
-      'serial-completion:result',
+      'parallel-completion:executing',
+      'parallel-completion:result',
     ])
   })
 

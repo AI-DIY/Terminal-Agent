@@ -16,6 +16,8 @@ import {
   fileTransferProgressSchema,
   fileTransferResultSchema,
   fileTransferUploadRequestSchema,
+  fileTransferUploadAllRequestSchema,
+  fileTransferUploadAllResultSchema,
   type FileTransferDirection,
   type FileTransferDirectoryEntry,
   type FileTransferLocalDirectorySelection,
@@ -23,6 +25,7 @@ import {
   type FileTransferListResult,
   type FileTransferProgress,
   type FileTransferResult,
+  type FileTransferUploadAllResult,
 } from '../../shared/file-transfer-contracts'
 import type { ShellHistoryFileTransferLog } from '../../shared/contracts'
 
@@ -270,6 +273,132 @@ export function registerFileTransferHandlers(
     }
   })
 
+  /**
+   * Pick one local file and upload it concurrently to every requested SSH
+   * session.  The native picker is deliberately resolved before any SFTP
+   * operation starts, so a batch action never opens one dialog per session.
+   */
+  ipcMain.handle(fileTransferChannels.uploadAll, async (event, request: unknown): Promise<FileTransferUploadAllResult> => {
+    assertTrustedSender(event, trustedSender)
+    const parsed = fileTransferUploadAllRequestSchema.safeParse(request)
+    if (!parsed.success) throw new Error('批量文件上传请求无效。')
+
+    const startedAt = now().toISOString()
+    const requestedSessions = new Set(parsed.data.sessionIds)
+    const suppliedTransferIds = new Map<string, string>()
+    const seenTransferIds = new Set<string>()
+    for (const mapping of parsed.data.transferIds ?? []) {
+      // The shared schema validates UUID syntax, but the relationship between
+      // the two lists is intentionally checked here as well.  A malformed
+      // mapping must never cause two progress streams to share one row.
+      if (!requestedSessions.has(mapping.sessionId) || suppliedTransferIds.has(mapping.sessionId) || seenTransferIds.has(mapping.transferId)) {
+        throw new Error('批量文件上传请求的传输标识无效。')
+      }
+      suppliedTransferIds.set(mapping.sessionId, mapping.transferId)
+      seenTransferIds.add(mapping.transferId)
+    }
+    const transferIds = new Map(parsed.data.sessionIds.map(sessionId => [sessionId, suppliedTransferIds.get(sessionId) ?? randomUUID()]))
+    const direction: FileTransferDirection = 'upload'
+    let selectedPath: string | undefined
+    let fileName = '未命名文件'
+
+    // Notify all rows that the shared native picker is open.  Each row gets a
+    // distinct id so the normal progress listener can correlate updates.
+    for (const sessionId of parsed.data.sessionIds) {
+      emitProgress(trustedSender, {
+        transferId: transferIds.get(sessionId)!, sessionId, direction,
+        phase: 'selecting', transferredBytes: 0,
+      })
+    }
+
+    try {
+      if (parsed.data.localPath) {
+        await ensureDefaultLocalDirectory()
+        selectedPath = await validateGrantedUploadPath(parsed.data.localPath, selectedLocalDirectoryRoots)
+      } else {
+        const selected = await dialogs.selectUploadFile()
+        if (selected.canceled || !selected.filePath) {
+          const results = parsed.data.sessionIds.map(sessionId => {
+            const transferId = transferIds.get(sessionId)!
+            emitProgress(trustedSender, {
+              transferId, sessionId, direction, phase: 'canceled', transferredBytes: 0,
+              message: '已取消批量文件上传。',
+            })
+            return { sessionId, transferId, status: 'canceled' as const, transferredBytes: 0, message: '已取消批量文件上传。' }
+          })
+          return fileTransferUploadAllResultSchema.parse({ status: 'canceled', results })
+        }
+        selectedPath = await validateUploadPath(selected.filePath)
+      }
+      fileName = displayFileName(selectedPath)
+      const totalBytes = (await lstat(selectedPath)).size
+
+      const results = await Promise.all(parsed.data.sessionIds.map(async sessionId => {
+        const transferId = transferIds.get(sessionId)!
+        const remoteTarget = uploadRemoteTarget(parsed.data.remotePath, fileName)
+        try {
+          emitProgress(trustedSender, {
+            transferId, sessionId, direction, phase: 'transferring', transferredBytes: 0,
+            totalBytes, fileName,
+          })
+          const transferredBytes = await sessions.uploadFile(
+            sessionId,
+            selectedPath!,
+            remoteTarget,
+            progress => emitProgress(trustedSender, {
+              transferId, sessionId, direction, phase: 'transferring',
+              transferredBytes: progress.transferredBytes,
+              ...(progress.totalBytes === undefined ? {} : { totalBytes: progress.totalBytes }),
+              fileName,
+            }),
+          )
+          const boundedTransferred = boundedBytes(transferredBytes)
+          emitProgress(trustedSender, {
+            transferId, sessionId, direction, phase: 'completed',
+            transferredBytes: boundedTransferred, totalBytes: boundedBytes(totalBytes), fileName,
+            message: '文件上传完成。',
+          })
+          await recordTransfer(options.history, {
+            sessionId, id: transferId, direction, fileName, remotePath: remoteTarget,
+            status: 'completed', transferredBytes: boundedTransferred, totalBytes,
+            message: '文件上传完成。', startedAt, endedAt: now().toISOString(),
+          })
+          return { sessionId, transferId, status: 'completed' as const, transferredBytes: boundedTransferred, fileName, message: '文件上传完成。' }
+        } catch (cause) {
+          const message = publicTransferError(direction, cause)
+          emitProgress(trustedSender, {
+            transferId, sessionId, direction, phase: 'failed', transferredBytes: 0,
+            fileName, message,
+          })
+          await recordTransfer(options.history, {
+            sessionId, id: transferId, direction, fileName, remotePath: remoteTarget,
+            status: 'failed', transferredBytes: 0, totalBytes,
+            message, startedAt, endedAt: now().toISOString(),
+          })
+          return { sessionId, transferId, status: 'failed' as const, transferredBytes: 0, fileName, message }
+        }
+      }))
+      // Once a file has been selected, each fan-out leg can only complete or
+      // fail; cancellation is handled above while the shared picker is open.
+      const status = results.every(item => item.status === 'completed') ? 'completed' : 'partial'
+      return fileTransferUploadAllResultSchema.parse({ status, fileName, results })
+    } catch (cause) {
+      // Selection/validation errors happen before a per-session transfer is
+      // started.  Surface one public error while still notifying every row.
+      const message = publicTransferError(direction, cause)
+      for (const sessionId of parsed.data.sessionIds) {
+        const transferId = transferIds.get(sessionId)!
+        emitProgress(trustedSender, { transferId, sessionId, direction, phase: 'failed', transferredBytes: 0, message })
+        await recordTransfer(options.history, {
+          sessionId, id: transferId, direction, fileName,
+          remotePath: parsed.data.remotePath, status: 'failed', transferredBytes: 0,
+          message, startedAt, endedAt: now().toISOString(),
+        })
+      }
+      throw new Error(message, { cause })
+    }
+  })
+
   ipcMain.handle(fileTransferChannels.download, async (event, request: unknown): Promise<FileTransferResult> => {
     assertTrustedSender(event, trustedSender)
     const parsed = fileTransferDownloadRequestSchema.safeParse(request)
@@ -390,6 +519,7 @@ export function registerFileTransferHandlers(
     ipcMain.removeHandler(fileTransferChannels.selectLocalDirectory)
     ipcMain.removeHandler(fileTransferChannels.listLocal)
     ipcMain.removeHandler(fileTransferChannels.upload)
+    ipcMain.removeHandler(fileTransferChannels.uploadAll)
     ipcMain.removeHandler(fileTransferChannels.download)
   }
 }

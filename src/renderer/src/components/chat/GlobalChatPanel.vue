@@ -566,31 +566,47 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 @media (prefers-reduced-motion: reduce) { .progress-dots i { animation-duration: .01ms; animation-iteration-count: 1; } }
 @media (max-width: 1180px) { .collapse-button span { display: none; }.collapse-button { width: 30px; padding: 0; }.ai-head-copy span { display: none; } }
 
-/* Prototype-aligned AI transcript surfaces.  These overrides intentionally
-   keep the existing DOM/events intact while giving each message state a
-   distinct, theme-aware visual treatment. */
-.messages { padding: 15px; background: color-mix(in srgb, var(--surface) 94%, var(--panel)); }
-.message + .message { margin-top: 10px; }
-.message { grid-template-columns: 34px minmax(0, 1fr); gap: 9px; padding: 0; }
-.message.user { grid-template-columns: minmax(0, 1fr) 34px; padding-left: clamp(18px, 8%, 48px); }
-.message-avatar { width: 34px; height: 34px; border-radius: 8px; border-color: var(--line); background: var(--surface); color: var(--accent); }
+/* Prototype-aligned AI transcript surfaces.  Keep the visual treatment while
+   staying compact enough for the transcript to remain useful beside a shell. */
+.ai-head { gap: 6px 8px; padding: 8px 10px 8px; }
+.ai-avatar { width: 29px; height: 29px; border-radius: 7px; }
+.ai-head-copy h3 { font-size: 13px; }
+.session-action,.session-switch { height: 27px; padding: 0 7px; }
+.session-switch select { height: 25px; }
+.collapse-button { height: 27px; padding: 0 7px; font-size: 9px; }
+.ai-safety-badge { min-height: 21px; padding: 0 7px; font-size: 8.5px; }
+.context-meter { padding: 7px 8px 6px; }
+.context-meter-head { grid-template-columns: auto minmax(0, 1fr) auto 23px; gap: 5px; }
+.context-toggle { width: 23px; height: 23px; }
+.context-progress { margin-top: 6px; }
+.context-settings { gap: 6px; margin-top: 6px; }
+.context-settings .secondary-action { min-height: 25px; }
+.context-host-setting { margin-top: 0; padding-top: 6px; }
+.context-host-options { gap: 4px; margin-top: 5px; }
+.context-host-option { padding: 3px 5px; }
+.global-chat-panel.context-details-expanded { grid-template-rows: minmax(126px, auto) minmax(0, 1fr) auto; }
+.messages { padding: 9px 10px 12px; background: color-mix(in srgb, var(--surface) 94%, var(--panel)); }
+.message + .message { margin-top: 5px; }
+.message { grid-template-columns: 28px minmax(0, 1fr); gap: 6px; padding: 0; }
+.message.user { grid-template-columns: minmax(0, 1fr) 28px; padding-left: clamp(12px, 5%, 32px); }
+.message-avatar { width: 28px; height: 28px; border-radius: 7px; border-color: var(--line); background: var(--surface); color: var(--accent); }
 .message.user .message-avatar { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: var(--accent); color: #fff; }
-.message-content.message-bubble { box-sizing: border-box; width: fit-content; max-width: 88%; padding: 12px 13px; border-radius: 8px; background: var(--surface); }
-.message.assistant .message-content.message-bubble { width: min(100%, 540px); max-width: none; border-left: 4px solid var(--accent); }
-.message.user .message-content.message-bubble { justify-self: end; max-width: min(70%, 360px); border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); background: var(--accent-soft); box-shadow: 0 1px 1px color-mix(in srgb, var(--accent) 14%, transparent); }
-.message-meta { margin-bottom: 7px; }
-.message-meta strong { font-size: 13px; }
+.message-content.message-bubble { box-sizing: border-box; width: fit-content; max-width: 88%; padding: 7px 9px; border-radius: 7px; background: var(--surface); }
+.message.assistant .message-content.message-bubble { width: min(100%, 540px); max-width: none; border-left: 3px solid var(--accent); }
+.message.user .message-content.message-bubble { justify-self: end; max-width: min(78%, 360px); border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); background: var(--accent-soft); box-shadow: 0 1px 1px color-mix(in srgb, var(--accent) 14%, transparent); }
+.message-meta { margin-bottom: 4px; }
+.message-meta strong { font-size: 10px; }
 .message.assistant .message-meta strong { color: var(--accent); }
 .message.user .message-meta strong { color: var(--accent); }
-.message p { font-size: 13px; line-height: 1.6; }
-.message.audit { grid-template-columns: minmax(0, 1fr); padding-left: clamp(18px, 8%, 48px); }
+.message p { font-size: 10px; line-height: 1.5; }
+.message.audit { grid-template-columns: minmax(0, 1fr); padding-left: clamp(12px, 5%, 32px); }
 .message.audit .message-avatar { display: none; }
-.message.audit .message-content.message-bubble { justify-self: start; width: min(100%, 540px); max-width: none; border: 1px solid color-mix(in srgb, var(--green) 48%, var(--line)); border-left: 4px solid var(--green); background: var(--green-soft); }
-.execution-plan { margin-top: 12px; padding: 0; gap: 0; overflow: hidden; border: 1px solid var(--amber-line); border-left: 4px solid var(--amber); border-radius: 8px; background: var(--surface); }
-.plan-head.plan-heading { display: flex; justify-content: space-between; gap: 12px; padding: 13px; border-bottom: 1px solid color-mix(in srgb, var(--amber-line) 65%, var(--line)); background: color-mix(in srgb, var(--amber-soft) 78%, var(--surface)); }
-.plan-head.plan-heading strong { font-size: 15px; }
-.plan-head.plan-heading span:not(.plan-badge) { display: block; margin-top: 3px; font-size: 12px; }
-.plan-badge.status-chip { min-height: 26px; padding: 0 8px; border: 0; border-radius: 5px; background: var(--amber-soft); color: var(--amber) !important; font-size: 11px; }
+.message.audit .message-content.message-bubble { justify-self: start; width: min(100%, 540px); max-width: none; border: 1px solid color-mix(in srgb, var(--green) 48%, var(--line)); border-left: 3px solid var(--green); background: var(--green-soft); }
+.execution-plan { margin-top: 7px; padding: 0; gap: 0; overflow: hidden; border: 1px solid var(--amber-line); border-left: 3px solid var(--amber); border-radius: 7px; background: var(--surface); }
+.plan-head.plan-heading { display: flex; justify-content: space-between; gap: 8px; padding: 8px 9px; border-bottom: 1px solid color-mix(in srgb, var(--amber-line) 65%, var(--line)); background: color-mix(in srgb, var(--amber-soft) 78%, var(--surface)); }
+.plan-head.plan-heading strong { font-size: 11px; }
+.plan-head.plan-heading span:not(.plan-badge) { display: block; margin-top: 2px; font-size: 9px; }
+.plan-badge.status-chip { min-height: 22px; padding: 0 6px; border: 0; border-radius: 4px; background: var(--amber-soft); color: var(--amber) !important; font-size: 9px; }
 .plan-badge.status-chip.executed { background: var(--green-soft); color: var(--green) !important; }
 .plan-badge.status-chip.partially_executed { background: var(--amber-soft); color: var(--amber) !important; }
 .plan-badge.status-chip.executing { background: var(--accent-soft); color: var(--accent) !important; }
@@ -606,29 +622,33 @@ onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement
 .execution-plan[data-status="execution_failed"] .plan-heading { border-bottom-color: color-mix(in srgb, var(--red) 28%, var(--line)); background: color-mix(in srgb, var(--red) 10%, var(--surface)); }
 .execution-plan[data-status="cancelled"] { border-color: color-mix(in srgb, var(--muted) 52%, var(--line)); border-left-color: var(--muted); }
 .execution-plan[data-status="cancelled"] .plan-heading { border-bottom-color: color-mix(in srgb, var(--muted) 26%, var(--line)); background: color-mix(in srgb, var(--surface-soft) 78%, var(--surface)); }
-.plan-step { padding: 13px; border-bottom: 1px solid var(--line); }
-.plan-step-head strong { font-size: 13px; }
-.plan-step p { margin: 8px 0 9px; font-size: 12px; line-height: 1.55; }
-.plan-risk { margin-bottom: 9px; padding: 8px 9px; border-radius: 5px; background: var(--amber-soft); font-size: 11px; }
-.plan-command span { font-size: 10px; font-weight: 700; }
-.plan-command code { padding: 9px 10px; border-color: var(--line); border-radius: 6px; background: var(--terminal); color: var(--terminal-text); font-size: 12px; line-height: 1.45; }
-.plan-command-editor { grid-template-columns: minmax(0, 1fr) 32px; gap: 8px; margin-top: 8px; padding: 8px; border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface)); }
-.plan-command-editor .plan-edit-input { min-height: 48px; padding: 8px 9px; border-color: color-mix(in srgb, var(--accent) 56%, var(--line)); border-radius: 5px; background: var(--surface); color: var(--text-strong); font-size: 11px; }
-.delete-plan-step { width: 32px; height: 32px; border-radius: 5px; background: var(--amber-soft); }
-.plan-actions { justify-content: space-between; padding: 11px 13px; border-top: 1px solid color-mix(in srgb, var(--amber-line) 65%, var(--line)); background: color-mix(in srgb, var(--amber-soft) 78%, var(--surface)); }
-.plan-actions::before { color: var(--amber); font-size: 11px; font-weight: 700; content: '确认后将按顺序发送命令'; }
-.progress-message { grid-template-columns: minmax(0, 1fr); padding-left: clamp(18px, 8%, 48px); }
+.plan-step { padding: 8px 9px; border-bottom: 1px solid var(--line); }
+.plan-step-head strong { font-size: 10px; }
+.plan-step p { margin: 5px 0 6px; font-size: 9px; line-height: 1.45; }
+.plan-risk { margin-bottom: 6px; padding: 6px 7px; border-radius: 4px; background: var(--amber-soft); font-size: 9px; }
+.plan-command span { font-size: 9px; font-weight: 700; }
+.plan-command code { padding: 6px 7px; border-color: var(--line); border-radius: 5px; background: var(--terminal); color: var(--terminal-text); font-size: 9px; line-height: 1.4; }
+.plan-command-editor { grid-template-columns: minmax(0, 1fr) 28px; gap: 6px; margin-top: 6px; padding: 6px; border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface)); }
+.plan-command-editor .plan-edit-input { min-height: 40px; padding: 6px 7px; border-color: color-mix(in srgb, var(--accent) 56%, var(--line)); border-radius: 4px; background: var(--surface); color: var(--text-strong); font-size: 9px; }
+.delete-plan-step { width: 28px; height: 28px; border-radius: 4px; background: var(--amber-soft); }
+.plan-actions { justify-content: space-between; padding: 8px 9px; border-top: 1px solid color-mix(in srgb, var(--amber-line) 65%, var(--line)); background: color-mix(in srgb, var(--amber-soft) 78%, var(--surface)); }
+.plan-actions::before { color: var(--amber); font-size: 9px; font-weight: 700; content: '确认后将按顺序发送命令'; }
+.progress-message { grid-template-columns: minmax(0, 1fr); padding-left: clamp(12px, 5%, 32px); }
 .progress-message .message-avatar { display: none; }
-.progress-message .message-content.message-bubble { width: min(100%, 540px); max-width: none; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-left: 4px solid var(--accent); background: var(--accent-soft); }
+.progress-message .message-content.message-bubble { width: min(100%, 540px); max-width: none; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-left: 3px solid var(--accent); background: var(--accent-soft); }
 .progress-content .message-meta { display: none; }
-.progress-item { min-height: 66px; padding: 12px 13px; border: 0; background: transparent; font-size: 12px; }
-.thinking-animation { position: relative; display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border: 1px solid color-mix(in srgb, var(--accent) 64%, var(--line)); border-radius: 50%; color: var(--accent); }
-.thinking-animation::before { position: absolute; inset: 5px; border: 2px solid transparent; border-top-color: var(--accent); border-right-color: var(--accent); border-radius: 50%; content: ''; animation: chat-thinking-orbit 1.35s linear infinite; }
-.thinking-bars { display: flex; align-items: center; gap: 3px; height: 17px; }
-.thinking-bars i { display: block; width: 3px; height: 7px; border-radius: 3px; background: var(--accent); animation: chat-thinking-bar 1s ease-in-out infinite; }
+.progress-item { min-height: 52px; padding: 8px 9px; border: 0; background: transparent; font-size: 10px; }
+.thinking-animation { position: relative; display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border: 1px solid color-mix(in srgb, var(--accent) 64%, var(--line)); border-radius: 50%; color: var(--accent); }
+.thinking-animation::before { position: absolute; inset: 4px; border: 1.5px solid transparent; border-top-color: var(--accent); border-right-color: var(--accent); border-radius: 50%; content: ''; animation: chat-thinking-orbit 1.35s linear infinite; }
+.thinking-bars { display: flex; align-items: center; gap: 2px; height: 14px; }
+.thinking-bars i { display: block; width: 2px; height: 6px; border-radius: 2px; background: var(--accent); animation: chat-thinking-bar 1s ease-in-out infinite; }
 .thinking-bars i:nth-child(2) { animation-delay: .12s; }.thinking-bars i:nth-child(3) { animation-delay: .24s; }.thinking-bars i:nth-child(4) { animation-delay: .36s; }
-.thinking-copy { display: inline-flex; align-items: center; justify-content: space-between; gap: 9px; min-width: 0; flex: 1; color: var(--text); }
-.thinking-copy strong { color: var(--accent); font-size: 14px; font-weight: 760; }.thinking-copy em { color: var(--muted); font-size: 11px; font-style: normal; font-weight: 700; white-space: nowrap; }
+.thinking-copy { display: inline-flex; align-items: center; justify-content: space-between; gap: 7px; min-width: 0; flex: 1; color: var(--text); }
+.thinking-copy strong { color: var(--accent); font-size: 11px; font-weight: 760; }.thinking-copy em { color: var(--muted); font-size: 9px; font-style: normal; font-weight: 700; white-space: nowrap; }
+/* Context details intentionally keep their own legible 8.5–10px scale. */
+.context-meter-details .context-meter-foot { font-size: 8.5px; }
+.context-meter-details .ssh-context-setting { font-size: 9px; }
+.context-meter-details .context-host-setting-head,.context-meter-details .context-host-option,.context-meter-details .context-host-empty,.context-meter-details .context-error { font-size: 9px; }
 @keyframes chat-thinking-orbit { to { transform: rotate(360deg); } }
 @keyframes chat-thinking-bar { 0%, 100% { height: 7px; opacity: .45; } 50% { height: 17px; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .thinking-animation::before,.thinking-bars i { animation-duration: .01ms; animation-iteration-count: 1; } }

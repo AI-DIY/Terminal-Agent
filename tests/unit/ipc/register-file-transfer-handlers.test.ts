@@ -313,6 +313,7 @@ describe('registerFileTransferHandlers', () => {
       'file-transfer:select-local-directory',
       'file-transfer:list-local',
       'file-transfer:upload',
+      'file-transfer:upload-all',
       'file-transfer:download',
     ])
   })

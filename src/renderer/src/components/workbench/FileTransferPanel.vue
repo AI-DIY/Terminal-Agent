@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowUp, ChevronLeft, ChevronRight, Download, File, Folder, FolderOpen, MoreHorizontal, RefreshCw, Upload, X } from '@lucide/vue'
+import { ArrowUp, ChevronDown, ChevronLeft, ChevronRight, Download, File, Folder, FolderOpen, Maximize2, Minimize2, MoreHorizontal, RefreshCw, Upload } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   FileTransferDirectoryEntry,
@@ -9,22 +9,31 @@ import type {
 
 const props = defineProps<{
   sessionId: string
+  sessionIds?: string[]
   hostname?: string
 }>()
 
 const emit = defineEmits<{
+  hide: []
+  /** Kept for callers compiled against the pre-v3.3.2 event name. */
   close: []
   busyChange: [busy: boolean]
 }>()
 
 type TransferLog = {
   id: string
+  sessionId: string
   direction: 'upload' | 'download'
   name: string
+  localPath?: string
   remotePath: string
   phase: FileTransferProgress['phase']
   transferredBytes: number
   totalBytes?: number
+  startedAt: number
+  finishedAt?: number
+  speedBytesPerSecond?: number
+  remainingSeconds?: number
   message?: string
 }
 
@@ -59,6 +68,11 @@ const localDropActive = ref(false)
 const remoteDropActive = ref(false)
 const error = ref('')
 const status = ref('正在准备文件传输目录。')
+const fullscreen = ref(false)
+const batchUploadBusy = ref(false)
+const batchUploadStatus = ref('')
+const clockNow = ref(Date.now())
+let elapsedTimer: ReturnType<typeof setInterval> | undefined
 let unsubscribeProgress: (() => void) | undefined
 let remoteDirectoryRequestId = 0
 let localDirectoryRequestId = 0
@@ -362,14 +376,26 @@ function createTransferId(): string {
   })
 }
 
-function addTransfer(direction: 'upload' | 'download', targetPath: string, name: string, transferId: string): void {
+function addTransfer(
+  direction: 'upload' | 'download',
+  targetPath: string,
+  name: string,
+  transferId: string,
+  localSource?: string,
+  totalBytes?: number,
+  transferSessionId = props.sessionId,
+): void {
   transfers.value.unshift({
     id: transferId,
+    sessionId: transferSessionId,
     direction,
     name: name || (direction === 'upload' ? '未命名文件' : remoteBaseName(targetPath)),
+    ...(localSource ? { localPath: localSource } : {}),
     remotePath: targetPath,
     phase: 'selecting',
     transferredBytes: 0,
+    ...(totalBytes === undefined ? {} : { totalBytes }),
+    startedAt: Date.now(),
   })
   if (transfers.value.length > 24) transfers.value.length = 24
 }
@@ -513,15 +539,31 @@ function onRemoteEntryDrop(entry: FileTransferDirectoryEntry, event: DragEvent):
 }
 
 function setTransferProgress(event: FileTransferProgress): void {
-  if (event.sessionId !== props.sessionId) return
-  const item = transfers.value.find(transfer => transfer.id === event.transferId)
-  if (!item) return
-  item.phase = event.phase
-  item.transferredBytes = event.transferredBytes
-  item.totalBytes = event.totalBytes
-  item.name = event.fileName || item.name
-  item.message = event.message
+  // Progress is broadcast over one renderer channel. A regular transfer row
+  // exists only in the card that started it; a batch action pre-creates one
+  // row per target session in its initiating card. Matching by transfer id
+  // therefore lets that card render an aggregate fan-out without every
+  // mounted card duplicating sibling rows.
+  const target = transfers.value.find(transfer => transfer.id === event.transferId)
+  if (!target) return
+  target.phase = event.phase
+  target.transferredBytes = event.transferredBytes
+  if (event.totalBytes !== undefined) target.totalBytes = event.totalBytes
+  target.name = event.fileName || target.name
+  // A batch upload starts with `./` as its safe home-directory target. Once
+  // the picker has returned the basename, make the concrete remote path
+  // visible in the progress table without exposing the local absolute path.
+  if (target.direction === 'upload' && target.remotePath === './' && event.fileName) {
+    target.remotePath = `./${event.fileName}`
+  }
+  target.message = event.message
+  const elapsedSeconds = Math.max(0.001, (Date.now() - target.startedAt) / 1_000)
+  target.speedBytesPerSecond = event.transferredBytes > 0 ? event.transferredBytes / elapsedSeconds : undefined
+  target.remainingSeconds = event.totalBytes && event.totalBytes > event.transferredBytes && target.speedBytesPerSecond
+    ? (event.totalBytes - event.transferredBytes) / target.speedBytesPerSecond
+    : undefined
   if (event.phase === 'completed' || event.phase === 'canceled' || event.phase === 'failed') {
+    target.finishedAt = Date.now()
     markTransferSettled(event.transferId)
   }
   if (event.message && event.phase !== 'failed') status.value = event.message
@@ -544,7 +586,7 @@ async function uploadLocalEntry(entry = selectedLocalEntry.value, destinationDir
   const localSource = joinLocalPath(localCurrentPath.value, entry.name)
   const remoteDestination = pathForUpload(destinationDirectory)
   const transferId = createTransferId()
-  addTransfer('upload', joinRemotePath(destinationDirectory, entry.name), entry.name, transferId)
+  addTransfer('upload', joinRemotePath(destinationDirectory, entry.name), entry.name, transferId, localSource, entry.size)
   markTransferActive(transferId)
   error.value = ''
   status.value = '正在准备上传…'
@@ -573,7 +615,7 @@ async function downloadRemoteEntry(entry = selectedRemoteEntry.value, destinatio
   }
   const remoteSource = joinRemotePath(remoteCurrentPath.value, entry.name)
   const transferId = createTransferId()
-  addTransfer('download', remoteSource, entry.name, transferId)
+  addTransfer('download', remoteSource, entry.name, transferId, joinLocalPath(destinationDirectory, entry.name))
   markTransferActive(transferId)
   error.value = ''
   status.value = '正在准备下载…'
@@ -599,12 +641,129 @@ function applyTransferResult(result: FileTransferResult, transferId: string, dir
   if (item) {
     item.phase = result.status === 'canceled' ? 'canceled' : 'completed'
     item.transferredBytes = result.transferredBytes
-    item.totalBytes = result.transferredBytes
+    // Keep a size learned from the directory entry/progress event; the
+    // completion result only carries transferred bytes for compatibility.
+    if (item.totalBytes === undefined) item.totalBytes = result.transferredBytes
     item.name = result.fileName || item.name
+    if (direction === 'upload' && item.remotePath === './' && result.fileName) item.remotePath = `./${result.fileName}`
     item.message = result.status === 'canceled' ? '已取消。' : `${direction === 'upload' ? '上传' : '下载'}完成。`
+    item.finishedAt = Date.now()
+    item.speedBytesPerSecond = item.transferredBytes > 0
+      ? item.transferredBytes / Math.max(0.001, (Date.now() - item.startedAt) / 1_000)
+      : undefined
+    item.remainingSeconds = 0
   }
   markTransferSettled(transferId)
   status.value = result.status === 'canceled' ? '已取消。' : `${direction === 'upload' ? '上传' : '下载'}完成。`
+}
+
+async function uploadFileToAllSessions(): Promise<void> {
+  if (batchUploadBusy.value) return
+  const sessionIds = [...new Set((props.sessionIds?.length ? props.sessionIds : [props.sessionId]).filter(Boolean))]
+  if (!sessionIds.length) {
+    error.value = '当前没有可用的 SSH 会话。'
+    return
+  }
+  const uploadAll = window.terminalAgent.fileTransfer?.uploadAll
+  if (typeof uploadAll !== 'function') {
+    error.value = '当前版本不支持上传文件到所有会话。'
+    return
+  }
+  batchUploadBusy.value = true
+  batchUploadStatus.value = ''
+  error.value = ''
+  status.value = `正在选择文件并上传到 ${sessionIds.length} 个会话…`
+  const transferIds = sessionIds.map(sessionId => ({ sessionId, transferId: createTransferId() }))
+  for (const item of transferIds) {
+    // The panel that starts the batch owns the aggregate rows. Other mounted
+    // panels do not have these ids and therefore ignore the shared progress
+    // notifications, avoiding duplicate rows while still showing every leg
+    // in one place.
+    addTransfer('upload', './', '批量上传文件', item.transferId, undefined, undefined, item.sessionId)
+    markTransferActive(item.transferId)
+  }
+  try {
+    const result = await uploadAll({ sessionIds, remotePath: './', transferIds })
+    const completed = result.results.filter(item => item.status === 'completed').length
+    const failed = result.results.length - completed
+    batchUploadStatus.value = failed ? `${completed} 个会话完成，${failed} 个会话失败` : `已上传到 ${completed} 个会话`
+    status.value = batchUploadStatus.value
+    for (const item of result.results) {
+      const transfer = transfers.value.find(existing => existing.id === item.transferId)
+      if (transfer) {
+        transfer.phase = item.status
+        transfer.transferredBytes = item.transferredBytes
+        if (item.transferredBytes > 0) transfer.totalBytes = item.transferredBytes
+        transfer.name = item.fileName || transfer.name
+        if (transfer.remotePath === './' && item.fileName) transfer.remotePath = `./${item.fileName}`
+        transfer.message = item.message
+        transfer.finishedAt = Date.now()
+      } else {
+        addTransfer('upload', './', item.fileName || '批量上传文件', item.transferId, undefined, undefined, item.sessionId)
+        const created = transfers.value.find(existing => existing.id === item.transferId)
+        if (created) {
+          created.phase = item.status
+          created.transferredBytes = item.transferredBytes
+          created.totalBytes = item.transferredBytes
+          created.message = item.message
+          created.finishedAt = Date.now()
+        }
+      }
+      markTransferSettled(item.transferId)
+    }
+    await refreshRemoteDirectory(remoteCurrentPath.value)
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : '批量文件上传失败。'
+    for (const item of transferIds) {
+      const transfer = transfers.value.find(existing => existing.id === item.transferId)
+      if (transfer) {
+        transfer.phase = 'failed'
+        transfer.message = message
+        transfer.finishedAt = Date.now()
+      }
+      markTransferSettled(item.transferId)
+    }
+    error.value = message
+    status.value = '批量文件上传失败。'
+  } finally {
+    // A picker/validation failure can reject before per-session result rows
+    // are returned. Do not leave the parent terminal card stuck as busy.
+    for (const item of transferIds) markTransferSettled(item.transferId)
+    batchUploadBusy.value = false
+  }
+}
+
+function toggleFullscreen(): void {
+  fullscreen.value = !fullscreen.value
+}
+
+function hidePanel(): void {
+  if (fullscreen.value) fullscreen.value = false
+  emit('hide')
+}
+
+function formatDuration(seconds: number | undefined): string {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return '—'
+  const rounded = Math.max(0, Math.round(seconds))
+  if (rounded < 60) return `${rounded}s`
+  const minutes = Math.floor(rounded / 60)
+  const rest = rounded % 60
+  return `${minutes}m ${String(rest).padStart(2, '0')}s`
+}
+
+function formatSpeed(value: number | undefined): string {
+  return value && value > 0 ? `${formatBytes(value)}/s` : '—'
+}
+
+function elapsedSeconds(item: TransferLog): number {
+  return Math.max(0, ((item.finishedAt ?? clockNow.value) - item.startedAt) / 1_000)
+}
+
+function onFullscreenKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && fullscreen.value) {
+    event.preventDefault()
+    fullscreen.value = false
+  }
 }
 
 function failLocalTransfer(transferId: string, cause: unknown): void {
@@ -614,6 +773,7 @@ function failLocalTransfer(transferId: string, cause: unknown): void {
   if (item) {
     item.phase = 'failed'
     item.message = message
+    item.finishedAt = Date.now()
   }
   error.value = message
   status.value = '传输失败。'
@@ -699,6 +859,7 @@ onMounted(() => {
   void refreshRemoteDirectory('/')
   void refreshLocalDirectory()
   window.addEventListener('click', closeContextMenu)
+  elapsedTimer = setInterval(() => { clockNow.value = Date.now() }, 1_000)
 })
 
 onBeforeUnmount(() => {
@@ -706,14 +867,20 @@ onBeforeUnmount(() => {
   unsubscribeProgress?.()
   unsubscribeProgress = undefined
   window.removeEventListener('click', closeContextMenu)
+  if (elapsedTimer) clearInterval(elapsedTimer)
+  elapsedTimer = undefined
 })
 </script>
 
 <template>
-  <section class="file-transfer-panel" aria-label="文件传输" @click="onPanelClick">
+  <section class="file-transfer-panel" :class="{ fullscreen }" aria-label="文件传输" tabindex="-1" @click="onPanelClick" @keydown="onFullscreenKeydown">
     <header class="file-transfer-header">
-      <div class="file-transfer-title"><strong>文件传输</strong><span v-if="busy" class="file-transfer-busy">文件传输中</span><span v-if="hostname">{{ hostname }}</span></div>
-      <button type="button" class="close-button" aria-label="关闭文件传输" title="关闭" @click.stop="emit('close')"><X :size="14" aria-hidden="true" /></button>
+      <div class="file-transfer-title"><strong>文件传输</strong><span v-if="busy" class="file-transfer-busy">文件传输中</span><span v-if="hostname">{{ hostname }}</span><span v-if="batchUploadStatus" class="batch-upload-status">{{ batchUploadStatus }}</span></div>
+      <div class="file-transfer-actions">
+        <button type="button" class="upload-all-button" :disabled="batchUploadBusy" aria-label="上传文件到所有会话" title="选择一个本地文件，上传到所有已连接会话的用户目录" @click.stop="uploadFileToAllSessions"><Upload :size="13" aria-hidden="true" /><span>{{ batchUploadBusy ? '上传中…' : '上传到所有会话' }}</span></button>
+        <button type="button" class="close-button" :aria-label="fullscreen ? '退出文件传输全屏' : '文件传输全屏'" :title="fullscreen ? '退出全屏' : '全屏'" @click.stop="toggleFullscreen"><Minimize2 v-if="fullscreen" :size="14" aria-hidden="true" /><Maximize2 v-else :size="14" aria-hidden="true" /></button>
+        <button type="button" class="close-button" aria-label="隐藏文件传输" title="隐藏文件传输" @click.stop="hidePanel"><ChevronDown :size="15" aria-hidden="true" /></button>
+      </div>
     </header>
 
     <section class="file-transfer-browser" aria-label="本地与远程文件目录">
@@ -834,12 +1001,17 @@ onBeforeUnmount(() => {
     <section class="file-transfer-log" aria-label="上传下载进度">
       <header class="section-heading"><span>上传下载进度</span><span>{{ transfers.length ? `${transfers.length} 条记录` : '暂无记录' }}</span></header>
       <div v-if="transfers.length" class="transfer-table" role="table" aria-label="上传下载进度表">
-        <div class="transfer-row transfer-head" role="row"><span>方向</span><span>文件</span><span>进度</span><span>状态</span></div>
+        <div class="transfer-row transfer-head" role="row"><span>状态</span><span>进度</span><span>大小</span><span>本地路径</span><span>方向</span><span>远程路径</span><span>速度</span><span>预计剩余时间</span><span>经过时间</span></div>
         <div v-for="item in transfers" :key="item.id" class="transfer-row" role="row">
-          <span :class="['direction', item.direction]">{{ item.direction === 'upload' ? '上传' : '下载' }}</span>
-          <span class="transfer-name" :title="item.remotePath">{{ item.name }}</span>
+          <span :class="['transfer-state', item.phase]" :title="item.message || formatTransferProgress(item)">{{ item.message || formatTransferProgress(item) }}</span>
           <span>{{ formatTransferProgress(item) }}<small v-if="item.phase === 'transferring' && item.totalBytes"> · {{ formatBytes(item.transferredBytes) }}/{{ formatBytes(item.totalBytes) }}</small></span>
-          <span :class="['transfer-state', item.phase]">{{ item.message || formatTransferProgress(item) }}</span>
+          <span>{{ item.totalBytes ? formatBytes(item.totalBytes) : '—' }}</span>
+          <span class="transfer-name" :title="item.localPath || '由本机文件选择器选择'">{{ item.localPath || '本机选择器' }}</span>
+          <span :class="['direction', item.direction]">{{ item.direction === 'upload' ? '上传' : '下载' }}</span>
+          <span class="transfer-name" :title="item.remotePath">{{ item.remotePath }}</span>
+          <span>{{ formatSpeed(item.speedBytesPerSecond) }}</span>
+          <span>{{ formatDuration(item.remainingSeconds) }}</span>
+          <span>{{ formatDuration(elapsedSeconds(item)) }}</span>
         </div>
       </div>
       <p v-else class="log-empty">上传或下载记录会显示在这里。</p>
@@ -852,14 +1024,16 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .file-transfer-panel { position: relative; display: grid; grid-template-rows: auto minmax(126px, 1fr) minmax(50px, .72fr) auto; gap: 6px; box-sizing: border-box; width: 100%; min-width: 0; min-height: 190px; max-height: 368px; padding: 8px 10px 9px; border-top: 1px solid var(--line); background: var(--panel); color: var(--text); }
+.file-transfer-panel.fullscreen { position: fixed; z-index: 40; inset: 18px; width: auto; height: auto; max-height: none; min-height: 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 24px 72px rgb(0 0 0 / 34%); }
 .file-transfer-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }.file-transfer-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden; }.file-transfer-title strong { flex: 0 0 auto; color: var(--text-strong); font-size: 11px; font-weight: 720; }.file-transfer-title span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.file-transfer-title .file-transfer-busy { flex: 0 0 auto; padding: 1px 4px; border: 1px solid var(--amber-line); border-radius: 3px; background: var(--amber-soft); color: var(--amber); font-size: 8px; font-weight: 700; }
+.file-transfer-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }.upload-all-button { display: inline-flex; align-items: center; gap: 4px; min-height: 25px; padding: 0 7px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 9px; font-weight: 680; white-space: nowrap; }.upload-all-button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: #fff; }.upload-all-button:disabled { cursor: not-allowed; opacity: .55; }.batch-upload-status { color: var(--accent) !important; font-size: 8px !important; }
 .close-button,.icon-button { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }.close-button:hover,.icon-button:hover:not(:disabled) { border-color: var(--focus); color: var(--text-strong); }.close-button:disabled,.icon-button:disabled { cursor: not-allowed; opacity: .52; }
 .file-transfer-browser { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; min-width: 0; min-height: 0; overflow: hidden; }.file-pane,.file-transfer-log { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--line-soft); background: var(--surface); }.file-pane-header { display: grid; grid-template-rows: auto auto auto; min-width: 0; border-bottom: 1px solid var(--line-soft); }.file-transfer-log { min-height: 50px; }.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; min-height: 23px; padding: 0 7px; border-bottom: 1px solid var(--line-soft); color: var(--text-strong); font-size: 9px; font-weight: 650; }.file-pane-header .section-heading { border-bottom: 0; }.section-heading span:last-child { color: var(--muted); font-size: 8px; font-weight: 500; }
 .file-pane-pathbar { display: grid; grid-template-columns: auto minmax(0, 1fr) 25px 25px 25px; align-items: center; gap: 4px; min-width: 0; padding: 0 5px 4px; }.remote-file-pane .file-pane-pathbar { grid-template-columns: auto minmax(0, 1fr) 25px 25px; }.file-pane-pathbar label { color: var(--muted); font-size: 8px; }.file-pane-pathbar input { box-sizing: border-box; width: 100%; min-width: 0; height: 25px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--text-strong); font: inherit; font-size: 9px; }.file-pane-pathbar input:focus { border-color: var(--focus); outline: 2px solid color-mix(in srgb, var(--focus) 22%, transparent); }
 .file-pane-breadcrumbs { display: flex; align-items: center; min-width: 0; min-height: 17px; padding: 0 5px 3px; overflow: hidden; color: var(--muted); }.file-pane-breadcrumbs button { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 120px; padding: 1px 3px; border: 0; background: transparent; color: inherit; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }.file-pane-breadcrumbs button:hover,.file-pane-breadcrumbs button.current { color: var(--text-strong); }.file-pane-breadcrumbs button.current { font-weight: 650; }
 .directory-list { position: relative; min-width: 0; min-height: 0; overflow: auto; padding: 2px; scrollbar-width: thin; scrollbar-color: transparent transparent; }.directory-list:hover,.directory-list:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent; }.directory-entry { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto 17px; align-items: center; gap: 4px; width: 100%; min-height: 24px; padding: 2px 5px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--text); font-size: 9px; text-align: left; }.directory-entry:hover,.directory-entry.selected { border-color: var(--amber-line); background: var(--amber-soft); }.directory-entry .entry-icon { color: var(--muted); }.directory-entry .directory-icon { color: var(--amber); }.entry-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.directory-entry small { color: var(--muted); font-size: 8px; white-space: nowrap; }.entry-menu-hint { color: var(--faint); }.parent-entry { color: var(--muted); }.directory-empty { display: grid; place-items: center; min-height: 48px; padding: 8px; color: var(--muted); font-size: 9px; text-align: center; }.local-file-pane.drop-active,.remote-file-pane.drop-active { border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); }.directory-drop-overlay { position: absolute; inset: 4px; z-index: 2; display: grid; place-items: center; border: 1px dashed var(--focus); border-radius: 4px; background: color-mix(in srgb, var(--focus) 13%, var(--surface)); color: var(--text-strong); font-size: 9px; pointer-events: none; }
 .directory-context-menu { position: absolute; z-index: 5; display: grid; min-width: 164px; padding: 3px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); box-shadow: 0 10px 24px rgb(24 31 40 / 22%); }.directory-context-menu button { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 0 7px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 9px; text-align: left; }.directory-context-menu button:hover:not(:disabled) { background: var(--hover); }.directory-context-menu button:disabled { cursor: not-allowed; opacity: .52; }
-.transfer-table { min-width: 0; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: transparent transparent; }.transfer-table:hover { scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent; }.transfer-row { display: grid; grid-template-columns: 38px minmax(60px, 1fr) 64px minmax(55px, .9fr); align-items: center; gap: 6px; min-width: 300px; min-height: 22px; padding: 0 7px; border-bottom: 1px solid var(--line-soft); color: var(--muted); font-size: 8px; }.transfer-row:last-child { border-bottom: 0; }.transfer-head { position: sticky; top: 0; z-index: 1; min-height: 21px; background: var(--surface-soft); color: var(--faint); font-size: 8px; }.transfer-name { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }.direction.upload { color: var(--accent); }.direction.download { color: var(--focus); }.transfer-state.completed { color: var(--accent); }.transfer-state.failed { color: var(--red); }.transfer-state.canceled { color: var(--muted); }.transfer-row small { color: var(--faint); }.log-empty { display: grid; place-items: center; margin: 0; padding: 8px; color: var(--muted); font-size: 9px; }
+.transfer-table { min-width: 0; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: transparent transparent; }.transfer-table:hover,.transfer-table:focus-within { scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent; }.transfer-table::-webkit-scrollbar { width: 8px; height: 8px; }.transfer-table::-webkit-scrollbar-track { background: transparent; }.transfer-table::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }.transfer-table:hover::-webkit-scrollbar-thumb,.transfer-table:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 55%, transparent); }.transfer-row { display: grid; grid-template-columns: minmax(70px, .8fr) minmax(76px, .8fr) 68px minmax(160px, 1.4fr) 44px minmax(160px, 1.4fr) 78px 92px 76px; align-items: center; gap: 7px; min-width: 900px; min-height: 25px; padding: 0 7px; border-bottom: 1px solid var(--line-soft); color: var(--muted); font-size: 8px; }.transfer-row:last-child { border-bottom: 0; }.transfer-head { position: sticky; top: 0; z-index: 1; min-height: 23px; background: var(--surface-soft); color: var(--faint); font-size: 8px; }.transfer-name { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }.direction.upload { color: var(--accent); }.direction.download { color: var(--focus); }.transfer-state.completed { color: var(--accent); }.transfer-state.failed { color: var(--red); }.transfer-state.canceled { color: var(--muted); }.transfer-row small { color: var(--faint); }.log-empty { display: grid; place-items: center; margin: 0; padding: 8px; color: var(--muted); }
 .file-transfer-status,.file-transfer-error { min-width: 0; margin: 0; overflow: hidden; font-size: 9px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }.file-transfer-status { color: var(--muted); }.file-transfer-error { color: var(--red); }.spinning { animation: file-transfer-spin .9s linear infinite; }@keyframes file-transfer-spin { to { transform: rotate(360deg); } }
-@media (max-width: 760px) { .file-transfer-panel { max-height: 460px; }.file-transfer-browser { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 1fr) minmax(120px, 1fr); overflow: auto; }.transfer-row { grid-template-columns: 38px minmax(70px, 1fr) 54px minmax(45px, .8fr); } }
+@media (max-width: 760px) { .file-transfer-panel { max-height: 460px; }.file-transfer-panel.fullscreen { inset: 8px; }.file-transfer-browser { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 1fr) minmax(120px, 1fr); overflow: auto; }.transfer-row { grid-template-columns: minmax(70px, .8fr) minmax(76px, .8fr) 68px minmax(140px, 1.2fr) 44px minmax(140px, 1.2fr) 78px 76px 76px; } }
 </style>

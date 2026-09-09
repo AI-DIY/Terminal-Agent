@@ -168,6 +168,23 @@ describe('global chat store', () => {
     expect(panel).toContain('store.state.compacting[chatId.value]')
   })
 
+  it('keeps transcript cards compact while preserving readable context details', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+    const compactOverride = panel.slice(panel.indexOf('/* Prototype-aligned AI transcript surfaces.'))
+
+    expect(compactOverride).toContain('.messages { padding: 9px 10px 12px;')
+    expect(compactOverride).toContain('.message + .message { margin-top: 5px; }')
+    expect(compactOverride).toContain('.message-meta strong { font-size: 10px; }')
+    expect(compactOverride).toContain('.message p { font-size: 10px; line-height: 1.5; }')
+    expect(compactOverride).toContain('.plan-head.plan-heading strong { font-size: 11px; }')
+    expect(compactOverride).toContain('.plan-command code { padding: 6px 7px;')
+    expect(compactOverride).toContain('.progress-item { min-height: 52px; padding: 8px 9px;')
+    expect(compactOverride).toContain('.thinking-copy strong { color: var(--accent); font-size: 11px;')
+    expect(compactOverride).toContain('.context-meter-details .context-meter-foot { font-size: 8.5px; }')
+    expect(compactOverride).toContain('.context-meter-details .ssh-context-setting { font-size: 9px; }')
+    expect(compactOverride).toContain('.context-meter-details .context-host-setting-head,.context-meter-details .context-host-option,.context-meter-details .context-host-empty,.context-meter-details .context-error { font-size: 9px; }')
+  })
+
   it('blocks sends and coalesces duplicate compaction requests while preserving the draft', async () => {
     const compactResponse = deferred<ChatWorkspaceSnapshot>()
     const transport = {

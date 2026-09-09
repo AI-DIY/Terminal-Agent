@@ -48,6 +48,8 @@ import type {
 import {
   fileTransferChannels,
   fileTransferDownloadRequestSchema,
+  fileTransferUploadAllRequestSchema,
+  fileTransferUploadAllResultSchema,
   fileTransferLocalDirectorySelectionSchema,
   fileTransferLocalListRequestSchema,
   fileTransferLocalListResultSchema,
@@ -57,6 +59,8 @@ import {
   fileTransferResultSchema,
   fileTransferUploadRequestSchema,
   type FileTransferDownloadRequest,
+  type FileTransferUploadAllRequest,
+  type FileTransferUploadAllResult,
   type FileTransferLocalDirectorySelection,
   type FileTransferLocalListRequest,
   type FileTransferLocalListResult,
@@ -157,6 +161,7 @@ export type TerminalAgentApi = {
     listLocal(request: FileTransferLocalListRequest): Promise<FileTransferLocalListResult>
     selectLocalDirectory(): Promise<FileTransferLocalDirectorySelection>
     upload(request: FileTransferUploadRequest): Promise<FileTransferResult>
+    uploadAll(request: FileTransferUploadAllRequest): Promise<FileTransferUploadAllResult>
     download(request: FileTransferDownloadRequest): Promise<FileTransferResult>
     onProgress(listener: (event: FileTransferProgress) => void): () => void
   }
@@ -335,6 +340,9 @@ export function createTerminalAgentApi(ipcRenderer: {
         // Parse before IPC so malformed requests never reach the main process.
         // The native file picker still runs exclusively in the main process.
         await ipcRenderer.invoke(fileTransferChannels.upload, fileTransferUploadRequestSchema.parse(request)),
+      ),
+      uploadAll: async (request: FileTransferUploadAllRequest) => fileTransferUploadAllResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.uploadAll, fileTransferUploadAllRequestSchema.parse(request)),
       ),
       download: async (request: FileTransferDownloadRequest) => fileTransferResultSchema.parse(
         await ipcRenderer.invoke(fileTransferChannels.download, fileTransferDownloadRequestSchema.parse(request)),

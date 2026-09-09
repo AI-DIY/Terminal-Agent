@@ -497,11 +497,11 @@ test('keeps file transfer with its SSH pane and retains read-only history withou
     const fileTransferButton = terminalFrame.getByRole('button', { name: '显示 127.0.0.1 的文件传输', exact: true })
     await expect(fileTransferButton).toBeVisible()
     await expect(page.getByLabel('文件传输', { exact: true })).toHaveCount(0)
-    const broadcastInput = page.getByRole('textbox', { name: '发送命令到所有窗口', exact: true })
-    const broadcastSend = page.getByRole('button', { name: '发送所有窗口执行', exact: true })
+    const broadcastInput = page.getByRole('textbox', { name: '发送命令到所有会话', exact: true })
+    const broadcastSend = page.getByRole('button', { name: '发送所有会话执行', exact: true })
     await expect(broadcastInput).toBeDisabled()
     await expect(broadcastSend).toBeDisabled()
-    await page.getByRole('switch', { name: '启用发送命令到所有窗口', exact: true }).check()
+    await page.getByRole('switch', { name: '启用发送命令到所有会话', exact: true }).check()
     await expect(broadcastInput).toBeEnabled()
 
     await fileTransferButton.click()
@@ -514,7 +514,7 @@ test('keeps file transfer with its SSH pane and retains read-only history withou
     await expect(transferPanel.getByLabel('远程文件目录', { exact: true })).toBeVisible()
     await expect(transferPanel.getByLabel('选择本地目录', { exact: true })).toBeVisible()
     await expect(transferPanel.locator('input[id^="file-transfer-local-path-"]')).not.toHaveValue('')
-    await transferPanel.getByRole('button', { name: '关闭文件传输', exact: true }).click()
+    await transferPanel.getByRole('button', { name: '隐藏文件传输', exact: true }).click()
     await expect(transferPanel).toBeHidden()
     // Closing this SSH pane's transfer section changes visibility only. This
     // is what keeps an active transfer mounted when the user collapses it.
@@ -574,13 +574,13 @@ test('completes the final expanded broadcast command for every connected SSH ses
     const panes = page.locator('[data-testid^="terminal-pane-"]:visible')
     await expect(panes).toHaveCount(2)
 
-    await page.getByRole('switch', { name: '启用发送命令到所有窗口', exact: true }).check()
+    await page.getByRole('switch', { name: '启用发送命令到所有会话', exact: true }).check()
     await page.getByRole('button', { name: '放大编辑广播命令', exact: true }).click()
-    const editor = page.getByRole('dialog', { name: '发送命令到所有窗口', exact: true })
+    const editor = page.getByRole('dialog', { name: '发送命令到所有会话', exact: true })
     await expect(editor).toBeVisible()
-    await editor.getByRole('textbox', { name: '放大编辑发送命令到所有窗口', exact: true })
+    await editor.getByRole('textbox', { name: '放大编辑发送命令到所有会话', exact: true })
       .fill('echo broadcast-first\necho broadcast-final')
-    await editor.getByRole('button', { name: '发送所有窗口执行', exact: true }).click()
+    await editor.getByRole('button', { name: '发送所有会话执行', exact: true }).click()
     await expect(editor).toHaveCount(0)
 
     for (const pane of [panes.nth(0), panes.nth(1)]) {
@@ -1287,7 +1287,6 @@ test('keeps SSH launcher controls fixed while compact workspace guidance scrolls
     await expect(launcher).toBeVisible()
     await expect(tabs).toBeVisible()
     await expect(scrollRegion).toBeVisible()
-
     await expect.poll(() => scrollRegion.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true)
     const tabsBeforeScroll = await tabs.boundingBox()
     if (!tabsBeforeScroll) throw new Error('Expected visible SSH mode tabs')

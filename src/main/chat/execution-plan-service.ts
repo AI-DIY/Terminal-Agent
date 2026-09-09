@@ -102,42 +102,98 @@ export class ExecutionPlanService {
           ...(continuationSessionIds === undefined ? {} : { sshContextSessionIds: continuationSessionIds }),
           ...(request.skillIds === undefined ? {} : { skillIds: [...request.skillIds] }),
         })
-        let sent = 0
-        let completionUnconfirmed = false
+        const blockedSessions = new Set<string>()
+        const sessionTails = new Map<string, Promise<void>>()
+        const dispatches: Promise<void>[] = []
+        const completionAwareByStep = new Map<string, boolean>()
+
+        // Arm every expected output/completion before any transport write can
+        // synchronously publish data.  This matters when several independent
+        // sessions are dispatched in the same turn: the first shell must not
+        // race ahead of registration for a later sibling.
         for (const step of current.steps) {
-          if (!step.sessionId) { step.sendState = 'failed'; step.failure = '目标 Shell 已断开或不可用'; break }
-          const command = `${step.finalCommand ?? step.originalCommand}\n`
+          if (!step.sessionId) continue
           const completionAware = typeof this.sessions.writeAndWaitForCompletion === 'function'
             && (typeof this.sessions.supportsCommandCompletion !== 'function' || this.sessions.supportsCommandCompletion(step.sessionId))
+          completionAwareByStep.set(step.id, completionAware)
           if (completionAware) resultOutput?.expect(step.sessionId, { waitForCompletion: true })
           else resultOutput?.expect(step.sessionId)
+        }
+
+        // Commands targeting different sessions can be in flight together,
+        // but a single interactive shell must never receive its next command
+        // before the previous write/completion has settled.  Build one promise
+        // chain per session while retaining the reviewed plan's step order.
+        const dispatchStep = async (step: typeof current.steps[number]): Promise<void> => {
+          const sessionId = step.sessionId
+          if (!sessionId) {
+            step.sendState = 'failed'
+            step.failure = '目标 Shell 已断开或不可用'
+            return
+          }
+          if (blockedSessions.has(sessionId)) {
+            step.sendState = 'not_sent'
+            resultOutput?.forget(sessionId)
+            return
+          }
+
           try {
+            const command = `${step.finalCommand ?? step.originalCommand}\n`
+            const completionAware = completionAwareByStep.get(step.id) ?? false
+
             if (completionAware) {
-              // Keep the plan loop serialized: a later command must not be
-              // sent until this command's completion probe has been observed.
-              const completion = await this.sessions.writeAndWaitForCompletion!(step.sessionId, command)
+              // This chain is serialized only for this session.  Other
+              // sessions have independent chains and continue concurrently.
+              const completion = await this.sessions.writeAndWaitForCompletion!(sessionId, command)
               if (!completion.completed) {
-                resultOutput?.forget(step.sessionId)
+                resultOutput?.forget(sessionId)
                 step.sendState = 'failed'
                 step.failure = completion.timedOut ? '命令执行等待超时' : '命令未能确认执行完成'
-                completionUnconfirmed = true
-                break
+                blockedSessions.add(sessionId)
+                return
               }
-              resultOutput?.settle?.(step.sessionId)
+              resultOutput?.settle?.(sessionId)
             } else {
-              await this.sessions.write(step.sessionId, command)
+              await this.sessions.write(sessionId, command)
             }
             step.sendState = 'sent'
-            sent += 1
           } catch {
-            resultOutput?.forget(step.sessionId)
+            resultOutput?.forget(sessionId)
             step.sendState = 'failed'
             step.failure = '命令未能写入目标 Shell'
-            break
+            blockedSessions.add(sessionId)
           }
         }
+
+        for (const step of current.steps) {
+          if (!step.sessionId) {
+            // There is no session key with which to order an unresolved step;
+            // record the failure immediately while allowing other sessions to
+            // proceed.
+            await dispatchStep(step)
+            continue
+          }
+          const previous = sessionTails.get(step.sessionId) ?? Promise.resolve()
+          const dispatch = previous.then(() => dispatchStep(step))
+          // Keep every chain awaitable even if an adapter violates its
+          // Promise contract and throws outside the guarded write path.
+          const settled = dispatch.catch(() => {
+            if (step.sendState === 'pending') {
+              step.sendState = 'failed'
+              step.failure = '命令未能写入目标 Shell'
+              blockedSessions.add(step.sessionId!)
+            }
+          })
+          sessionTails.set(step.sessionId, settled)
+          dispatches.push(settled)
+        }
+        // Do not persist a terminal state or release the result watcher until
+        // every per-session chain has completed.
+        await Promise.all(dispatches)
+
         const failed = current.steps.some(step => step.sendState === 'failed')
-        current.steps = current.steps.map((step, index) => index > sent && step.sendState === 'pending' ? { ...step, sendState: 'not_sent' } : step)
+        const sent = current.steps.filter(step => step.sendState === 'sent').length
+        current.steps = current.steps.map(step => step.sendState === 'pending' ? { ...step, sendState: 'not_sent' } : step)
         current.status = failed ? (sent > 0 ? 'partially_executed' : 'execution_failed') : 'executed'
         try {
           // Keep output observations buffered until the durable result state
@@ -145,7 +201,11 @@ export class ExecutionPlanService {
           // execution record that failed to persist, while still retaining
           // synchronous Shell output captured during the writes above.
           const saved = await this.save(request, current, 'result')
-          if (sent === 0 || completionUnconfirmed) resultOutput?.cancel()
+          // A failed sibling still belongs to this approved plan.  Once every
+          // per-session chain has settled, let successful siblings trigger the
+          // normal follow-up analysis instead of cancelling the watcher just
+          // because one completion probe timed out.
+          if (sent === 0) resultOutput?.cancel()
           else resultOutput?.complete()
           return saved
         } catch (error) {

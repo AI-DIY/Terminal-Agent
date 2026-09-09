@@ -53,6 +53,66 @@ const fileTransferRequestBase = {
 export const fileTransferUploadRequestSchema = z.object(fileTransferRequestBase).strict()
 export type FileTransferUploadRequest = z.infer<typeof fileTransferUploadRequestSchema>
 
+/**
+ * Upload one native-picker-selected file to several already-connected SSH
+ * sessions.  The picker remains in the main process and the renderer only
+ * supplies opaque session ids; this keeps the local-file authorization
+ * boundary identical to a normal upload.
+ */
+export const fileTransferUploadAllRequestSchema = z.object({
+  sessionIds: z.array(terminalSessionIdSchema)
+    .min(1, '至少选择一个 SSH 会话。')
+    .max(64, '一次最多上传到 64 个 SSH 会话。')
+    .superRefine((sessionIds, context) => {
+      if (new Set(sessionIds).size !== sessionIds.length) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: 'SSH 会话不能重复。' })
+      }
+    }),
+  /** `./` targets the connected user's SFTP home directory by default. */
+  remotePath: fileTransferRemotePathSchema.default('./'),
+  localPath: fileTransferLocalPathSchema.optional(),
+  /** Optional renderer-generated ids let each mounted panel correlate rows. */
+  transferIds: z.array(z.object({
+    sessionId: terminalSessionIdSchema,
+    transferId: fileTransferIdSchema,
+  }).strict()).max(64).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.transferIds === undefined) return
+  const ids = value.transferIds.map(item => item.sessionId)
+  if (new Set(ids).size !== ids.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['transferIds'], message: '批量传输会话不能重复。' })
+  }
+  const requested = new Set(value.sessionIds)
+  if (value.transferIds.some(item => !requested.has(item.sessionId))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['transferIds'], message: '批量传输会话必须来自请求会话列表。' })
+  }
+  if (value.transferIds.length !== value.sessionIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['transferIds'], message: '批量传输 ID 数量必须与会话数量一致。' })
+  }
+  const transferValues = value.transferIds.map(item => item.transferId)
+  if (new Set(transferValues).size !== transferValues.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['transferIds'], message: '批量传输 ID 不能重复。' })
+  }
+})
+export type FileTransferUploadAllRequest = z.infer<typeof fileTransferUploadAllRequestSchema>
+
+export const fileTransferUploadAllItemSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  transferId: fileTransferIdSchema,
+  status: z.enum(['completed', 'canceled', 'failed']),
+  transferredBytes: z.number().int().nonnegative().max(FILE_TRANSFER_MAX_BYTES),
+  fileName: z.string().trim().min(1).max(255).optional(),
+  message: z.string().trim().min(1).max(4_000).optional(),
+}).strict()
+export type FileTransferUploadAllItem = z.infer<typeof fileTransferUploadAllItemSchema>
+
+export const fileTransferUploadAllResultSchema = z.object({
+  status: z.enum(['completed', 'canceled', 'partial']),
+  fileName: z.string().trim().min(1).max(255).optional(),
+  results: z.array(fileTransferUploadAllItemSchema).max(64),
+}).strict()
+export type FileTransferUploadAllResult = z.infer<typeof fileTransferUploadAllResultSchema>
+
 export const fileTransferDownloadRequestSchema = z.object({
   ...fileTransferRequestBase,
   /** Used only as the suggested name in the native save dialog. */
@@ -145,6 +205,7 @@ export type FileTransferResult = z.infer<typeof fileTransferResultSchema>
 
 export const fileTransferChannels = Object.freeze({
   upload: 'file-transfer:upload',
+  uploadAll: 'file-transfer:upload-all',
   download: 'file-transfer:download',
   list: 'file-transfer:list',
   listLocal: 'file-transfer:list-local',

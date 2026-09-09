@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Expand, Files, History, LayoutGrid, Plus, X } from '@lucide/vue'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { broadcastCommandPayload } from './broadcast-command'
 import SessionTabs from '../SessionTabs.vue'
 import TerminalPane from '../TerminalPane.vue'
@@ -51,6 +51,8 @@ const activeHistoryId = ref<string | null>(null)
 const fileTransferPanelSessionIds = ref<string[]>([])
 const fileTransferVisibleSessionIds = ref(new Set<string>())
 const fileTransferBusySessionIds = ref(new Set<string>())
+const fileTransferPanelHeights = ref<Record<string, number>>({})
+const fileTransferResizeState = ref<{ sessionId: string; startY: number; startHeight: number; minHeight: number; maxHeight: number } | null>(null)
 const broadcastEnabled = ref(false)
 const broadcastInput = ref('')
 const broadcastSending = ref(false)
@@ -135,6 +137,56 @@ function hideFileTransfer(sessionId: string): void {
   const visible = new Set(fileTransferVisibleSessionIds.value)
   visible.delete(sessionId)
   fileTransferVisibleSessionIds.value = visible
+}
+
+function fileTransferPanelHeight(sessionId: string): number | undefined {
+  return fileTransferPanelHeights.value[sessionId]
+}
+
+function updateFileTransferHeight(sessionId: string, height: number): void {
+  fileTransferPanelHeights.value = { ...fileTransferPanelHeights.value, [sessionId]: Math.round(height) }
+}
+
+function finishFileTransferResize(): void {
+  fileTransferResizeState.value = null
+  document.body.classList.remove('resizing-file-transfer')
+  window.removeEventListener('pointermove', onFileTransferResizeMove)
+  window.removeEventListener('pointerup', finishFileTransferResize)
+  window.removeEventListener('pointercancel', finishFileTransferResize)
+}
+
+function onFileTransferResizeMove(event: PointerEvent): void {
+  const state = fileTransferResizeState.value
+  if (!state) return
+  const height = Math.min(state.maxHeight, Math.max(state.minHeight, state.startHeight - (event.clientY - state.startY)))
+  updateFileTransferHeight(state.sessionId, height)
+}
+
+function beginFileTransferResize(sessionId: string, event: PointerEvent): void {
+  if (event.button !== 0) return
+  const handle = event.currentTarget as HTMLElement | null
+  const frame = handle?.closest('.terminal-frame') as HTMLElement | null
+  const panel = handle?.nextElementSibling as HTMLElement | null
+  const frameHeight = frame?.getBoundingClientRect().height ?? 640
+  const currentHeight = panel?.getBoundingClientRect().height ?? fileTransferPanelHeight(sessionId) ?? 260
+  const minHeight = 190
+  const maxHeight = Math.max(minHeight, frameHeight - 36 - 104)
+  fileTransferResizeState.value = { sessionId, startY: event.clientY, startHeight: currentHeight, minHeight, maxHeight }
+  document.body.classList.add('resizing-file-transfer')
+  window.addEventListener('pointermove', onFileTransferResizeMove)
+  window.addEventListener('pointerup', finishFileTransferResize)
+  window.addEventListener('pointercancel', finishFileTransferResize)
+  event.preventDefault()
+}
+
+function nudgeFileTransferResize(sessionId: string, delta: number): void {
+  const handle = document.querySelector<HTMLElement>(`[data-file-transfer-resize="${CSS.escape(sessionId)}"]`)
+  const frame = handle?.closest('.terminal-frame') as HTMLElement | null
+  const panel = handle?.nextElementSibling as HTMLElement | null
+  const frameHeight = frame?.getBoundingClientRect().height ?? 640
+  const currentHeight = panel?.getBoundingClientRect().height ?? fileTransferPanelHeight(sessionId) ?? 260
+  const maxHeight = Math.max(190, frameHeight - 36 - 104)
+  updateFileTransferHeight(sessionId, Math.min(maxHeight, Math.max(190, currentHeight + delta)))
 }
 
 function setFileTransferBusy(sessionId: string, busy: boolean): void {
@@ -410,11 +462,16 @@ watch(
     fileTransferPanelSessionIds.value = fileTransferPanelSessionIds.value.filter(sessionId => available.has(sessionId))
     fileTransferVisibleSessionIds.value = new Set([...fileTransferVisibleSessionIds.value].filter(sessionId => available.has(sessionId)))
     fileTransferBusySessionIds.value = new Set([...fileTransferBusySessionIds.value].filter(sessionId => available.has(sessionId)))
+    const heights = { ...fileTransferPanelHeights.value }
+    for (const sessionId of Object.keys(heights)) if (!available.has(sessionId)) delete heights[sessionId]
+    fileTransferPanelHeights.value = heights
     if (!sessionIds.length) {
       broadcastStatus.value = ''
     }
   },
 )
+
+onBeforeUnmount(() => finishFileTransferResize())
 watch(
   [() => props.isLive, () => props.currentSessions.length, () => props.historyHosts.map(host => host.id).join('\u0000')],
   ([isLive, currentSessionCount, historyIds]) => {
@@ -553,11 +610,24 @@ watch(
             v-if="fileTransferPanelSessionIds.includes(session.id)"
             v-show="isFileTransferVisible(session.id)"
             class="file-transfer-session-panel"
+            :style="fileTransferPanelHeight(session.id) ? { '--file-transfer-height': `${fileTransferPanelHeight(session.id)}px` } : undefined"
             :aria-label="`${sessionDisplayLabel(session, orderedCurrentSessions)} 的文件传输`"
           >
+            <button
+              type="button"
+              class="file-transfer-resize-handle"
+              :data-file-transfer-resize="session.id"
+              aria-label="调整文件传输面板高度"
+              title="拖动调整文件传输面板高度"
+              @pointerdown="beginFileTransferResize(session.id, $event)"
+              @keydown.arrowup.prevent="nudgeFileTransferResize(session.id, 24)"
+              @keydown.arrowdown.prevent="nudgeFileTransferResize(session.id, -24)"
+            ><span aria-hidden="true" /></button>
             <FileTransferPanel
               :session-id="session.id"
+              :session-ids="orderedCurrentSessions.map(item => item.id)"
               :hostname="sessionDisplayLabel(session, orderedCurrentSessions)"
+              @hide="hideFileTransfer(session.id)"
               @close="hideFileTransfer(session.id)"
               @busy-change="setFileTransferBusy(session.id, $event)"
             />
@@ -568,15 +638,15 @@ watch(
       <section v-if="currentSessions.length === 0" class="empty-slot"><slot name="empty" /></section>
     </div>
 
-    <section v-if="isLive && currentSessions.length" class="broadcast-bar" aria-label="发送命令到所有窗口">
+    <section v-if="isLive && currentSessions.length" class="broadcast-bar" aria-label="发送命令到所有会话">
       <label class="broadcast-toggle">
-        <span class="broadcast-toggle-label">发送命令到所有窗口</span>
+        <span class="broadcast-toggle-label">发送命令到所有会话</span>
         <input
           v-model="broadcastEnabled"
           class="broadcast-switch-input"
           type="checkbox"
           role="switch"
-          aria-label="启用发送命令到所有窗口"
+          aria-label="启用发送命令到所有会话"
           :aria-checked="broadcastEnabled"
         />
         <span class="broadcast-switch-control" :class="{ enabled: broadcastEnabled }" aria-hidden="true"><i /></span>
@@ -587,7 +657,7 @@ watch(
           class="broadcast-input"
           type="text"
           autocomplete="off"
-          aria-label="发送命令到所有窗口"
+          aria-label="发送命令到所有会话"
           placeholder="输入要发送到所有在线 SSH 的命令。注意：组合键操作跳过发送按键直接发送"
           :disabled="!broadcastEnabled"
           @keydown="handleBroadcastKeydown"
@@ -606,20 +676,20 @@ watch(
         class="broadcast-send-button"
         :disabled="!broadcastEnabled || !isBroadcastInputSendable(broadcastInput) || broadcastSending || !currentSessions.length"
         @click="sendBroadcast"
-      >{{ broadcastSending ? '发送中…' : '发送所有窗口执行' }}</button>
+      >{{ broadcastSending ? '发送中…' : '发送所有会话执行' }}</button>
       <span class="broadcast-status" role="status" aria-live="polite">{{ broadcastStatus }}</span>
     </section>
 
     <div v-if="broadcastEditorOpen" class="broadcast-editor-backdrop" role="presentation" @pointerdown.self="closeBroadcastEditor">
       <section class="broadcast-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="broadcast-editor-title" @keydown="handleBroadcastEditorKeydown">
         <header>
-          <strong id="broadcast-editor-title">发送命令到所有窗口</strong>
+          <strong id="broadcast-editor-title">发送命令到所有会话</strong>
           <button type="button" aria-label="关闭放大编辑" title="关闭" @click="closeBroadcastEditor"><X :size="15" aria-hidden="true" /></button>
         </header>
         <textarea
           ref="broadcastEditor"
           v-model="broadcastInput"
-          aria-label="放大编辑发送命令到所有窗口"
+          aria-label="放大编辑发送命令到所有会话"
           placeholder="输入要发送到所有在线 SSH 的命令。注意：组合键操作跳过发送按键直接发送"
           :disabled="!broadcastEnabled"
         />
@@ -630,7 +700,7 @@ watch(
             class="broadcast-editor-send-button"
             :disabled="!broadcastEnabled || !isBroadcastInputSendable(broadcastInput) || broadcastSending || !currentSessions.length"
             @click="sendBroadcastFromEditor"
-          >{{ broadcastSending ? '发送中…' : '发送所有窗口执行' }}</button>
+          >{{ broadcastSending ? '发送中…' : '发送所有会话执行' }}</button>
         </footer>
       </section>
     </div>
@@ -682,7 +752,11 @@ watch(
 .terminal-actions .file-transfer-button.busy { color: var(--amber); background: var(--amber-soft); }
 .terminal-actions .file-transfer-button span { font-size: 8px; font-weight: 700; white-space: nowrap; }
 .terminal-frame :deep(.terminal-pane) { height: 100%; min-height: 0; border: 0; }
-.file-transfer-session-panel { min-width: 0; max-height: min(300px, 48vh); overflow: hidden; border-top: 1px solid var(--line); background: var(--panel); }
+.file-transfer-session-panel { position: relative; display: grid; grid-template-rows: 8px minmax(0, var(--file-transfer-height, 260px)); min-width: 0; max-height: min(62vh, 520px); overflow: hidden; border-top: 1px solid var(--line); background: var(--panel); }
+.file-transfer-resize-handle { display: grid; place-items: center; width: 100%; min-height: 8px; padding: 0; border: 0; background: transparent; cursor: ns-resize; }
+.file-transfer-resize-handle span { width: 42px; height: 3px; border-radius: 999px; background: var(--line); }
+.file-transfer-resize-handle:hover span,.file-transfer-resize-handle:focus-visible span { background: var(--focus); }
+:global(body.resizing-file-transfer),:global(body.resizing-file-transfer *) { cursor: ns-resize !important; user-select: none !important; }
 .history-context-menu { position: absolute; z-index: 9; top: 25px; right: auto; left: 0; display: grid; min-width: 154px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 14px 36px rgb(24 31 40 / 22%); }
 .history-context-menu button { min-height: 29px; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); font-size: 11px; text-align: left; }.history-context-menu button:hover,.history-context-menu button:focus-visible { background: var(--surface-soft); outline: 1px solid var(--accent); }.history-context-menu button:disabled { color: var(--muted); cursor: not-allowed; }
 .empty-slot { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
@@ -696,7 +770,7 @@ watch(
 .history-session-tab > .history-shell-tab { display: flex; min-width: 0; align-items: center; gap: 5px; height: 100%; padding: 0 6px 0 8px; border: 0; background: transparent; color: inherit; font-size: 9px; text-align: left; white-space: nowrap; }
 .history-session-tab > .history-shell-tab:hover,.history-session-tab > .history-shell-tab:focus-visible { outline: 0; }.history-session-tab > .history-shell-tab strong { max-width: 112px; overflow: hidden; color: var(--text-strong); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .host-status { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }.history-session-tab.active .host-status { background: var(--accent); }
-.broadcast-bar { display: grid; grid-row: 4; grid-template-columns: auto minmax(180px, 1fr) auto minmax(0, 220px); align-items: center; gap: 7px; min-width: 0; min-height: 42px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--panel); }
+.broadcast-bar { display: grid; grid-row: 4; grid-template-columns: auto minmax(180px, 1fr) auto minmax(0, 220px); align-items: center; gap: 6px; min-width: 0; min-height: 36px; padding: 4px 8px; border-top: 1px solid var(--line); background: var(--panel); }
 .broadcast-bar > * { align-self: center; }
 .broadcast-toggle { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 27px; color: var(--text-strong); font-size: 10px; font-weight: 650; line-height: 1; white-space: nowrap; cursor: pointer; }
 .broadcast-toggle-label { display: inline-flex; align-items: center; min-height: 27px; }
