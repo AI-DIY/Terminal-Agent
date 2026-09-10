@@ -16,6 +16,24 @@ function createIpc() {
     if (channel === 'file-transfer:select-local-directory') {
       return { canceled: false, localPath: 'C:\\Users\\tester' }
     }
+    if (channel === 'file-transfer:working-directory') {
+      return { sessionId: 'session-1', remotePath: '/home/tester' }
+    }
+    if (channel === 'file-transfer:rename-remote') {
+      return { sessionId: 'session-1', directory: '/tmp', name: 'report.txt', newName: 'renamed.txt' }
+    }
+    if (channel === 'file-transfer:delete-remote') {
+      return { sessionId: 'session-1', directory: '/tmp', name: 'report.txt' }
+    }
+    if (channel === 'file-transfer:rename-local') {
+      return { directory: 'C:\\Users\\tester', name: 'report.txt', newName: 'renamed.txt' }
+    }
+    if (channel === 'file-transfer:delete-local') {
+      return { directory: 'C:\\Users\\tester', name: 'report.txt' }
+    }
+    if (channel === 'file-transfer:cancel') {
+      return { sessionId: 'session-1', transferId: '11111111-1111-4111-8111-111111111111', canceled: true }
+    }
     return {
       transferId: '11111111-1111-4111-8111-111111111111',
       sessionId: 'session-1', direction: 'upload', status: 'completed', transferredBytes: 4, fileName: 'report.txt',
@@ -66,6 +84,47 @@ describe('file transfer preload API', () => {
 
     await expect(api.fileTransfer.listLocal({ localPath: '' })).rejects.toThrow()
     expect(ipc.invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('validates and routes controlled directory, mutation, working-directory, and cancellation APIs', async () => {
+    const ipc = createIpc()
+    const api = createTerminalAgentApi(ipc)
+    const transferId = '11111111-1111-4111-8111-111111111111'
+
+    await expect(api.fileTransfer.workingDirectory({ sessionId: 'session-1' })).resolves.toEqual({
+      sessionId: 'session-1', remotePath: '/home/tester',
+    })
+    await expect(api.fileTransfer.uploadDirectory({
+      sessionId: 'session-1', remotePath: '/tmp', localPath: 'C:\\Users\\tester\\bundle', transferId,
+    })).resolves.toMatchObject({ status: 'completed' })
+    await expect(api.fileTransfer.renameRemote({
+      sessionId: 'session-1', directory: '/tmp', name: 'report.txt', newName: 'renamed.txt',
+    })).resolves.toMatchObject({ newName: 'renamed.txt' })
+    await expect(api.fileTransfer.deleteRemote({
+      sessionId: 'session-1', directory: '/tmp', name: 'report.txt', kind: 'file',
+    })).resolves.toMatchObject({ name: 'report.txt' })
+    await expect(api.fileTransfer.renameLocal({
+      directory: 'C:\\Users\\tester', name: 'report.txt', newName: 'renamed.txt',
+    })).resolves.toMatchObject({ newName: 'renamed.txt' })
+    await expect(api.fileTransfer.deleteLocal({
+      directory: 'C:\\Users\\tester', name: 'report.txt', kind: 'file',
+    })).resolves.toMatchObject({ name: 'report.txt' })
+    await expect(api.fileTransfer.cancel({ sessionId: 'session-1', transferId })).resolves.toEqual({
+      sessionId: 'session-1', transferId, canceled: true,
+    })
+
+    await expect(api.fileTransfer.renameLocal({
+      directory: 'C:\\Users\\tester', name: 'report.txt', newName: '../escape.txt',
+    })).rejects.toThrow()
+    expect(ipc.invoke.mock.calls.map(([channel]) => channel)).toEqual([
+      'file-transfer:working-directory',
+      'file-transfer:upload-directory',
+      'file-transfer:rename-remote',
+      'file-transfer:delete-remote',
+      'file-transfer:rename-local',
+      'file-transfer:delete-local',
+      'file-transfer:cancel',
+    ])
   })
 
   it('validates inbound progress events and removes the exact listener wrapper', () => {

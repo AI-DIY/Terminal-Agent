@@ -47,9 +47,20 @@ import type {
 } from '../shared/contracts'
 import {
   fileTransferChannels,
+  fileTransferCancelRequestSchema,
+  fileTransferCancelResultSchema,
+  fileTransferLocalDeleteRequestSchema,
+  fileTransferLocalDeleteResultSchema,
   fileTransferDownloadRequestSchema,
+  fileTransferLocalRenameRequestSchema,
+  fileTransferLocalRenameResultSchema,
+  fileTransferRemoteDeleteRequestSchema,
+  fileTransferRemoteDeleteResultSchema,
+  fileTransferRemoteRenameRequestSchema,
+  fileTransferRemoteRenameResultSchema,
   fileTransferUploadAllRequestSchema,
   fileTransferUploadAllResultSchema,
+  fileTransferUploadDirectoryRequestSchema,
   fileTransferLocalDirectorySelectionSchema,
   fileTransferLocalListRequestSchema,
   fileTransferLocalListResultSchema,
@@ -58,9 +69,22 @@ import {
   fileTransferProgressSchema,
   fileTransferResultSchema,
   fileTransferUploadRequestSchema,
+  fileTransferWorkingDirectoryRequestSchema,
+  fileTransferWorkingDirectoryResultSchema,
+  type FileTransferCancelRequest,
+  type FileTransferCancelResult,
   type FileTransferDownloadRequest,
+  type FileTransferLocalDeleteRequest,
+  type FileTransferLocalDeleteResult,
+  type FileTransferLocalRenameRequest,
+  type FileTransferLocalRenameResult,
+  type FileTransferRemoteDeleteRequest,
+  type FileTransferRemoteDeleteResult,
+  type FileTransferRemoteRenameRequest,
+  type FileTransferRemoteRenameResult,
   type FileTransferUploadAllRequest,
   type FileTransferUploadAllResult,
+  type FileTransferUploadDirectoryRequest,
   type FileTransferLocalDirectorySelection,
   type FileTransferLocalListRequest,
   type FileTransferLocalListResult,
@@ -69,6 +93,8 @@ import {
   type FileTransferProgress,
   type FileTransferResult,
   type FileTransferUploadRequest,
+  type FileTransferWorkingDirectoryRequest,
+  type FileTransferWorkingDirectoryResult,
 } from '../shared/file-transfer-contracts'
 import { modelProfileIdSchema, rendererModelProfileInputSchema, rendererModelSettingsInputSchema, type ModelProfileKind, type ModelRouting, type RendererModelProfileInput, type RendererModelSettingsInput } from '../shared/validation'
 import type { RegexFenceRule } from '../main/agent/regex-fence-service'
@@ -157,6 +183,9 @@ export type TerminalAgentApi = {
     onChanged(listener: (catalog: SkillCatalog) => void): () => void
   }
   diagnostics: {
+    /** Renderer-only timing trace. It never includes IPC arguments or results. */
+    setIpcTracing(enabled: boolean): void
+    isIpcTracingEnabled(): boolean
     openRendererDevTools(): Promise<void>
     openNodeInspector(): Promise<void>
     onError(listener: (message: string) => void): () => void
@@ -186,11 +215,18 @@ export type TerminalAgentApi = {
   }
   fileTransfer: {
     list(request: FileTransferListRequest): Promise<FileTransferListResult>
+    workingDirectory(request: FileTransferWorkingDirectoryRequest): Promise<FileTransferWorkingDirectoryResult>
     listLocal(request: FileTransferLocalListRequest): Promise<FileTransferLocalListResult>
     selectLocalDirectory(): Promise<FileTransferLocalDirectorySelection>
     upload(request: FileTransferUploadRequest): Promise<FileTransferResult>
     uploadAll(request: FileTransferUploadAllRequest): Promise<FileTransferUploadAllResult>
+    uploadDirectory(request: FileTransferUploadDirectoryRequest): Promise<FileTransferResult>
     download(request: FileTransferDownloadRequest): Promise<FileTransferResult>
+    renameRemote(request: FileTransferRemoteRenameRequest): Promise<FileTransferRemoteRenameResult>
+    deleteRemote(request: FileTransferRemoteDeleteRequest): Promise<FileTransferRemoteDeleteResult>
+    renameLocal(request: FileTransferLocalRenameRequest): Promise<FileTransferLocalRenameResult>
+    deleteLocal(request: FileTransferLocalDeleteRequest): Promise<FileTransferLocalDeleteResult>
+    cancel(request: FileTransferCancelRequest): Promise<FileTransferCancelResult>
     onProgress(listener: (event: FileTransferProgress) => void): () => void
   }
   sessionModes: {
@@ -272,6 +308,48 @@ export function createTerminalAgentApi(ipcRenderer: {
   on(channel: string, listener: (event: unknown, payload: unknown) => void): void
   removeListener(channel: string, listener: (event: unknown, payload: unknown) => void): void
 }): TerminalAgentApi {
+  let ipcTracingEnabled = false
+  let ipcTraceSequence = 0
+  const originalIpcRenderer = ipcRenderer
+  const invoke = originalIpcRenderer.invoke.bind(originalIpcRenderer)
+  const traceInvoke = (channel: string, ...args: unknown[]): Promise<unknown> => {
+    if (!ipcTracingEnabled) return invoke(channel, ...args)
+    const traceId = ++ipcTraceSequence
+    const safeChannel = channel.replace(/[^A-Za-z0-9:_-]/g, '?').slice(0, 128)
+    const startedAt = Date.now()
+    // Deliberately do not log IPC arguments, response bodies, or error text.
+    // Requests can legitimately contain credentials, terminal input, and file
+    // paths; channel, correlation ID, duration, and outcome are enough to
+    // locate a boundary failure without exposing their contents in DevTools.
+    console.debug(`[TA IPC #${traceId}] -> ${safeChannel}`)
+    try {
+      return invoke(channel, ...args).then(
+        result => {
+          console.debug(`[TA IPC #${traceId}] <- ${safeChannel} ok ${Date.now() - startedAt}ms`)
+          return result
+        },
+        error => {
+          const kind = error instanceof Error && error.name ? error.name : 'Error'
+          console.debug(`[TA IPC #${traceId}] <- ${safeChannel} failed ${Date.now() - startedAt}ms ${kind}`)
+          throw error
+        },
+      )
+    } catch (error) {
+      const kind = error instanceof Error && error.name ? error.name : 'Error'
+      console.debug(`[TA IPC #${traceId}] <- ${safeChannel} failed ${Date.now() - startedAt}ms ${kind}`)
+      throw error
+    }
+  }
+  // The public API below was intentionally written against a small IPC shape.
+  // A proxy lets every fixed `invoke` call share the opt-in trace without
+  // changing its validation or exposing a generic IPC method to the renderer.
+  ipcRenderer = new Proxy(originalIpcRenderer, {
+    get(target, property) {
+      if (property === 'invoke') return traceInvoke
+      const value = Reflect.get(target, property, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
   return Object.freeze({
     chats: Object.freeze({
       list: () => ipcRenderer.invoke('chats:list') as Promise<ChatListSnapshot>,
@@ -329,6 +407,12 @@ export function createTerminalAgentApi(ipcRenderer: {
       },
     }),
     diagnostics: Object.freeze({
+      setIpcTracing: (enabled: boolean) => {
+        if (typeof enabled !== 'boolean') throw new TypeError('IPC tracing flag must be boolean')
+        ipcTracingEnabled = enabled
+        console.info(`[TA IPC] tracing ${enabled ? 'enabled' : 'disabled'}; arguments and response bodies are never logged.`)
+      },
+      isIpcTracingEnabled: () => ipcTracingEnabled,
       openRendererDevTools: async () => { await ipcRenderer.invoke('diagnostics:open-renderer-devtools') },
       openNodeInspector: async () => { await ipcRenderer.invoke('diagnostics:open-node-inspector') },
       onError: (listener: (message: string) => void) => {
@@ -380,6 +464,9 @@ export function createTerminalAgentApi(ipcRenderer: {
       list: async (request: FileTransferListRequest) => fileTransferListResultSchema.parse(
         await ipcRenderer.invoke(fileTransferChannels.list, fileTransferListRequestSchema.parse(request)),
       ),
+      workingDirectory: async (request: FileTransferWorkingDirectoryRequest) => fileTransferWorkingDirectoryResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.workingDirectory, fileTransferWorkingDirectoryRequestSchema.parse(request)),
+      ),
       listLocal: async (request: FileTransferLocalListRequest) => fileTransferLocalListResultSchema.parse(
         await ipcRenderer.invoke(fileTransferChannels.listLocal, fileTransferLocalListRequestSchema.parse(request)),
       ),
@@ -394,8 +481,26 @@ export function createTerminalAgentApi(ipcRenderer: {
       uploadAll: async (request: FileTransferUploadAllRequest) => fileTransferUploadAllResultSchema.parse(
         await ipcRenderer.invoke(fileTransferChannels.uploadAll, fileTransferUploadAllRequestSchema.parse(request)),
       ),
+      uploadDirectory: async (request: FileTransferUploadDirectoryRequest) => fileTransferResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.uploadDirectory, fileTransferUploadDirectoryRequestSchema.parse(request)),
+      ),
       download: async (request: FileTransferDownloadRequest) => fileTransferResultSchema.parse(
         await ipcRenderer.invoke(fileTransferChannels.download, fileTransferDownloadRequestSchema.parse(request)),
+      ),
+      renameRemote: async (request: FileTransferRemoteRenameRequest) => fileTransferRemoteRenameResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.renameRemote, fileTransferRemoteRenameRequestSchema.parse(request)),
+      ),
+      deleteRemote: async (request: FileTransferRemoteDeleteRequest) => fileTransferRemoteDeleteResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.deleteRemote, fileTransferRemoteDeleteRequestSchema.parse(request)),
+      ),
+      renameLocal: async (request: FileTransferLocalRenameRequest) => fileTransferLocalRenameResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.renameLocal, fileTransferLocalRenameRequestSchema.parse(request)),
+      ),
+      deleteLocal: async (request: FileTransferLocalDeleteRequest) => fileTransferLocalDeleteResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.deleteLocal, fileTransferLocalDeleteRequestSchema.parse(request)),
+      ),
+      cancel: async (request: FileTransferCancelRequest) => fileTransferCancelResultSchema.parse(
+        await ipcRenderer.invoke(fileTransferChannels.cancel, fileTransferCancelRequestSchema.parse(request)),
       ),
       onProgress: (listener: (event: FileTransferProgress) => void) => {
         const handler = (_event: unknown, payload: unknown) => listener(fileTransferProgressSchema.parse(payload))

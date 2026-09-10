@@ -203,8 +203,13 @@ export class Ssh2ClientAdapter implements SshClientPort {
       // interactive PTY and remains open across directory and file actions.
       fileTransfer: {
         listDirectory: remotePath => queueFileTransfer('directory-list', async () => listDirectory(transport, await sftpChannel.acquire(), remotePath, sftpChannel.releaseAfterFailure)),
-        uploadFile: (localPath, remotePath, onProgress) => queueFileTransfer('upload', async () => transferFile(transport, await sftpChannel.acquire(), 'upload', localPath, remotePath, onProgress, sftpChannel.releaseAfterFailure)),
-        downloadFile: (remotePath, localPath, onProgress) => queueFileTransfer('download', async () => transferFile(transport, await sftpChannel.acquire(), 'download', remotePath, localPath, onProgress, sftpChannel.releaseAfterFailure)),
+        getWorkingDirectory: () => queueFileTransfer('working-directory', async () => getSftpWorkingDirectory(transport, await sftpChannel.acquire(), sftpChannel.releaseAfterFailure)),
+        ensureDirectory: remotePath => queueFileTransfer('ensure-directory', async () => ensureSftpDirectory(transport, await sftpChannel.acquire(), remotePath, sftpChannel.releaseAfterFailure)),
+        rename: (fromPath, toPath) => queueFileTransfer('rename', async () => renameSftpEntry(transport, await sftpChannel.acquire(), fromPath, toPath, sftpChannel.releaseAfterFailure)),
+        removeFile: remotePath => queueFileTransfer('remove-file', async () => removeSftpFile(transport, await sftpChannel.acquire(), remotePath, sftpChannel.releaseAfterFailure)),
+        removeDirectory: remotePath => queueFileTransfer('remove-directory', async () => removeSftpDirectory(transport, await sftpChannel.acquire(), remotePath, sftpChannel.releaseAfterFailure)),
+        uploadFile: (localPath, remotePath, onProgress, signal) => queueFileTransfer('upload', async () => transferFile(transport, await sftpChannel.acquire(), 'upload', localPath, remotePath, onProgress, signal, sftpChannel.releaseAfterFailure)),
+        downloadFile: (remotePath, localPath, onProgress, signal) => queueFileTransfer('download', async () => transferFile(transport, await sftpChannel.acquire(), 'download', remotePath, localPath, onProgress, signal, sftpChannel.releaseAfterFailure)),
       },
       close: () => {
         record('connection-close-requested')
@@ -230,13 +235,16 @@ async function transferFile(
   sourcePath: string,
   targetPath: string,
   onProgress?: (progress: SshFileTransferProgress) => void,
+  signal?: AbortSignal,
   releaseAfterFailure?: (sftp: SFTPWrapper) => void,
 ): Promise<number> {
   transport.assertOpen()
+  throwIfTransferAborted(signal)
   const uploadSize = direction === 'upload'
     ? await stat(sourcePath).then(result => result.size)
     : undefined
   transport.assertOpen()
+  throwIfTransferAborted(signal)
   if (uploadSize !== undefined) onProgress?.({ transferredBytes: 0, totalBytes: uploadSize })
   else onProgress?.({ transferredBytes: 0 })
 
@@ -249,6 +257,7 @@ async function transferFile(
     let unsubscribeSftpError = (): void => undefined
     let unsubscribeSftpClose = (): void => undefined
     let unsubscribeSftpEnd = (): void => undefined
+    let unsubscribeAbort = (): void => undefined
     const finish = (error?: Error | null): void => {
       if (settled) return
       settled = true
@@ -256,6 +265,7 @@ async function transferFile(
       unsubscribeSftpError()
       unsubscribeSftpClose()
       unsubscribeSftpEnd()
+      unsubscribeAbort()
       if (timeout) clearTimeout(timeout)
       if (error) {
         releaseAfterFailure?.(sftp)
@@ -303,6 +313,7 @@ async function transferFile(
     unsubscribeSftpClose = listenSftpEvent(sftp, 'close', onSftpClose)
     unsubscribeSftpEnd = listenSftpEvent(sftp, 'end', onSftpEnd)
     unsubscribeTransport = transport.subscribe(finish)
+    unsubscribeAbort = listenAbortSignal(signal, () => finish(createTransferAbortError()))
     if (settled) return
     armTimeout()
     try {
@@ -312,6 +323,26 @@ async function transferFile(
       finish(error instanceof Error ? error : new Error(String(error)))
     }
   })
+}
+
+function createTransferAbortError(): Error {
+  const error = new Error('文件传输已取消。')
+  error.name = 'AbortError'
+  return error
+}
+
+function throwIfTransferAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw createTransferAbortError()
+}
+
+function listenAbortSignal(signal: AbortSignal | undefined, listener: () => void): () => void {
+  if (!signal) return () => undefined
+  if (signal.aborted) {
+    listener()
+    return () => undefined
+  }
+  signal.addEventListener('abort', listener, { once: true })
+  return () => signal.removeEventListener('abort', listener)
 }
 
 function openSftp(transport: TransportLifecycle, client: Client): Promise<SFTPWrapper> {
@@ -430,6 +461,138 @@ function createReusableSftpChannel(
       try { active.end() } catch { /* The channel may already be closed. */ }
     },
   }
+}
+
+type SftpOperationCallback<T> = (error?: Error | null, value?: T) => void
+
+/**
+ * Small SFTP metadata/mutation calls share the same lifecycle protection as a
+ * directory listing.  A rejected operation discards only the auxiliary SFTP
+ * channel; the interactive terminal stays attached to the SSH transport.
+ */
+async function runSftpOperation<T>(
+  transport: TransportLifecycle,
+  sftp: SFTPWrapper,
+  operationLabel: string,
+  operation: (finish: SftpOperationCallback<T>) => void,
+  releaseAfterFailure?: (sftp: SFTPWrapper) => void,
+): Promise<T> {
+  transport.assertOpen()
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false
+    let unsubscribeTransport = (): void => undefined
+    let unsubscribeSftpError = (): void => undefined
+    let unsubscribeSftpClose = (): void => undefined
+    let unsubscribeSftpEnd = (): void => undefined
+    const timeout = setTimeout(() => finish(new Error(`SFTP ${operationLabel}超时，请检查远程服务是否启用 SFTP。`)), SFTP_CHANNEL_TIMEOUT_MS)
+    const finish: SftpOperationCallback<T> = (error, value) => {
+      if (settled) return
+      settled = true
+      unsubscribeTransport()
+      unsubscribeSftpError()
+      unsubscribeSftpClose()
+      unsubscribeSftpEnd()
+      clearTimeout(timeout)
+      if (error) {
+        releaseAfterFailure?.(sftp)
+        reject(error instanceof Error ? error : new Error(String(error)))
+        return
+      }
+      resolve(value as T)
+    }
+    const onError = (error: unknown): void => finish(error instanceof Error ? error : new Error(String(error)))
+    const onClose = (): void => {
+      if (!settled) finish(new Error(`SFTP channel closed before ${operationLabel} completed`))
+    }
+    const onEnd = (): void => {
+      if (!settled) finish(new Error(`SFTP channel ended before ${operationLabel} completed`))
+    }
+    unsubscribeSftpError = listenSftpEvent(sftp, 'error', onError)
+    unsubscribeSftpClose = listenSftpEvent(sftp, 'close', onClose)
+    unsubscribeSftpEnd = listenSftpEvent(sftp, 'end', onEnd)
+    unsubscribeTransport = transport.subscribe(error => finish(error))
+    if (settled) return
+    timeout.unref?.()
+    try {
+      operation(finish)
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+}
+
+async function getSftpWorkingDirectory(
+  transport: TransportLifecycle,
+  sftp: SFTPWrapper,
+  releaseAfterFailure?: (sftp: SFTPWrapper) => void,
+): Promise<string> {
+  return await runSftpOperation<string>(transport, sftp, '工作目录读取', finish => {
+    sftp.realpath('.', (error, resolvedPath) => {
+      if (error) {
+        finish(error)
+        return
+      }
+      if (typeof resolvedPath !== 'string' || !resolvedPath.trim() || resolvedPath.includes('\\') || containsControlCharacters(resolvedPath)) {
+        finish(new Error('SFTP server returned an invalid working directory'))
+        return
+      }
+      finish(undefined, resolvedPath)
+    })
+  }, releaseAfterFailure)
+}
+
+async function ensureSftpDirectory(
+  transport: TransportLifecycle,
+  sftp: SFTPWrapper,
+  remotePath: string,
+  releaseAfterFailure?: (sftp: SFTPWrapper) => void,
+): Promise<void> {
+  return await runSftpOperation<void>(transport, sftp, '目录创建', finish => {
+    sftp.mkdir(remotePath, error => {
+      if (!error) {
+        finish(undefined)
+        return
+      }
+      // mkdir has no portable "already exists" result. A successful listing
+      // proves the path is an existing directory; any other failure preserves
+      // the original creation error for the caller.
+      sftp.readdir(remotePath, listingError => finish(listingError ? error : undefined))
+    })
+  }, releaseAfterFailure)
+}
+
+async function renameSftpEntry(
+  transport: TransportLifecycle,
+  sftp: SFTPWrapper,
+  fromPath: string,
+  toPath: string,
+  releaseAfterFailure?: (sftp: SFTPWrapper) => void,
+): Promise<void> {
+  return await runSftpOperation<void>(transport, sftp, '重命名', finish => {
+    sftp.rename(fromPath, toPath, error => finish(error))
+  }, releaseAfterFailure)
+}
+
+async function removeSftpFile(
+  transport: TransportLifecycle,
+  sftp: SFTPWrapper,
+  remotePath: string,
+  releaseAfterFailure?: (sftp: SFTPWrapper) => void,
+): Promise<void> {
+  return await runSftpOperation<void>(transport, sftp, '文件删除', finish => {
+    sftp.unlink(remotePath, error => finish(error))
+  }, releaseAfterFailure)
+}
+
+async function removeSftpDirectory(
+  transport: TransportLifecycle,
+  sftp: SFTPWrapper,
+  remotePath: string,
+  releaseAfterFailure?: (sftp: SFTPWrapper) => void,
+): Promise<void> {
+  return await runSftpOperation<void>(transport, sftp, '目录删除', finish => {
+    sftp.rmdir(remotePath, error => finish(error))
+  }, releaseAfterFailure)
 }
 
 async function listDirectory(

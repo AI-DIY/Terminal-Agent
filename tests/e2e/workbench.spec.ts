@@ -312,7 +312,12 @@ test('restores a newly created zero-SSH chat as a connectable live workspace aft
 
     const restoredChat = chatItem(page, chatId)
     await expect(restoredChat).toBeVisible()
-    await expect(restoredChat).not.toHaveClass(/active/)
+    // A normal reload restores the persisted chat itself.  It no longer
+    // creates a second empty task merely because there is no navigation handoff.
+    await expect(restoredChat).toHaveClass(/active/)
+    // The startup task created on the first launch and this task are both
+    // persisted; reload does not append a third empty task.
+    await expect(page.locator('.history-item')).toHaveCount(2)
     await expect(page.locator('.history-item.active')).toContainText('未开始')
     await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
     await expect(page.getByLabel('任务 SSH 历史回放')).toHaveCount(0)
@@ -666,7 +671,9 @@ test('restores authoritative multi-chat session ownership and fallback layouts',
     await page.reload()
     await waitForWorkbenchReady(page)
 
-    await expect(page.locator('.history-item')).toHaveCount(4)
+    // The two connected tasks and the initial durable task are restored as-is;
+    // startup does not append another empty task on a normal reload.
+    await expect(page.locator('.history-item')).toHaveCount(3)
     await chatItem(page, secondChatId).getByRole('button', { name: /^选择任务 / }).click()
     await expect(page.locator('.history-item.active .chat-select')).toHaveAttribute('aria-current', 'page')
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.2', exact: true })).toBeVisible()
@@ -696,7 +703,7 @@ test('restores authoritative multi-chat session ownership and fallback layouts',
     await expect(page.getByText('辅助驾驶 - 变更需人工确认', { exact: true })).toHaveCount(0)
 
     await removeActiveTask(page)
-    await expect(page.locator('.history-item')).toHaveCount(3)
+    await expect(page.locator('.history-item')).toHaveCount(2)
     await chatItem(page, firstChatId).getByRole('button', { name: /^选择任务 / }).click()
     await expect(page.locator('.history-item.active .chat-select')).toHaveAttribute('aria-current', 'page')
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()
@@ -1504,12 +1511,22 @@ test('keeps focus inside and restores focus from the unified connection dialog',
     await openButton.click()
     const dialog = page.getByRole('dialog', { name: '新建 SSH 连接', exact: true })
     const closeButton = dialog.getByRole('button', { name: '关闭新建 SSH 连接', exact: true })
+    const scrollRegion = dialog.getByRole('region', { name: 'SSH 连接内容', exact: true })
     await expect(dialog.getByRole('tab', { name: '堡垒机跳转连接', exact: true })).toBeFocused()
     await closeButton.focus()
     await page.keyboard.press('Shift+Tab')
-    // The manual-only bastion panel has no launch control, so the dialog's
-    // focus trap wraps from the close button to the final mode tab.
-    await expect(dialog.getByRole('tab', { name: '主机私钥连接', exact: true })).toBeFocused()
+    // The manual-only bastion panel has no form controls.  The scroll region
+    // is the final tabbable element, so reverse tabbing from the close button
+    // wraps there and forward tabbing wraps back to the close button.
+    await expect(scrollRegion).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(closeButton).toBeFocused()
+    // The active tab remains the first regular tab stop; roving-tablist items
+    // with tabindex="-1" are intentionally skipped by the dialog trap.
+    const bastionTab = dialog.getByRole('tab', { name: '堡垒机跳转连接', exact: true })
+    await bastionTab.focus()
+    await page.keyboard.press('Shift+Tab')
+    await expect(closeButton).toBeFocused()
     await closeButton.click()
     await expect(openButton).toBeFocused()
   } finally {

@@ -175,6 +175,29 @@ describe('diagnostics preload API', () => {
     expect(Object.keys(api.diagnostics)).not.toContain('open')
     expect(() => wrapper?.({}, '')).toThrow()
   })
+
+  it('writes opt-in IPC timing records without logging invocation payloads', async () => {
+    const ipc = createIpc()
+    ipc.invoke.mockResolvedValue([])
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined)
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    try {
+      const api = createTerminalAgentApi(ipc)
+      expect(api.diagnostics.isIpcTracingEnabled()).toBe(false)
+      api.diagnostics.setIpcTracing(true)
+      await api.chats.list()
+
+      expect(api.diagnostics.isIpcTracingEnabled()).toBe(true)
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('[TA IPC] tracing enabled'))
+      expect(debug).toHaveBeenCalledWith(expect.stringMatching(/^\[TA IPC #\d+\] -> chats:list$/))
+      expect(debug).toHaveBeenCalledWith(expect.stringMatching(/^\[TA IPC #\d+\] <- chats:list ok \d+ms$/))
+      expect(debug.mock.calls.flat().join(' ')).not.toContain('undefined')
+      expect(debug.mock.calls.flat().join(' ')).not.toContain('payload')
+    } finally {
+      debug.mockRestore()
+      info.mockRestore()
+    }
+  })
 })
 
 describe('Shell history preload API', () => {

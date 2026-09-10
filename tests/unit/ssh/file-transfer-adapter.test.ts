@@ -30,6 +30,11 @@ const state = vi.hoisted(() => {
         },
       ])
     }),
+    realpath: vi.fn((_path: string, callback: (error?: Error, resolvedPath?: string) => void) => callback(undefined, '/home/ops')),
+    mkdir: vi.fn((_path: string, callback: (error?: Error) => void) => callback()),
+    rename: vi.fn((_from: string, _to: string, callback: (error?: Error) => void) => callback()),
+    unlink: vi.fn((_path: string, callback: (error?: Error) => void) => callback()),
+    rmdir: vi.fn((_path: string, callback: (error?: Error) => void) => callback()),
     fastPut: vi.fn((_local: string, _remote: string, options: { step?: (total: number, chunk: number, size: number) => void }, callback: (error?: Error | null) => void) => {
       options.step?.(4, 4, 4)
       callback()
@@ -86,6 +91,11 @@ beforeEach(() => {
   state.sftp.fastPut.mockClear()
   state.sftp.fastGet.mockClear()
   state.sftp.readdir.mockClear()
+  state.sftp.realpath.mockClear()
+  state.sftp.mkdir.mockClear()
+  state.sftp.rename.mockClear()
+  state.sftp.unlink.mockClear()
+  state.sftp.rmdir.mockClear()
 })
 
 describe('Ssh2ClientAdapter SFTP transfer channel', () => {
@@ -133,6 +143,38 @@ describe('Ssh2ClientAdapter SFTP transfer channel', () => {
     const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
 
     await expect(connection.fileTransfer?.uploadFile('C:/report.txt', '/tmp/report.txt')).rejects.toThrow('subsystem unavailable')
+    expect(state.client.end).not.toHaveBeenCalled()
+  })
+
+  it('uses the same queued SFTP subsystem for working-directory and mutation operations', async () => {
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+
+    await expect(connection.fileTransfer?.getWorkingDirectory?.()).resolves.toBe('/home/ops')
+    await expect(connection.fileTransfer?.ensureDirectory?.('/srv/releases')).resolves.toBeUndefined()
+    await expect(connection.fileTransfer?.rename?.('/srv/a.txt', '/srv/b.txt')).resolves.toBeUndefined()
+    await expect(connection.fileTransfer?.removeFile?.('/srv/b.txt')).resolves.toBeUndefined()
+    await expect(connection.fileTransfer?.removeDirectory?.('/srv/releases')).resolves.toBeUndefined()
+
+    expect(state.sftp.realpath).toHaveBeenCalledWith('.', expect.any(Function))
+    expect(state.sftp.mkdir).toHaveBeenCalledWith('/srv/releases', expect.any(Function))
+    expect(state.sftp.rename).toHaveBeenCalledWith('/srv/a.txt', '/srv/b.txt', expect.any(Function))
+    expect(state.sftp.unlink).toHaveBeenCalledWith('/srv/b.txt', expect.any(Function))
+    expect(state.sftp.rmdir).toHaveBeenCalledWith('/srv/releases', expect.any(Function))
+    expect(state.client.shell).not.toHaveBeenCalled()
+  })
+
+  it('aborts only the active SFTP transfer and leaves the interactive SSH client open', async () => {
+    let markStarted!: () => void
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    state.sftp.fastPut.mockImplementationOnce(() => { markStarted() })
+    const connection = await new Ssh2ClientAdapter().connect({ host: 'server-a', port: 22, username: 'ops' })
+    const controller = new AbortController()
+    const pending = connection.fileTransfer?.uploadFile('C:/report.txt', '/srv/report.txt', undefined, controller.signal)
+    await started
+    controller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(state.sftp.end).toHaveBeenCalledOnce()
     expect(state.client.end).not.toHaveBeenCalled()
   })
 

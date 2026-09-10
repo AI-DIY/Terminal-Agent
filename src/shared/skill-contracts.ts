@@ -119,6 +119,12 @@ export const skillActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('load_skill'), skillId: skillIdSchema }).strict(),
   z.object({ type: z.literal('read_skill_file'), skillId: skillIdSchema, path: z.string().trim().min(1).max(512) }).strict(),
   z.object({
+    type: z.literal('clarify_skill'),
+    skillId: skillIdSchema,
+    /** Missing user-provided value that prevents an otherwise selected Skill from running. */
+    missingInput: z.string().trim().min(1).max(512),
+  }).strict(),
+  z.object({
     type: z.literal('run_skill_command'),
     skillId: skillIdSchema,
     invocationId: z.string().uuid(),

@@ -73,6 +73,20 @@ const isLiveChat = computed(() => isInteractiveWorkbenchWorkspace(
 const activeWorkbenchChatId = computed(() => (
   workbenchSessionAttachmentTarget(chatStore.state.selectedId, chatStore.state.liveChatId)
 ))
+
+/**
+ * An AccessClient/Raw session arriving without an explicit owner is a startup
+ * resource, not a user request against whichever historical task happens to
+ * be selected.  Reuse the authoritative live task when one exists; otherwise
+ * hand the repository an unknown id so its atomic bind operation creates a
+ * fresh live task.  Explicit connection flows continue to use
+ * `activeWorkbenchChatId` and therefore retain their selected-task semantics.
+ */
+function startupSessionAttachmentTarget(): string {
+  if (chatStore.state.liveChatId) return chatStore.state.liveChatId
+  if (isLiveChat.value && chatStore.state.selectedId) return chatStore.state.selectedId
+  return crypto.randomUUID()
+}
 // Keep the selected task's live associations available to the AI context
 // picker even when the task itself is historical.  The shell canvas still
 // uses `currentLiveSessions` below, so a historical task never accidentally
@@ -746,18 +760,30 @@ function focusConnectionDialog(): void {
   connectionModal.value?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
 }
 
+const connectionFocusableSelector = 'button, [href], input, select, textarea, [contenteditable="true"], [tabindex]'
+
 function trapConnectionFocus(event: KeyboardEvent): void {
   if (event.key !== 'Tab') return
-  const focusable = [...(connectionModal.value?.querySelectorAll<HTMLElement>(
-    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  ) ?? [])].filter(element => element.offsetParent !== null)
+  const modal = connectionModal.value
+  if (!modal) return
+  const focusable = [...modal.querySelectorAll<HTMLElement>(connectionFocusableSelector)].filter(element => {
+    // `tabIndex` reflects implicit focusability and excludes roving-tablist
+    // items with tabindex="-1".  Keep disabled and visually hidden controls
+    // out of the trap as their browser tab order does.
+    if (element.tabIndex < 0 || element.matches(':disabled')) return false
+    const style = window.getComputedStyle(element)
+    return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0
+  })
   if (!focusable.length) return
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const activeIndex = active ? focusable.indexOf(active) : -1
+  if (activeIndex < 0) return
   const first = focusable[0]
   const last = focusable.at(-1)!
-  if (event.shiftKey && document.activeElement === first) {
+  if (event.shiftKey && activeIndex === 0) {
     event.preventDefault()
     last.focus()
-  } else if (!event.shiftKey && document.activeElement === last) {
+  } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
     event.preventDefault()
     first.focus()
   }
@@ -812,6 +838,9 @@ async function openUpgrade(): Promise<void> {
 async function openRendererDevTools(): Promise<void> {
   diagnosticError.value = ''
   try {
+    // Trace timing only while the operator is diagnosing a renderer issue.
+    // The preload logger intentionally omits argument and response content.
+    window.terminalAgent.diagnostics.setIpcTracing(true)
     await window.terminalAgent.diagnostics.openRendererDevTools()
   } catch (error) {
     diagnosticError.value = error instanceof Error ? error.message : '无法打开 DevTools。'
@@ -821,6 +850,7 @@ async function openRendererDevTools(): Promise<void> {
 async function openNodeInspector(): Promise<void> {
   diagnosticError.value = ''
   try {
+    window.terminalAgent.diagnostics.setIpcTracing(true)
     await window.terminalAgent.diagnostics.openNodeInspector()
   } catch (error) {
     diagnosticError.value = error instanceof Error ? error.message : '无法打开 Node Inspector。'
@@ -850,7 +880,12 @@ async function initializeWorkbench(): Promise<void> {
           add: session => addSession(session, false),
           resolve: session => chatStore.resolveSession(session.id),
           restore: restoreAssociatedShellView,
-          bind: (session, activate) => attachSession(session, activate),
+          bind: (session, activate) => attachSession(
+            session,
+            activate,
+            () => true,
+            (session as SessionView & { chatId?: string }).chatId ?? startupSessionAttachmentTarget(),
+          ),
         })
       },
       create: () => createChat(false),
@@ -902,7 +937,16 @@ watch(
 )
 
 onMounted(() => {
-  handleOpenedSession = createWorkbenchOpenedSessionHandler({ tracker: sessionOwnership, currentChatId: () => isLiveChat.value ? chatStore.state.selectedId : null, attach: (session, target, isCurrent) => attachSession(session as Omit<SessionView, 'buffer'>, true, isCurrent, target ?? undefined) })
+  handleOpenedSession = createWorkbenchOpenedSessionHandler({
+    tracker: sessionOwnership,
+    currentChatId: () => isLiveChat.value ? chatStore.state.selectedId : null,
+    attach: (session, target, isCurrent) => attachSession(
+      session as Omit<SessionView, 'buffer'>,
+      true,
+      isCurrent,
+      target ?? startupSessionAttachmentTarget(),
+    ),
+  })
   stopShellHistoryEligibilityRefresh = shellHistory.startEligibilityRefresh({
     setInterval: (callback, delay) => window.setInterval(callback, delay),
     clearInterval: handle => window.clearInterval(handle),
@@ -920,7 +964,6 @@ onMounted(() => {
     }
     const visibleLiveChatId = isLiveChat.value ? chatStore.state.selectedId : null
     const capturedTargetChatId = visibleLiveChatId
-    const shouldPromoteFallback = visibleLiveChatId === null && chatStore.state.liveChatId === null
     const isCurrent = () => capturedTargetChatId !== null
       ? chatStore.state.selectedId === capturedTargetChatId
       : chatStore.state.liveChatId === null

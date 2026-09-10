@@ -427,16 +427,52 @@ export class SessionService {
     return session.connection.fileTransfer.listDirectory(remotePath)
   }
 
+  async getWorkingDirectory(sessionId: string): Promise<string> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('Unknown terminal session')
+    if (!session.connection.fileTransfer?.getWorkingDirectory) throw new Error('当前 SSH 会话不支持获取 SFTP 工作目录。')
+    return session.connection.fileTransfer.getWorkingDirectory()
+  }
+
+  async ensureDirectory(sessionId: string, remotePath: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('Unknown terminal session')
+    if (!session.connection.fileTransfer?.ensureDirectory) throw new Error('当前 SSH 会话不支持创建远程目录。')
+    await session.connection.fileTransfer.ensureDirectory(remotePath)
+  }
+
+  async rename(sessionId: string, fromPath: string, toPath: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('Unknown terminal session')
+    if (!session.connection.fileTransfer?.rename) throw new Error('当前 SSH 会话不支持重命名远程文件。')
+    await session.connection.fileTransfer.rename(fromPath, toPath)
+  }
+
+  async removeFile(sessionId: string, remotePath: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('Unknown terminal session')
+    if (!session.connection.fileTransfer?.removeFile) throw new Error('当前 SSH 会话不支持删除远程文件。')
+    await session.connection.fileTransfer.removeFile(remotePath)
+  }
+
+  async removeDirectory(sessionId: string, remotePath: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('Unknown terminal session')
+    if (!session.connection.fileTransfer?.removeDirectory) throw new Error('当前 SSH 会话不支持删除远程目录。')
+    await session.connection.fileTransfer.removeDirectory(remotePath)
+  }
+
   async uploadFile(
     sessionId: string,
     localPath: string,
     remotePath: string,
     onProgress?: (progress: SshFileTransferProgress) => void,
+    signal?: AbortSignal,
   ): Promise<number> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('Unknown terminal session')
     if (!session.connection.fileTransfer) throw new Error('当前 SSH 会话不支持 SFTP 文件传输。')
-    return session.connection.fileTransfer.uploadFile(localPath, remotePath, onProgress)
+    return session.connection.fileTransfer.uploadFile(localPath, remotePath, onProgress, signal)
   }
 
   async downloadFile(
@@ -444,11 +480,12 @@ export class SessionService {
     remotePath: string,
     localPath: string,
     onProgress?: (progress: SshFileTransferProgress) => void,
+    signal?: AbortSignal,
   ): Promise<number> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('Unknown terminal session')
     if (!session.connection.fileTransfer) throw new Error('当前 SSH 会话不支持 SFTP 文件传输。')
-    return session.connection.fileTransfer.downloadFile(remotePath, localPath, onProgress)
+    return session.connection.fileTransfer.downloadFile(remotePath, localPath, onProgress, signal)
   }
 
   recentLines(sessionId: string, limit = DEFAULT_RECENT_SHELL_LINES): string[] {

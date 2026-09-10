@@ -245,21 +245,18 @@ const chatRuntime = new ChatRuntime({
     // runtime and closes the logout/context-race window.
     let skillCatalog: import('../shared/skill-contracts').SkillSummary[] = []
     let selectedSkillIds: import('../shared/skill-contracts').SkillId[] = []
-    let skillDocuments: import('../shared/skill-contracts').SkillDocument[] = []
     const skillsAllowedForContext = skillsAuthenticated()
     if (skillsAllowedForContext) {
-      try { skillCatalog = (await skills.list()).skills.filter(skill => skill.enabled) } catch { /* Skills are optional for ordinary chat. */ }
-      const requestedSkillIds = [...new Set(options.selectedSkillIds ?? [])]
-      const enabledById = new Map(skillCatalog.map(skill => [skill.id, skill]))
-      selectedSkillIds = skillsAuthenticated() ? requestedSkillIds.filter(skillId => enabledById.has(skillId)) : []
-      skillDocuments = skillsAuthenticated()
-        ? await Promise.all(selectedSkillIds.map(skillId => skills.load({ id: skillId }).catch(() => undefined))).then(items => items.filter((item): item is import('../shared/skill-contracts').SkillDocument => Boolean(item)))
-        : []
+      // Preserve the user's explicit IDs, including a skill that was removed
+      // or disabled after selection. StructuredChatAgent re-checks each one
+      // through the run-scoped bridge and feeds the factual outcome back to
+      // the final reasoning step instead of silently dropping it here.
+      selectedSkillIds = [...new Set(options.selectedSkillIds ?? [])]
+      try { skillCatalog = (await skills.list()).skills } catch { /* The agent reports selected-skill unavailability in this turn. */ }
     }
     if (!skillsAuthenticated()) {
       skillCatalog = []
       selectedSkillIds = []
-      skillDocuments = []
     }
     return {
       messages: context,
@@ -278,7 +275,6 @@ const chatRuntime = new ChatRuntime({
       skillIds: skillsAuthenticated() ? normalizeBuiltInSkillIds(options.skillIds) : [],
       skillCatalog,
       selectedSkillIds,
-      skillDocuments,
     }
   },
   resolveModel: async ({ hasImages = false }: { hasImages?: boolean } = {}) => {

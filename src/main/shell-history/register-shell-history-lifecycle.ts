@@ -24,6 +24,13 @@ type ShellHistoryLifecycleOptions = {
   now?: () => Date
 }
 
+/**
+ * Terminal input usually arrives one character at a time. Keep the expensive
+ * history sanitization off the synchronous SSH write path while preserving
+ * the exact byte sequence before a session is closed.
+ */
+export const SHELL_HISTORY_WRITE_AUDIT_DELAY_MS = 48
+
 export type ShellHistoryLifecycleRegistration = (() => void) & {
   drain(): Promise<void>
 }
@@ -38,6 +45,40 @@ export function registerShellHistoryLifecycle(
   const associations = new Map<string, { chatId: string; historyId: string }>()
   const openedSessions = new Map<string, HistoryConnectedSession>()
   const pendingCloses = new Set<Promise<void>>()
+  const pendingWriteAudits = new Map<string, string>()
+  let writeAuditTimer: ReturnType<typeof setTimeout> | undefined
+
+  const cancelWriteAuditTimer = (): void => {
+    if (writeAuditTimer === undefined) return
+    clearTimeout(writeAuditTimer)
+    writeAuditTimer = undefined
+  }
+
+  const flushWriteAudit = (sessionId: string): void => {
+    const data = pendingWriteAudits.get(sessionId)
+    if (!data) return
+    pendingWriteAudits.delete(sessionId)
+    runSafely(() => history.audit({ sessionId, data }))
+  }
+
+  const flushWriteAudits = (sessionId?: string): void => {
+    if (sessionId !== undefined) {
+      flushWriteAudit(sessionId)
+      if (pendingWriteAudits.size === 0) cancelWriteAuditTimer()
+      return
+    }
+    cancelWriteAuditTimer()
+    for (const id of [...pendingWriteAudits.keys()]) flushWriteAudit(id)
+  }
+
+  const scheduleWriteAudit = (): void => {
+    if (writeAuditTimer !== undefined) return
+    writeAuditTimer = setTimeout(() => {
+      writeAuditTimer = undefined
+      flushWriteAudits()
+    }, SHELL_HISTORY_WRITE_AUDIT_DELAY_MS)
+    writeAuditTimer.unref?.()
+  }
   const unsubscribeHistoryOpened = sessions.onHistoryOpened(session => {
     runSafely(() => {
       openedSessions.set(session.id, session)
@@ -64,9 +105,14 @@ export function registerShellHistoryLifecycle(
     runSafely(() => history.append(event))
   })
   const unsubscribeWrite = sessions.onWrite(event => {
-    runSafely(() => history.audit(event))
+    // Do not synchronously parse and redact every keystroke from the SSH
+    // write call. A per-session buffer preserves ordering, and close() below
+    // flushes it before the durable history record is assembled.
+    pendingWriteAudits.set(event.sessionId, `${pendingWriteAudits.get(event.sessionId) ?? ''}${event.data}`)
+    scheduleWriteAudit()
   })
   const unsubscribeClosed = sessions.onClosed(event => {
+    flushWriteAudits(event.sessionId)
     const endedAt = now().toISOString()
     const association = associations.get(event.sessionId)
     const session = openedSessions.get(event.sessionId)
@@ -103,6 +149,7 @@ export function registerShellHistoryLifecycle(
   const dispose = (() => {
     if (disposed) return
     disposed = true
+    flushWriteAudits()
     unsubscribeHistoryOpened()
     unsubscribeUpdated()
     unsubscribeData()
@@ -111,6 +158,7 @@ export function registerShellHistoryLifecycle(
     unsubscribeChanged()
   }) as ShellHistoryLifecycleRegistration
   dispose.drain = async () => {
+    flushWriteAudits()
     while (pendingCloses.size > 0) await Promise.all([...pendingCloses])
     await history.drain?.()
   }

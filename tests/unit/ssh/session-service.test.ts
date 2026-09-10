@@ -817,6 +817,11 @@ describe('SessionService', () => {
       listDirectory: vi.fn().mockResolvedValue([
         { name: 'report.txt', kind: 'file' as const, size: 4 },
       ]),
+      getWorkingDirectory: vi.fn().mockResolvedValue('/home/ops'),
+      ensureDirectory: vi.fn(),
+      rename: vi.fn(),
+      removeFile: vi.fn(),
+      removeDirectory: vi.fn(),
       uploadFile: vi.fn(),
       downloadFile: vi.fn(),
     }
@@ -835,6 +840,16 @@ describe('SessionService', () => {
     ])
     expect(service.supportsFileTransfer(session.id)).toBe(true)
     expect(fileTransfer.listDirectory).toHaveBeenCalledWith('/tmp')
+    await expect(service.getWorkingDirectory(session.id)).resolves.toBe('/home/ops')
+    await service.ensureDirectory(session.id, '/srv/releases')
+    await service.rename(session.id, '/srv/old.txt', '/srv/new.txt')
+    await service.removeFile(session.id, '/srv/new.txt')
+    await service.removeDirectory(session.id, '/srv/releases')
+    expect(fileTransfer.getWorkingDirectory).toHaveBeenCalledOnce()
+    expect(fileTransfer.ensureDirectory).toHaveBeenCalledWith('/srv/releases')
+    expect(fileTransfer.rename).toHaveBeenCalledWith('/srv/old.txt', '/srv/new.txt')
+    expect(fileTransfer.removeFile).toHaveBeenCalledWith('/srv/new.txt')
+    expect(fileTransfer.removeDirectory).toHaveBeenCalledWith('/srv/releases')
   })
 
   it('keeps SFTP available for AccessClient SSH while leaving Raw bridge sessions unsupported', async () => {

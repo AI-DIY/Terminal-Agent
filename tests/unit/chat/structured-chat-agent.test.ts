@@ -295,6 +295,155 @@ describe('StructuredChatAgent', () => {
     expect(complete).toHaveBeenCalledTimes(3)
   })
 
+  it('requires a selected local Skill to load, run, and feed its result back before a final reply', async () => {
+    const invocationId = crypto.randomUUID()
+    const document = {
+      id: 'query-system-inspection',
+      name: 'query-system-inspection',
+      description: 'Query a local system-inspection source.',
+      content: '---\nname: query-system-inspection\ndescription: Query a local source.\n---\n\n```text\nnode scripts/query-system.js "example-user"\n```',
+    }
+    const complete = vi.fn()
+      // This mirrors the reported failure: a model tries to answer with a
+      // progress message instead of actually invoking the selected Skill.
+      .mockResolvedValueOnce('{"version":1,"reply":"正在查询，请稍候。","plan":null}')
+      .mockResolvedValueOnce(JSON.stringify({ action: {
+        type: 'run_skill_command', skillId: 'query-system-inspection', invocationId,
+        executable: 'node', args: ['scripts/query-system.js', 'e0074566'],
+      } }))
+      .mockResolvedValueOnce('{"version":1,"reply":"查询结果已整理。","plan":null}')
+    const loadSkill = vi.fn().mockResolvedValue(document)
+    const runSkillCommand = vi.fn().mockResolvedValue({
+      id: 'query-system-inspection', invocationId, exitCode: 0, stdout: 'application-a', stderr: '', timedOut: false, cancelled: false,
+    })
+    const events: string[] = []
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      messages: [{ role: 'user', content: 'e0074566 归属哪个应用系统？' }],
+      // A local Skill must not depend on a remote Shell being online.
+      availableHostnames: [],
+      selectedSkillIds: ['query-system-inspection'],
+      skillCatalog: [{ id: 'query-system-inspection', name: 'query-system-inspection', description: document.description, enabled: true }],
+      skillRuntime: { loadSkill, readSkillFile: vi.fn(), runSkillCommand, onEvent: event => events.push(event.stage) },
+    })).resolves.toMatchObject({ reply: '查询结果已整理。', plan: null })
+
+    expect(loadSkill).toHaveBeenCalledWith('query-system-inspection', undefined)
+    expect(runSkillCommand).toHaveBeenCalledWith({
+      id: 'query-system-inspection', invocationId, executable: 'node', args: ['scripts/query-system.js', 'e0074566'],
+    }, undefined)
+    expect(complete).toHaveBeenCalledTimes(3)
+    expect(String(complete.mock.calls[0]?.[0]?.[0]?.content)).toContain('本机技能独立于在线 Shell')
+    expect(String(complete.mock.calls[1]?.[0]?.at(-1)?.content)).toContain('尚未实际执行')
+    expect(String(complete.mock.calls[2]?.[0]?.at(-1)?.content)).toContain('application-a')
+    expect(events).toEqual(['loading', 'organizing', 'completed', 'executing', 'completed'])
+  })
+
+  it('allows a selected Skill to execute a dynamic curl command after loading its fixed example', async () => {
+    const invocationId = crypto.randomUUID()
+    const document = {
+      id: 'query-system-inspection', name: 'query-system-inspection', description: 'Queries an application system.',
+      content: '---\nname: query-system-inspection\ndescription: Queries an application system.\n---\n\nUse curl with the provided employee number.\n\n```text\ncurl.exe -s "https://query.example.test/lookup?employee=e0128483&scope=application"\n```',
+    }
+    const complete = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ action: {
+        type: 'run_skill_command', skillId: 'query-system-inspection', invocationId,
+        command: 'curl.exe -s "https://query.example.test/lookup?employee=e0074566&scope=application"',
+      } }))
+      .mockResolvedValueOnce('{"version":1,"reply":"已查询 e0074566。","plan":null}')
+    const runSkillCommand = vi.fn().mockResolvedValue({
+      id: 'query-system-inspection', invocationId, exitCode: 0, stdout: 'application-a', stderr: '', timedOut: false, cancelled: false,
+    })
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      messages: [{ role: 'user', content: '查询 e0074566 归属的应用系统' }],
+      availableHostnames: [],
+      selectedSkillIds: ['query-system-inspection'],
+      skillCatalog: [{ id: 'query-system-inspection', name: 'query-system-inspection', description: document.description, enabled: true }],
+      skillRuntime: { loadSkill: vi.fn().mockResolvedValue(document), readSkillFile: vi.fn(), runSkillCommand },
+    })).resolves.toMatchObject({ reply: '已查询 e0074566。' })
+
+    expect(runSkillCommand).toHaveBeenCalledTimes(1)
+    expect(runSkillCommand).toHaveBeenCalledWith({
+      id: 'query-system-inspection', invocationId,
+      command: 'curl.exe -s "https://query.example.test/lookup?employee=e0074566&scope=application"',
+    }, undefined)
+    expect(JSON.stringify(complete.mock.calls[1]?.[0])).toContain('employee=e0074566')
+  })
+
+  it('allows an explicitly selected Skill to ask for a genuinely missing input through clarify_skill', async () => {
+    const document = {
+      id: 'requires-ticket', name: 'requires-ticket', description: 'Looks up a ticket.',
+      content: '---\nname: requires-ticket\ndescription: Looks up a ticket.\n---\n\nA ticket number is required before this local lookup can run.',
+    }
+    const complete = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ action: {
+        type: 'clarify_skill', skillId: 'requires-ticket', missingInput: '工单编号',
+      } }))
+      .mockResolvedValueOnce('{"version":1,"reply":"请提供工单编号。","plan":null}')
+    const runSkillCommand = vi.fn()
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      selectedSkillIds: ['requires-ticket'],
+      skillCatalog: [{ id: 'requires-ticket', name: 'requires-ticket', description: document.description, enabled: true }],
+      skillRuntime: { loadSkill: vi.fn().mockResolvedValue(document), readSkillFile: vi.fn(), runSkillCommand },
+    })).resolves.toMatchObject({ reply: '请提供工单编号。' })
+
+    expect(runSkillCommand).not.toHaveBeenCalled()
+    expect(String(complete.mock.calls[1]?.[0]?.at(-1)?.content)).toContain('"missingInput":"工单编号"')
+  })
+
+  it.each([
+    ['missing', [] as Array<{ id: string; name: string; description: string; enabled: boolean }>, '技能不存在或当前不可用'],
+    ['disabled', [{ id: 'unavailable', name: 'unavailable', description: 'Disabled.', enabled: false }], '技能已禁用'],
+  ])('reports an explicitly selected %s Skill without invoking local execution', async (_kind, skillCatalog, reason) => {
+    const loadSkill = vi.fn()
+    const runSkillCommand = vi.fn()
+    let system = ''
+    const complete = vi.fn(async messages => {
+      system = String(messages[1]?.content ?? '')
+      return '{"version":1,"reply":"技能当前不可用。","plan":null}'
+    })
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      selectedSkillIds: ['unavailable'],
+      skillCatalog,
+      skillRuntime: { loadSkill, readSkillFile: vi.fn(), runSkillCommand },
+    })).resolves.toMatchObject({ reply: '技能当前不可用。' })
+
+    expect(loadSkill).not.toHaveBeenCalled()
+    expect(runSkillCommand).not.toHaveBeenCalled()
+    expect(system).toContain(reason)
+  })
+
+  it('feeds selected Skill timeout details into the final reasoning turn', async () => {
+    const invocationId = crypto.randomUUID()
+    const document = {
+      id: 'slow-check', name: 'slow-check', description: 'Runs a local check.',
+      content: '---\nname: slow-check\ndescription: Runs a local check.\n---\n\n```text\nnode scripts/slow-check.js\n```',
+    }
+    const complete = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ action: {
+        type: 'run_skill_command', skillId: 'slow-check', invocationId, executable: 'node', args: ['scripts/slow-check.js'],
+      } }))
+      .mockResolvedValueOnce('{"version":1,"reply":"本机检查超时。","plan":null}')
+    const runSkillCommand = vi.fn().mockResolvedValue({
+      id: 'slow-check', invocationId, exitCode: null, stdout: 'partial', stderr: 'timed out', timedOut: true, cancelled: false,
+    })
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      selectedSkillIds: ['slow-check'],
+      skillCatalog: [{ id: 'slow-check', name: 'slow-check', description: document.description, enabled: true }],
+      skillRuntime: { loadSkill: vi.fn().mockResolvedValue(document), readSkillFile: vi.fn(), runSkillCommand },
+    })).resolves.toMatchObject({ reply: '本机检查超时。' })
+
+    expect(runSkillCommand).toHaveBeenCalledOnce()
+    expect(String(complete.mock.calls[1]?.[0]?.at(-1)?.content)).toContain('"timedOut":true')
+  })
+
   it('rejects an oversized Skill prompt before calling the model', async () => {
     const complete = vi.fn()
     await expect(new StructuredChatAgent({ complete }).run({

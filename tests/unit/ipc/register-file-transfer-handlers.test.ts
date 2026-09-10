@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { registerFileTransferHandlers } from '../../../src/main/ipc/register-file-transfer-handlers'
@@ -78,6 +78,167 @@ describe('registerFileTransferHandlers', () => {
       await rm(homeDirectory, { recursive: true, force: true })
       await rm(selectedDirectory, { recursive: true, force: true })
     }
+  })
+
+  it('keeps local rename/delete inside an authorized directory and rejects traversal-like names', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'terminal-agent-local-mutate-'))
+    const sourcePath = join(directory, 'draft.txt')
+    const nestedDirectory = join(directory, 'obsolete')
+    await writeFile(sourcePath, 'data', 'utf8')
+    await mkdir(nestedDirectory)
+    await writeFile(join(nestedDirectory, 'nested.txt'), 'data', 'utf8')
+    const sender = createSender()
+    registerFileTransferHandlers({ uploadFile: vi.fn(), downloadFile: vi.fn() }, sender as never, { localHomeDirectory: directory })
+
+    try {
+      await expect(handlerFor('file-transfer:rename-local')(trustedEvent(sender), {
+        directory, name: 'draft.txt', newName: 'renamed.txt',
+      })).resolves.toMatchObject({ name: 'draft.txt', newName: 'renamed.txt' })
+      await expect(lstat(join(directory, 'renamed.txt'))).resolves.toMatchObject({ isFile: expect.any(Function) })
+
+      await expect(handlerFor('file-transfer:delete-local')(trustedEvent(sender), {
+        directory, name: 'obsolete', kind: 'directory',
+      })).resolves.toMatchObject({ name: 'obsolete' })
+      await expect(lstat(nestedDirectory)).rejects.toThrow()
+
+      await expect(handlerFor('file-transfer:rename-local')(trustedEvent(sender), {
+        directory, name: 'renamed.txt', newName: '../escape.txt',
+      })).rejects.toThrow('本地重命名请求无效。')
+      await expect(handlerFor('file-transfer:delete-local')(trustedEvent(sender), {
+        directory, name: '..', kind: 'directory',
+      })).rejects.toThrow('本地删除请求无效。')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('renames and recursively deletes only validated remote entries', async () => {
+    const sender = createSender()
+    const listDirectory = vi.fn(async (_sessionId: string, path: string) => {
+      if (path === '/srv') return [
+        { name: 'old.txt', kind: 'file' as const, size: 4 },
+        { name: 'folder', kind: 'directory' as const, size: 0 },
+      ]
+      if (path === '/srv/folder') return [
+        { name: 'child.txt', kind: 'file' as const, size: 4 },
+        { name: 'empty', kind: 'directory' as const, size: 0 },
+      ]
+      if (path === '/srv/folder/empty') return []
+      return []
+    })
+    const rename = vi.fn()
+    const removeFile = vi.fn()
+    const removeDirectory = vi.fn()
+    registerFileTransferHandlers({ listDirectory, rename, removeFile, removeDirectory, uploadFile: vi.fn(), downloadFile: vi.fn() }, sender as never)
+
+    await expect(handlerFor('file-transfer:rename-remote')(trustedEvent(sender), {
+      sessionId: 'session-1', directory: '/srv', name: 'old.txt', newName: 'renamed.txt',
+    })).resolves.toMatchObject({ name: 'old.txt', newName: 'renamed.txt' })
+    expect(rename).toHaveBeenCalledWith('session-1', '/srv/old.txt', '/srv/renamed.txt')
+
+    await expect(handlerFor('file-transfer:delete-remote')(trustedEvent(sender), {
+      sessionId: 'session-1', directory: '/srv', name: 'folder', kind: 'directory',
+    })).resolves.toMatchObject({ name: 'folder' })
+    expect(removeFile).toHaveBeenCalledWith('session-1', '/srv/folder/child.txt')
+    expect(removeDirectory.mock.calls).toEqual([
+      ['session-1', '/srv/folder/empty'],
+      ['session-1', '/srv/folder'],
+    ])
+
+    await expect(handlerFor('file-transfer:delete-remote')(trustedEvent(sender), {
+      sessionId: 'session-1', directory: '/srv/../etc', name: 'passwd', kind: 'file',
+    })).rejects.toThrow('远程删除请求无效。')
+    expect(removeFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('uploads an authorized directory recursively, preserves empty directories, and reports aggregate progress', async () => {
+    const parentDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-directory-upload-parent-'))
+    const localRoot = join(parentDirectory, 'bundle')
+    const nestedDirectory = join(localRoot, 'nested')
+    const emptyDirectory = join(localRoot, 'empty')
+    await mkdir(nestedDirectory, { recursive: true })
+    await mkdir(emptyDirectory)
+    await writeFile(join(localRoot, 'root.txt'), 'root', 'utf8')
+    await writeFile(join(nestedDirectory, 'child.txt'), 'child', 'utf8')
+    const sender = createSender()
+    const ensureDirectory = vi.fn().mockResolvedValue(undefined)
+    const uploadFile = vi.fn(async (_sessionId: string, localPath: string, _remotePath: string, onProgress: (value: { transferredBytes: number; totalBytes?: number }) => void) => {
+      const size = (await lstat(localPath)).size
+      onProgress({ transferredBytes: size, totalBytes: size })
+      return size
+    })
+    registerFileTransferHandlers({ ensureDirectory, uploadFile, downloadFile: vi.fn() }, sender as never, {
+      localHomeDirectory: parentDirectory,
+    })
+
+    try {
+      const result = await handlerFor('file-transfer:upload-directory')(trustedEvent(sender), {
+        sessionId: 'session-1', remotePath: '/incoming', localPath: localRoot,
+        transferId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      })
+      expect(result).toMatchObject({ status: 'completed', fileName: 'bundle', transferredBytes: 9 })
+      expect(ensureDirectory.mock.calls).toEqual([
+        ['session-1', '/incoming/bundle'],
+        ['session-1', '/incoming/bundle/empty'],
+        ['session-1', '/incoming/bundle/nested'],
+      ])
+      expect(uploadFile.mock.calls.map(([, , remotePath]) => remotePath)).toEqual([
+        '/incoming/bundle/nested/child.txt',
+        '/incoming/bundle/root.txt',
+      ])
+      const progress = sender.send.mock.calls.filter(([channel]) => channel === 'file-transfer:progress').map(([, payload]) => payload)
+      expect(progress.at(-1)).toMatchObject({ phase: 'completed', transferredBytes: 9, totalBytes: 9 })
+    } finally {
+      await rm(parentDirectory, { recursive: true, force: true })
+    }
+  })
+
+  it('cancels an active directory upload before the next item starts', async () => {
+    const parentDirectory = await mkdtemp(join(tmpdir(), 'terminal-agent-directory-upload-cancel-'))
+    const localRoot = join(parentDirectory, 'bundle')
+    await mkdir(localRoot)
+    await writeFile(join(localRoot, 'first.txt'), 'first', 'utf8')
+    await writeFile(join(localRoot, 'second.txt'), 'second', 'utf8')
+    const sender = createSender()
+    let startFirstUpload!: () => void
+    const firstUploadStarted = new Promise<void>(resolve => { startFirstUpload = resolve })
+    const uploadFile = vi.fn((_sessionId: string, _localPath: string, _remotePath: string, _onProgress: unknown, signal?: AbortSignal) => new Promise<number>((_resolve, reject) => {
+      startFirstUpload()
+      signal?.addEventListener('abort', () => {
+        const error = new Error('已取消')
+        error.name = 'AbortError'
+        reject(error)
+      }, { once: true })
+    }))
+    registerFileTransferHandlers({ ensureDirectory: vi.fn(), uploadFile, downloadFile: vi.fn() }, sender as never, {
+      localHomeDirectory: parentDirectory,
+    })
+
+    try {
+      const transfer = handlerFor('file-transfer:upload-directory')(trustedEvent(sender), {
+        sessionId: 'session-1', remotePath: '/incoming', localPath: localRoot,
+        transferId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      }) as Promise<unknown>
+      await firstUploadStarted
+      await expect(handlerFor('file-transfer:cancel')(trustedEvent(sender), {
+        sessionId: 'session-1', transferId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      })).resolves.toEqual({ sessionId: 'session-1', transferId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', canceled: true })
+      await expect(transfer).resolves.toMatchObject({ status: 'canceled' })
+      expect(uploadFile).toHaveBeenCalledOnce()
+    } finally {
+      await rm(parentDirectory, { recursive: true, force: true })
+    }
+  })
+
+  it('returns the session-controlled SFTP working directory without a terminal command', async () => {
+    const sender = createSender()
+    const getWorkingDirectory = vi.fn().mockResolvedValue('/home/ops')
+    registerFileTransferHandlers({ getWorkingDirectory, uploadFile: vi.fn(), downloadFile: vi.fn() }, sender as never)
+
+    await expect(handlerFor('file-transfer:working-directory')(trustedEvent(sender), { sessionId: 'session-1' })).resolves.toEqual({
+      sessionId: 'session-1', remotePath: '/home/ops',
+    })
+    expect(getWorkingDirectory).toHaveBeenCalledWith('session-1')
   })
 
   it('uses authorized explicit local paths without opening dialogs or recording their absolute paths', async () => {
@@ -310,10 +471,17 @@ describe('registerFileTransferHandlers', () => {
     dispose()
     expect(removeHandler.mock.calls.map(([channel]) => channel)).toEqual([
       'file-transfer:list',
+      'file-transfer:working-directory',
       'file-transfer:select-local-directory',
       'file-transfer:list-local',
+      'file-transfer:rename-local',
+      'file-transfer:delete-local',
+      'file-transfer:rename-remote',
+      'file-transfer:delete-remote',
       'file-transfer:upload',
       'file-transfer:upload-all',
+      'file-transfer:upload-directory',
+      'file-transfer:cancel',
       'file-transfer:download',
     ])
   })

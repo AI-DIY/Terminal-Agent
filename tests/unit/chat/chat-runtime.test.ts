@@ -643,6 +643,58 @@ describe('chat runtime', () => {
     expect(runStructured).toHaveBeenCalledOnce()
   })
 
+  it('forwards an explicit dynamic Skill and its run-scoped local bridge without requiring an online Shell', async () => {
+    const document = {
+      id: 'query-system-inspection',
+      name: 'query-system-inspection',
+      description: 'Queries a local source.',
+      content: '---\nname: query-system-inspection\ndescription: Queries a local source.\n---',
+    }
+    const loadSkill = vi.fn().mockResolvedValue(document)
+    const runSkillCommand = vi.fn()
+    const getContext = vi.fn(async () => ({
+      messages: [{ role: 'user' as const, content: 'query e0074566' }],
+      hasImages: false,
+      availableHostnames: [],
+      selectedSkillIds: ['query-system-inspection'],
+      skillCatalog: [{ id: 'query-system-inspection', name: 'query-system-inspection', description: document.description, enabled: true }],
+    }))
+    const runStructured = vi.fn(async (_settings: unknown, input: {
+      selectedSkillIds?: string[]
+      skillCatalog?: Array<{ id: string }>
+      skillRuntime?: { loadSkill(id: string): Promise<unknown> }
+      availableHostnames: string[]
+    }) => {
+      expect(input.availableHostnames).toEqual([])
+      expect(input.selectedSkillIds).toEqual(['query-system-inspection'])
+      expect(input.skillCatalog).toEqual([{ id: 'query-system-inspection', name: 'query-system-inspection', description: document.description, enabled: true }])
+      await expect(input.skillRuntime?.loadSkill('query-system-inspection')).resolves.toEqual(document)
+      return { version: 1 as const, reply: 'done', plan: null }
+    })
+    const runtime = new ChatRuntime({
+      appendMessage: vi.fn(async (input: { requestId: string }) => ({ messageId: input.requestId })),
+      getContext,
+      resolveModel: vi.fn(async () => ({ endpoint: 'http://model', model: 'm', contextLimit: 100, apiKey: null })),
+      runStructured,
+      stream: vi.fn(async () => undefined),
+      skillRuntime: { loadSkill, readSkillFile: vi.fn(), runSkillCommand },
+    })
+
+    await runtime.send({
+      chatId: 'c1',
+      runId: '78787878-7878-4787-8787-787878787878',
+      content: 'query e0074566',
+      selectedSkillIds: ['query-system-inspection'],
+    }, () => undefined)
+
+    expect(getContext).toHaveBeenCalledWith('c1', {
+      sshContextLines: undefined,
+      selectedSkillIds: ['query-system-inspection'],
+    })
+    expect(loadSkill).toHaveBeenCalledWith('query-system-inspection', undefined)
+    expect(runSkillCommand).not.toHaveBeenCalled()
+  })
+
   it('uses structured generation for Ollama instead of exposing raw stream deltas', async () => {
     const events: ChatRuntimeEvent[] = []
     const runStructured = vi.fn(async () => ({ version: 1 as const, reply: 'Ollama 完成', plan: null }))

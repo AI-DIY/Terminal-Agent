@@ -9,6 +9,8 @@ export const FILE_TRANSFER_MAX_BYTES = 2 * 1024 * 1024 * 1024
 export const FILE_TRANSFER_MAX_PATH_LENGTH = 4_096
 /** A directory response is metadata-only and is intentionally bounded. */
 export const FILE_TRANSFER_MAX_DIRECTORY_ENTRIES = 10_000
+/** Recursive local uploads and remote removals must remain predictably bounded. */
+export const FILE_TRANSFER_MAX_DIRECTORY_DEPTH = 64
 
 export const fileTransferIdSchema = z.string().uuid()
 export const fileTransferDirectionSchema = z.enum(['upload', 'download'])
@@ -36,6 +38,32 @@ export const fileTransferLocalPathSchema = z.string()
   .max(FILE_TRANSFER_MAX_PATH_LENGTH, '本地路径过长。')
   .refine(value => !containsControlCharacters(value), '本地路径包含不可用字符。')
 export type FileTransferLocalPath = z.infer<typeof fileTransferLocalPathSchema>
+
+/**
+ * Mutating an entry always receives a parent path and one validated component.
+ * This prevents a renderer request from turning a rename/delete into a root
+ * operation or a parent-directory traversal.
+ */
+export const fileTransferEntryNameSchema = z.string()
+  .min(1, '文件名不能为空。')
+  .max(255, '文件名过长。')
+  .refine(isSafeFileTransferEntryName, '文件名无效。')
+export type FileTransferEntryName = z.infer<typeof fileTransferEntryNameSchema>
+
+/** Windows local filesystem names need the additional platform restrictions. */
+export const fileTransferLocalEntryNameSchema = fileTransferEntryNameSchema
+  .refine(value => !/[<>:"/\\|?*]/.test(value), '本地文件名包含不可用字符。')
+  .refine(value => !/[. ]$/.test(value), '本地文件名不能以空格或句点结尾。')
+  .refine(value => !isReservedWindowsFileName(value), '本地文件名不能使用系统保留名称。')
+
+/**
+ * Directory mutations may target the remote SFTP root, but never a path that
+ * includes a parent traversal component.  The actual entry is supplied as a
+ * separate fileTransferEntryNameSchema value above.
+ */
+export const fileTransferRemoteDirectoryPathSchema = fileTransferRemotePathSchema
+  .refine(value => !value.includes('\\'), '远程目录路径不能包含反斜杠。')
+  .refine(value => !value.split('/').includes('..'), '远程目录路径不能包含上级目录。')
 
 const fileTransferRequestBase = {
   sessionId: terminalSessionIdSchema,
@@ -129,11 +157,7 @@ export type FileTransferEntryKind = z.infer<typeof fileTransferEntryKindSchema>
  * into a path traversal when it navigates or starts a transfer.
  */
 export const fileTransferDirectoryEntrySchema = z.object({
-  name: z.string().min(1).max(255)
-    .refine(value => value.trim().length > 0, '远程文件名无效。')
-    .refine(value => value !== '.' && value !== '..', '远程文件名无效。')
-    .refine(value => !/[\\/]/.test(value), '远程文件名无效。')
-    .refine(value => !containsControlCharacters(value), '远程文件名包含不可用字符。'),
+  name: fileTransferEntryNameSchema,
   kind: fileTransferEntryKindSchema,
   // Listing is metadata-only, so a large remote file remains visible even
   // when it exceeds the per-transfer size limit.
@@ -158,6 +182,18 @@ export const fileTransferListResultSchema = z.object({
 }).strict()
 export type FileTransferListResult = z.infer<typeof fileTransferListResultSchema>
 
+/** The SFTP subsystem's own session-controlled working directory. */
+export const fileTransferWorkingDirectoryRequestSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+}).strict()
+export type FileTransferWorkingDirectoryRequest = z.infer<typeof fileTransferWorkingDirectoryRequestSchema>
+
+export const fileTransferWorkingDirectoryResultSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  remotePath: fileTransferRemoteDirectoryPathSchema,
+}).strict()
+export type FileTransferWorkingDirectoryResult = z.infer<typeof fileTransferWorkingDirectoryResultSchema>
+
 /** A native directory-picker result used to authorize local browsing. */
 export const fileTransferLocalDirectorySelectionSchema = z.discriminatedUnion('canceled', [
   z.object({ canceled: z.literal(true) }).strict(),
@@ -180,6 +216,88 @@ export const fileTransferLocalListResultSchema = z.object({
   entries: z.array(fileTransferDirectoryEntrySchema).max(FILE_TRANSFER_MAX_DIRECTORY_ENTRIES),
 }).strict()
 export type FileTransferLocalListResult = z.infer<typeof fileTransferLocalListResultSchema>
+
+export const fileTransferUploadDirectoryRequestSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  /** Existing remote directory into which the local root directory is copied. */
+  remotePath: fileTransferRemoteDirectoryPathSchema,
+  /** Must be within a main-process-picker-authorized local directory root. */
+  localPath: fileTransferLocalPathSchema,
+  transferId: fileTransferIdSchema.optional(),
+}).strict()
+export type FileTransferUploadDirectoryRequest = z.infer<typeof fileTransferUploadDirectoryRequestSchema>
+
+export const fileTransferRemoteRenameRequestSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  directory: fileTransferRemoteDirectoryPathSchema,
+  name: fileTransferEntryNameSchema,
+  newName: fileTransferEntryNameSchema,
+}).strict()
+export type FileTransferRemoteRenameRequest = z.infer<typeof fileTransferRemoteRenameRequestSchema>
+
+export const fileTransferRemoteDeleteRequestSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  directory: fileTransferRemoteDirectoryPathSchema,
+  name: fileTransferEntryNameSchema,
+  kind: z.enum(['file', 'directory', 'symlink', 'other']),
+}).strict()
+export type FileTransferRemoteDeleteRequest = z.infer<typeof fileTransferRemoteDeleteRequestSchema>
+
+export const fileTransferLocalRenameRequestSchema = z.object({
+  directory: fileTransferLocalPathSchema,
+  name: fileTransferLocalEntryNameSchema,
+  newName: fileTransferLocalEntryNameSchema,
+}).strict()
+export type FileTransferLocalRenameRequest = z.infer<typeof fileTransferLocalRenameRequestSchema>
+
+export const fileTransferLocalDeleteRequestSchema = z.object({
+  directory: fileTransferLocalPathSchema,
+  name: fileTransferLocalEntryNameSchema,
+  kind: z.enum(['file', 'directory', 'symlink', 'other']),
+}).strict()
+export type FileTransferLocalDeleteRequest = z.infer<typeof fileTransferLocalDeleteRequestSchema>
+
+export const fileTransferRemoteRenameResultSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  directory: fileTransferRemoteDirectoryPathSchema,
+  name: fileTransferEntryNameSchema,
+  newName: fileTransferEntryNameSchema,
+}).strict()
+export type FileTransferRemoteRenameResult = z.infer<typeof fileTransferRemoteRenameResultSchema>
+
+export const fileTransferRemoteDeleteResultSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  directory: fileTransferRemoteDirectoryPathSchema,
+  name: fileTransferEntryNameSchema,
+}).strict()
+export type FileTransferRemoteDeleteResult = z.infer<typeof fileTransferRemoteDeleteResultSchema>
+
+export const fileTransferLocalRenameResultSchema = z.object({
+  directory: fileTransferLocalPathSchema,
+  name: fileTransferLocalEntryNameSchema,
+  newName: fileTransferLocalEntryNameSchema,
+}).strict()
+export type FileTransferLocalRenameResult = z.infer<typeof fileTransferLocalRenameResultSchema>
+
+export const fileTransferLocalDeleteResultSchema = z.object({
+  directory: fileTransferLocalPathSchema,
+  name: fileTransferLocalEntryNameSchema,
+}).strict()
+export type FileTransferLocalDeleteResult = z.infer<typeof fileTransferLocalDeleteResultSchema>
+
+/** A cancel request is intentionally scoped to one session and transfer id. */
+export const fileTransferCancelRequestSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  transferId: fileTransferIdSchema,
+}).strict()
+export type FileTransferCancelRequest = z.infer<typeof fileTransferCancelRequestSchema>
+
+export const fileTransferCancelResultSchema = z.object({
+  sessionId: terminalSessionIdSchema,
+  transferId: fileTransferIdSchema,
+  canceled: z.boolean(),
+}).strict()
+export type FileTransferCancelResult = z.infer<typeof fileTransferCancelResultSchema>
 
 export const fileTransferProgressSchema = z.object({
   transferId: fileTransferIdSchema,
@@ -206,13 +324,38 @@ export type FileTransferResult = z.infer<typeof fileTransferResultSchema>
 export const fileTransferChannels = Object.freeze({
   upload: 'file-transfer:upload',
   uploadAll: 'file-transfer:upload-all',
+  uploadDirectory: 'file-transfer:upload-directory',
   download: 'file-transfer:download',
   list: 'file-transfer:list',
+  workingDirectory: 'file-transfer:working-directory',
   listLocal: 'file-transfer:list-local',
   selectLocalDirectory: 'file-transfer:select-local-directory',
+  renameRemote: 'file-transfer:rename-remote',
+  deleteRemote: 'file-transfer:delete-remote',
+  renameLocal: 'file-transfer:rename-local',
+  deleteLocal: 'file-transfer:delete-local',
+  cancel: 'file-transfer:cancel',
   progress: 'file-transfer:progress',
 } as const)
 
 function containsControlCharacters(value: string): boolean {
   return [...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+}
+
+function isSafeFileTransferEntryName(value: string): boolean {
+  return value.trim().length > 0
+    && value !== '.'
+    && value !== '..'
+    && !/[\\/]/.test(value)
+    && !containsControlCharacters(value)
+}
+
+function isReservedWindowsFileName(value: string): boolean {
+  const base = value.split('.')[0]?.toUpperCase()
+  return base === 'CON'
+    || base === 'PRN'
+    || base === 'AUX'
+    || base === 'NUL'
+    || /^COM[1-9]$/.test(base ?? '')
+    || /^LPT[1-9]$/.test(base ?? '')
 }

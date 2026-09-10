@@ -40,15 +40,24 @@ export type SshDirectoryEntry = {
 export type SshFileTransfer = {
   /** Optional for older/custom transports that only implement file copies. */
   listDirectory?(remotePath: string): Promise<readonly SshDirectoryEntry[]>
+  /** The SFTP subsystem's own current directory; never inferred from PTY output. */
+  getWorkingDirectory?(): Promise<string>
+  /** Idempotently create one remote directory, including an already-existing target. */
+  ensureDirectory?(remotePath: string): Promise<void>
+  rename?(fromPath: string, toPath: string): Promise<void>
+  removeFile?(remotePath: string): Promise<void>
+  removeDirectory?(remotePath: string): Promise<void>
   uploadFile(
     localPath: string,
     remotePath: string,
     onProgress?: (progress: SshFileTransferProgress) => void,
+    signal?: AbortSignal,
   ): Promise<number>
   downloadFile(
     remotePath: string,
     localPath: string,
     onProgress?: (progress: SshFileTransferProgress) => void,
+    signal?: AbortSignal,
   ): Promise<number>
 }
 

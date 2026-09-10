@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { registerShellHistoryLifecycle } from '../../../src/main/shell-history/register-shell-history-lifecycle'
+import { registerShellHistoryLifecycle, SHELL_HISTORY_WRITE_AUDIT_DELAY_MS } from '../../../src/main/shell-history/register-shell-history-lifecycle'
 import { ShellHistoryService } from '../../../src/main/shell-history/shell-history-service'
 import { ShellHistoryRepository } from '../../../src/main/shell-history/shell-history-repository'
 import { ChatRepository } from '../../../src/main/chat/chat-repository'
@@ -45,8 +45,7 @@ describe('Shell history lifecycle', () => {
       connectionType: 'direct-ssh',
     })
     expect(history.append).toHaveBeenCalledWith({ sessionId: 'session-a', data: 'ready\r\n' })
-    expect(history.audit).toHaveBeenNthCalledWith(1, { sessionId: 'session-a', data: 'whoami' })
-    expect(history.audit).toHaveBeenNthCalledWith(2, { sessionId: 'session-a', data: '\r' })
+    expect(history.audit).toHaveBeenCalledWith({ sessionId: 'session-a', data: 'whoami\r' })
     expect(history.associate).toHaveBeenCalledWith({ sessionId: 'session-a', chatId: 'chat-a', historyId: 'history-a' })
     expect(history.close).toHaveBeenCalledWith({ sessionId: 'session-a', hostname: 'web-01', endedAt: '2026-08-16T08:02:00.000Z' })
 
@@ -165,6 +164,29 @@ describe('Shell history lifecycle', () => {
     closing.resolve()
     await drained
     expect(finished).toBe(true)
+  })
+
+  it('batches high-frequency terminal writes and flushes their exact order before the delay expires', () => {
+    vi.useFakeTimers()
+    try {
+      const events = createEventSources()
+      const history = {
+        attach: vi.fn(), append: vi.fn(), audit: vi.fn(), associate: vi.fn(), close: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(),
+      }
+      const dispose = registerShellHistoryLifecycle(events.sessions, events.chats, history)
+
+      events.write?.({ sessionId: 'session-batched', data: 'ec' })
+      events.write?.({ sessionId: 'session-batched', data: 'ho' })
+      events.write?.({ sessionId: 'session-batched', data: ' ok\r' })
+
+      expect(history.audit).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(SHELL_HISTORY_WRITE_AUDIT_DELAY_MS)
+      expect(history.audit).toHaveBeenCalledTimes(1)
+      expect(history.audit).toHaveBeenCalledWith({ sessionId: 'session-batched', data: 'echo ok\r' })
+      dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('also drains transfer-log writes queued after the close record', async () => {

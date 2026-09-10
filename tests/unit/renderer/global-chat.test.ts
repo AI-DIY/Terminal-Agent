@@ -185,6 +185,15 @@ describe('global chat store', () => {
     expect(compactOverride).toContain('.context-meter-details .context-host-setting-head,.context-meter-details .context-host-option,.context-meter-details .context-host-empty,.context-meter-details .context-error { font-size: 9px; }')
   })
 
+  it('coalesces streaming transcript auto-scroll work into an animation frame', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+
+    expect(panel).toContain('let scrollFrame: number | undefined')
+    expect(panel).toContain('let scrollPending = false')
+    expect(panel).toContain('window.requestAnimationFrame(update)')
+    expect(panel).toContain('window.cancelAnimationFrame(scrollFrame)')
+  })
+
   it('blocks sends and coalesces duplicate compaction requests while preserving the draft', async () => {
     const compactResponse = deferred<ChatWorkspaceSnapshot>()
     const transport = {

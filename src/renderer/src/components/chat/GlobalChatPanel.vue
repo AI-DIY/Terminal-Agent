@@ -66,6 +66,9 @@ const skillQuery = ref('')
 const skillPickerActiveIndex = ref(0)
 let assertiveErrorId = 0
 let assistantResponseId = 0
+let scrollFrame: number | undefined
+let scrollPending = false
+let scrollDisposed = false
 function announceAssertiveError(content: string): void {
   assertiveError.value = { id: ++assertiveErrorId, content }
 }
@@ -431,12 +434,29 @@ function isMessagesAtBottom(element: HTMLElement, threshold = 24): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold
 }
 function scrollMessagesToBottom(): void {
+  if (!followMessages.value || scrollPending || scrollDisposed) return
+  scrollPending = true
   void nextTick(() => {
-    const element = messagesElement.value
-    if (!element || !followMessages.value) return
-    suppressMessagesScroll = true
-    element.scrollTop = element.scrollHeight
-    suppressMessagesScroll = false
+    if (scrollDisposed) {
+      scrollPending = false
+      return
+    }
+    const update = (): void => {
+      scrollFrame = undefined
+      scrollPending = false
+      const element = messagesElement.value
+      if (!element || !followMessages.value) return
+      suppressMessagesScroll = true
+      element.scrollTop = element.scrollHeight
+      suppressMessagesScroll = false
+    }
+    // Streaming replies can update a message many times in one visual frame.
+    // Coalescing the layout read/write keeps the composer responsive.
+    if (typeof window.requestAnimationFrame === 'function') {
+      scrollFrame = window.requestAnimationFrame(update)
+    } else {
+      update()
+    }
   })
 }
 function onMessagesScroll(): void {
@@ -563,6 +583,7 @@ async function executePlan(messageId: string): Promise<void> {
   }
 }
 onMounted(() => {
+  scrollDisposed = false
   followMessages.value = true
   scrollMessagesToBottom()
   void window.terminalAgent.settings.getModel()
@@ -570,7 +591,16 @@ onMounted(() => {
     .catch(() => undefined)
   void dynamicSkills.hydrate().catch(() => undefined)
 })
-onBeforeUnmount(() => { disposeErrorAnnouncement(); disposeAssistantAnnouncement(); store.dispose(); dynamicSkills.dispose() })
+onBeforeUnmount(() => {
+  scrollDisposed = true
+  if (scrollFrame !== undefined) window.cancelAnimationFrame(scrollFrame)
+  scrollFrame = undefined
+  scrollPending = false
+  disposeErrorAnnouncement()
+  disposeAssistantAnnouncement()
+  store.dispose()
+  dynamicSkills.dispose()
+})
 </script>
 
 <template>
