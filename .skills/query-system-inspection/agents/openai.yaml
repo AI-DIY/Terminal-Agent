@@ -1,4 +1,0 @@
-interface:
-  display_name: "应用系统巡检查询"
-  short_description: "按工号查询所属应用系统，获取并解读自动巡检日报、周报和月报"
-  default_prompt: "使用 $query-system-inspection 查询我所属应用系统的自动巡检报告。"
