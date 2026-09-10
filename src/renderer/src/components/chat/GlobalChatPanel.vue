@@ -146,6 +146,10 @@ const standaloneError = computed(() => {
 const actionErrors = reactive<Record<string, string>>({})
 const actionError = computed(() => chatId.value ? actionErrors[chatId.value] ?? '' : '')
 const stepDrafts = reactive<Record<string, string>>({})
+// Keep the transcript memo precise: plan-editor changes and connection
+// busy-state updates must still patch their controls, while ordinary composer
+// keystrokes continue to skip unchanged transcript cards.
+const stepDraftRevision = ref(0)
 const contextUsed = computed(() => estimateChatMessages(messages.value))
 const contextPercent = computed(() => Math.min(100, Math.round((contextUsed.value / modelContextLimit.value) * 100)))
 const sshContextLines = computed(() => store.state.sshContextLines)
@@ -519,7 +523,10 @@ function planTargetLabel(target: string): string {
   return planTargetLabelForShells(target, shells)
 }
 function stepDraftKey(messageId: string, stepId: string): string { return `${messageId}:${stepId}` }
-function setStepDraft(messageId: string, stepId: string, event: Event): void { stepDrafts[stepDraftKey(messageId, stepId)] = (event.target as HTMLTextAreaElement).value }
+function setStepDraft(messageId: string, stepId: string, event: Event): void {
+  stepDrafts[stepDraftKey(messageId, stepId)] = (event.target as HTMLTextAreaElement).value
+  stepDraftRevision.value += 1
+}
 function stepDraftValue(messageId: string, stepId: string, step: { finalCommand?: string; originalCommand: string }): string {
   return stepDrafts[stepDraftKey(messageId, stepId)] ?? stepCommand(step)
 }
@@ -546,6 +553,7 @@ async function removeStep(messageId: string, stepId: string): Promise<void> {
   try {
     await store.removePlanStep(actionChatId, messageId, stepId)
     delete stepDrafts[stepDraftKey(messageId, stepId)]
+    stepDraftRevision.value += 1
   } catch (error) {
     reportActionError(actionChatId, error, '计划更新失败')
   }
@@ -638,7 +646,7 @@ onBeforeUnmount(() => {
     </header>
 
     <div ref="messagesElement" class="messages" @scroll="onMessagesScroll">
-      <article v-for="message in messages" :key="message.id" :class="['message', message.role, { audit: message.messageType === 'execution_audit', 'execution-card': message.messageType === 'execution_audit' }]">
+      <article v-for="message in messages" v-memo="[message.id, message.role, message.content, message.state, message.retryable, message.messageType, message.executionPlan, props.chat?.shells, props.sessionBusy, stepDraftRevision]" :key="message.id" :class="['message', message.role, { audit: message.messageType === 'execution_audit', 'execution-card': message.messageType === 'execution_audit' }]">
         <span class="message-avatar" aria-hidden="true"><UserRound v-if="message.role === 'user'" :size="14" /><Bot v-else :size="14" /></span>
         <div class="message-content message-bubble">
           <div class="message-meta"><strong>{{ message.messageType === 'execution_audit' ? '执行审计' : message.role === 'user' ? '你' : 'Terminal-Agent' }}</strong><span v-if="message.state === 'streaming'">生成中</span><span v-else-if="message.state === 'error'">未完成</span></div>

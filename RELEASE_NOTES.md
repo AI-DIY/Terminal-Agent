@@ -1,23 +1,23 @@
-# Terminal-Agent v3.3.4
+# Terminal-Agent v3.3.5
 
 Release date: 2026-09-10
 
 ## 开源 TA 修改意见微调
 
-- 文件传输补充本地和远程文件/目录的重命名、删除、目录递归上传与当前 SSH 工作目录跳转；传输记录区域支持上下拖拽调整空间。
-- SSH 输入历史把高频按键审计合并为短延迟批处理，关闭连接和应用退出前仍会强制写入；AI 流式回复的自动滚动按动画帧合并，降低输入和悬浮交互时的布局压力。
-- DevTools 与 Node Inspector 入口启用不含参数、响应正文、路径、密钥或错误原文的 IPC 时序日志，并新增调试与性能排查说明。
-- 明确选择 Dynamic Skill 时，运行时会重新加载完整说明并要求完成本机执行或明确补充必要输入；命令结果、失败、超时和取消结果都会回灌同一轮 AI 推理。
+- 保持原有工作台布局和交互，合并 SSH 终端输入、AI 输入框和流式渲染的高频更新，减少逐字符 IPC 与整页重渲染造成的键入延迟。
+- 工作台“技能”“设置”“DevTools”“Node Inspector”入口的悬浮反馈改为即时呈现，并补充前端、IPC、主进程、SSH、AI 和性能排查的《调试指南手册》。
+- 恢复并完善 `query-system-inspection` 标准 Skill，随附无第三方依赖的 Node.js 查询脚本；显式选择后会完成加载、命令执行、真实结果回灌和最终回答，失败、超时、取消均如实反馈。
+- 保留动态 Skill 的目录发现、启停状态、路径隔离、输出上限、认证门控和安装版 EXE 同级 `.skills` 目录行为。
 
 ## Windows 发布包
 
-- `Terminal-Agent-Setup-3.3.4.exe`
+- `Terminal-Agent-Setup-3.3.5.exe`
 - `putty.exe`
 - `快速安装脚本.cmd`
 - `快速安装手册.md`
 - `快速安装手册.pdf`
-- `Terminal-Agent-Quick-Install-3.3.4.zip`
-- `Terminal-Agent-Uninstall-Cleanup-3.3.4.zip`
+- `Terminal-Agent-Quick-Install-3.3.5.zip`
+- `Terminal-Agent-Uninstall-Cleanup-3.3.5.zip`
 
 ---
 

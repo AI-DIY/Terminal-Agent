@@ -194,6 +194,12 @@ describe('global chat store', () => {
     expect(panel).toContain('window.cancelAnimationFrame(scrollFrame)')
   })
 
+  it('memoizes unchanged transcript cards while the composer is receiving input', () => {
+    const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
+
+    expect(panel).toContain('v-memo="[message.id, message.role, message.content, message.state, message.retryable, message.messageType, message.executionPlan, props.chat?.shells, props.sessionBusy, stepDraftRevision]"')
+  })
+
   it('blocks sends and coalesces duplicate compaction requests while preserving the draft', async () => {
     const compactResponse = deferred<ChatWorkspaceSnapshot>()
     const transport = {

@@ -20,6 +20,23 @@ export function createFrameBatcher<T>(
         flush(pending)
       })
     },
+    /**
+     * Flush the current queue synchronously.
+     *
+     * Most callers can let the next animation frame deliver the batch.  Input
+     * producers also need a deterministic teardown path, though: dropping a
+     * queued character when a terminal pane is unmounted is observable and
+     * can leave the remote shell in a different state from xterm.  Keep this
+     * separate from `dispose()`, which intentionally discards pending data
+     * for event listeners that are being torn down.
+     */
+    flush(): void {
+      if (frameId !== undefined) cancel(frameId)
+      frameId = undefined
+      const pending = queued
+      queued = []
+      if (pending.length > 0) flush(pending)
+    },
     dispose(): void {
       if (frameId !== undefined) cancel(frameId)
       frameId = undefined

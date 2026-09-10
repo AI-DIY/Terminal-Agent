@@ -189,6 +189,19 @@ describe('ShellCanvas Task 7 history actions', () => {
     expect(terminal).toContain('window.cancelAnimationFrame(initialBufferFrame)')
   })
 
+  it('batches terminal input IPC per frame and flushes pending bytes on teardown', () => {
+    const terminal = readFileSync(new URL('../../../src/renderer/src/components/TerminalPane.vue', import.meta.url), 'utf8')
+    const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
+
+    expect(terminal).toContain('createFrameBatcher<string>')
+    expect(terminal).toContain('inputBatcher?.enqueue(data)')
+    expect(terminal).toContain('if (containsTerminalControl(data)) inputBatcher?.flush()')
+    expect(terminal).toContain('inputBatcher?.flush()')
+    expect(terminal).toContain("const data = items.join('')")
+    expect(terminal).not.toContain("terminal.onData(data => { void window.terminalAgent.sessions.write(props.session.id, data) })")
+    expect(canvas).toContain('v-memo="[orderedCurrentSessions, activeSessionId, gridColumns, gridStyle')
+  })
+
   it('allows reordering terminal cards from their title bars', () => {
     const canvas = readFileSync(new URL('../../../src/renderer/src/components/workbench/ShellCanvas.vue', import.meta.url), 'utf8')
     expect(canvas).toContain('const draggingSessionId = ref<string | null>(null)')

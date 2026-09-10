@@ -612,6 +612,7 @@ watch(
     <div class="canvas-content">
       <section
         v-show="currentSessions.length > 0"
+        v-memo="[orderedCurrentSessions, activeSessionId, gridColumns, gridStyle, layout.state.rowHeightPercent, layout.state.fontSize, fileTransferPanelSessionIds, fileTransferVisibleSessionIds, fileTransferBusySessionIds, fileTransferPanelHeights, draggingSessionId, dragOverSessionId]"
         class="terminal-grid"
         aria-label="可见终端面板"
         :data-columns="gridColumns"

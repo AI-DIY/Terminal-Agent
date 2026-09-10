@@ -29,4 +29,18 @@ describe('frame data batcher', () => {
 
     expect(cancel).toHaveBeenCalledWith(42)
   })
+
+  it('flushes queued events synchronously without losing order', () => {
+    const cancel = vi.fn()
+    const flush = vi.fn()
+    const batcher = createFrameBatcher(flush, () => 42, cancel)
+
+    batcher.enqueue('first')
+    batcher.enqueue('second')
+    batcher.flush()
+
+    expect(cancel).toHaveBeenCalledWith(42)
+    expect(flush).toHaveBeenCalledOnce()
+    expect(flush).toHaveBeenCalledWith(['first', 'second'])
+  })
 })

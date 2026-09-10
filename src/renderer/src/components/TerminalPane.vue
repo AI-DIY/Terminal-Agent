@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { MAX_SESSION_BUFFER_CHARS, type SessionView } from '../stores/sessions'
 import { getLayoutPreferencesStore } from '../stores/layout-preferences'
+import { createFrameBatcher } from '../stores/data-batcher'
 import type { ShellFontSize } from '../../../shared/contracts'
 
 const props = defineProps<{ session: SessionView; active: boolean; fontSize: ShellFontSize }>()
@@ -21,6 +22,7 @@ let fit: FitAddon | undefined
 let observer: ResizeObserver | undefined
 let unsubscribe: (() => void) | undefined
 let inputSubscription: { dispose(): void } | undefined
+let inputBatcher: ReturnType<typeof createFrameBatcher<string>> | undefined
 let selectionSubscription: { dispose(): void } | undefined
 let initialBufferFrame: number | undefined
 let themeFrame: number | undefined
@@ -163,6 +165,30 @@ function scheduleTerminalTheme(): void {
   })
 }
 
+/**
+ * xterm emits one `onData` callback for most key presses.  Sending each
+ * callback over Electron IPC makes the renderer and main process compete with
+ * the remote PTY for every character, which is especially visible while
+ * typing quickly.  Preserve the exact callback order but send one payload per
+ * animation frame; a paste is already one callback and remains one payload.
+ */
+function flushTerminalInput(items: string[]): void {
+  const data = items.join('')
+  if (!data) return
+  void window.terminalAgent.sessions.write(props.session.id, data).catch(() => undefined)
+}
+
+function containsTerminalControl(data: string): boolean {
+  // Keep Enter, arrows, function keys, and Ctrl/Alt editing commands
+  // responsive. Printable runs remain frame-batched, while a control byte
+  // flushes the preceding printable run in the same order.
+  for (let index = 0; index < data.length; index += 1) {
+    const code = data.charCodeAt(index)
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
 onMounted(() => {
   terminal = new Terminal({
     convertEol: true,
@@ -175,7 +201,15 @@ onMounted(() => {
   terminal.loadAddon(fit)
   terminal.open(terminalElement.value!)
   syncTerminalBuffer()
-  inputSubscription = terminal.onData(data => { void window.terminalAgent.sessions.write(props.session.id, data) })
+  inputBatcher = createFrameBatcher<string>(
+    flushTerminalInput,
+    callback => window.requestAnimationFrame(callback),
+    frameId => window.cancelAnimationFrame(frameId),
+  )
+  inputSubscription = terminal.onData(data => {
+    inputBatcher?.enqueue(data)
+    if (containsTerminalControl(data)) inputBatcher?.flush()
+  })
   selectionSubscription = terminal.onSelectionChange(() => { hasSelection.value = terminal?.hasSelection() ?? false })
   unsubscribe = window.terminalAgent.sessions.onData(event => {
     if (event.sessionId === props.session.id) writeTerminalData(event.data)
@@ -198,6 +232,12 @@ onBeforeUnmount(() => {
   initialBufferFrame = undefined
   if (themeFrame !== undefined) window.cancelAnimationFrame(themeFrame)
   themeFrame = undefined
+  // Do not lose the final characters when a pane is removed while an input
+  // frame is pending (for example when closing a Shell immediately after
+  // typing).  `flush()` cancels the frame and keeps the original order.
+  inputBatcher?.flush()
+  inputBatcher?.dispose()
+  inputBatcher = undefined
   unsubscribe?.()
   inputSubscription?.dispose()
   selectionSubscription?.dispose()
