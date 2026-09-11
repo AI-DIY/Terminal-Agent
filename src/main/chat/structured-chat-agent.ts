@@ -342,15 +342,24 @@ export class StructuredChatAgent {
           const notExecuted = [...pendingSelectedSkills]
           return assistantPlanOutputSchema.parse({
             version: 1,
-            reply: `已显式选择的技能 ${notExecuted.join('、')} 未返回本机执行动作或缺少输入说明，因此未执行。请重试或补充技能所需信息。`,
+            reply: `已显式选择的技能 ${notExecuted.join('、')} 尚未执行：本轮模型没有给出可执行的本机命令，也没有说明缺少的输入。请重试，或在消息中补充该技能需要的参数（例如工号、日期、目标编码）。`,
             plan: null,
           })
         }
+        const pendingIds = [...pendingSelectedSkills]
         messages = [...messages,
           { role: 'assistant', content: lastRaw },
           {
             role: 'user',
-            content: `该输出不能作为最终答复：显式选择的技能 ${JSON.stringify([...pendingSelectedSkills])} 尚未实际执行。请先仅返回一个 run_skill_command；只有在技能说明要求而用户消息确实缺少必要值时，才可返回 clarify_skill 并写明 missingInput。本机技能独立于在线 Shell，不能以“没有在线 Shell”、等待、只加载或普通 reply 跳过。`,
+            // A concrete skeleton removes the main source of protocol drift:
+            // weaker models understand the required JSON far more reliably
+            // when they only have to fill in values instead of inventing the
+            // envelope from a prose instruction.
+            content: `该输出不能作为最终答复：显式选择的技能 ${JSON.stringify(pendingIds)} 尚未实际执行。请只返回一个 JSON 对象，不要 Markdown 围栏和解释文字，并严格使用下列形状之一：
+1) 执行命令：{"action":{"type":"run_skill_command","skillId":"${pendingIds[0] ?? 'skill-id'}","invocationId":"<新的 UUID>","command":"<完整命令行>"}}
+2) 需要显式程序与参数时：{"action":{"type":"run_skill_command","skillId":"${pendingIds[0] ?? 'skill-id'}","invocationId":"<新的 UUID>","executable":"node","args":["scripts/xxx.js","参数"]}}
+3) 仅当用户消息确实缺少技能必需的输入时：{"action":{"type":"clarify_skill","skillId":"${pendingIds[0] ?? 'skill-id'}","missingInput":"缺少的值"}}
+command 与 executable 同时出现无效；skillId 必须逐字使用上述技能 ID；参数请使用用户消息中已有的值。本机技能独立于在线 Shell，不能以“没有在线 Shell”、等待、只加载或普通 reply 跳过。`,
           },
         ]
         continue
@@ -515,15 +524,140 @@ function systemMessage(
 }
 
 function parseSkillAction(raw: string): SkillAction | undefined {
-  try {
-    const value = JSON.parse(raw) as unknown
-    if (!value || typeof value !== 'object') return undefined
-    const candidate = 'action' in value ? (value as { action?: unknown }).action : value
-    const parsed = skillActionSchema.safeParse(candidate)
-    return parsed.success ? parsed.data : undefined
-  } catch {
-    return undefined
+  const value = extractJsonValue(raw)
+  if (!isRecord(value)) return undefined
+  const envelope = isRecord(value.action)
+    ? value.action
+    : isRecord(value.skillAction)
+      ? value.skillAction
+      : isRecord(value.skill_action)
+        ? value.skill_action
+        : isRecord(value.tool_call)
+          ? value.tool_call
+          : value
+  const parsed = skillActionSchema.safeParse(normalizeSkillAction(envelope))
+  return parsed.success ? parsed.data : undefined
+}
+
+/**
+ * Read the first JSON object in a model turn.  Providers and local models
+ * routinely wrap the required object in a Markdown fence or add a sentence of
+ * prose around it; the plan protocol only inspects exact JSON, so accepting
+ * these harmless shapes here keeps an internal Skill action usable.
+ */
+function extractJsonValue(raw: string): unknown {
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+  const candidates: string[] = []
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed)
+  if (fenced?.[1]?.trim()) candidates.push(fenced[1].trim())
+  candidates.push(trimmed)
+  const start = trimmed.indexOf('{')
+  const end = trimmed.lastIndexOf('}')
+  if (start >= 0 && end > start) candidates.push(trimmed.slice(start, end + 1))
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate) as unknown
+    } catch {
+      // Try the next candidate shape.
+    }
   }
+  return undefined
+}
+
+const SKILL_ACTION_ALIASES: Record<string, SkillAction['type']> = {
+  load_skill: 'load_skill',
+  loadskill: 'load_skill',
+  load: 'load_skill',
+  read_skill_file: 'read_skill_file',
+  readskillfile: 'read_skill_file',
+  read_file: 'read_skill_file',
+  read: 'read_skill_file',
+  clarify_skill: 'clarify_skill',
+  clarify: 'clarify_skill',
+  run_skill_command: 'run_skill_command',
+  runskillcommand: 'run_skill_command',
+  run_command: 'run_skill_command',
+  run: 'run_skill_command',
+  execute: 'run_skill_command',
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Coerce the small deviations seen from weaker models into the strict action
+ * contract: alternative key names, a missing invocation id, `command` given as
+ * an argv array, or both `command` and `executable` filled in at once.  Every
+ * safety constraint (single action, allow-listed Skill, contained paths,
+ * bounded timeout) is still enforced by `skillActionSchema` afterwards.
+ */
+function normalizeSkillAction(value: Record<string, unknown>): unknown {
+  const rawType = typeof value.type === 'string' ? value.type : typeof value.action === 'string' ? value.action : typeof value.kind === 'string' ? value.kind : undefined
+  const type = rawType ? SKILL_ACTION_ALIASES[rawType.trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_')] : undefined
+  if (!type) return value
+  const skillId = firstText(value.skillId, value.skill_id, value.skill, value.id, value.name)
+  if (type === 'load_skill') return { type, ...(skillId ? { skillId } : {}) }
+  if (type === 'read_skill_file') {
+    return {
+      type,
+      ...(skillId ? { skillId } : {}),
+      path: firstText(value.path, value.file, value.filePath, value.file_path, value.filename) ?? '',
+    }
+  }
+  if (type === 'clarify_skill') {
+    return {
+      type,
+      ...(skillId ? { skillId } : {}),
+      missingInput: firstText(value.missingInput, value.missing_input, value.missing, value.input, value.question, value.prompt) ?? '',
+    }
+  }
+
+  const normalized: Record<string, unknown> = { type, ...(skillId ? { skillId } : {}) }
+  const invocationId = firstText(value.invocationId, value.invocation_id, value.runId, value.id)
+  normalized.invocationId = invocationId && UUID_PATTERN.test(invocationId) ? invocationId : randomUUID()
+
+  const command = value.command
+  const executable = firstText(value.executable, value.program, value.binary, value.interpreter)
+  if (typeof command === 'string' && command.trim()) {
+    // A model that supplies both forms almost always repeats the same call;
+    // the inline command preserves its intent exactly.
+    normalized.command = command.trim()
+  } else if (Array.isArray(command) && command.length > 0) {
+    const parts = command.filter((part): part is string => typeof part === 'string' && part.length > 0)
+    if (parts.length > 0) {
+      normalized.executable = parts[0]!
+      normalized.args = parts.slice(1)
+    }
+  } else if (executable) {
+    normalized.executable = executable
+    normalized.args = normalizeSkillArgs(value.args ?? value.arguments ?? value.argv)
+  }
+  const timeoutMs = typeof value.timeoutMs === 'number' ? value.timeoutMs : typeof value.timeout === 'number' ? value.timeout : undefined
+  if (timeoutMs !== undefined) normalized.timeoutMs = timeoutMs
+  return normalized
+}
+
+function normalizeSkillArgs(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter(part => typeof part === 'string' || typeof part === 'number').map(String)
+  if (typeof value === 'string' && value.trim()) return splitSkillArgs(value)
+  return []
+}
+
+/** Minimal quoted-argument split for a model that passes `args` as one string. */
+function splitSkillArgs(value: string): string[] {
+  const parts = value.match(/"[^"]*"|'[^']*'|\S+/g) ?? []
+  return parts.map(part => part.replace(/^(['"])(.*)\1$/, '$2'))
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function actionInvocationId(action: SkillAction): string {

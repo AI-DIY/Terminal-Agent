@@ -153,7 +153,7 @@ async function mainWindowBounds(app: ElectronApplication): Promise<{ x: number; 
   ))
 }
 
-async function ensureLegacyWorkbench(page: Page): Promise<void> {
+async function enterWorkbench(page: Page): Promise<void> {
   await expect(page.locator('main')).toBeVisible()
   const ssoTitle = page.getByRole('heading', { name: '单点登录', exact: true })
   if (!(await ssoTitle.isVisible().catch(() => false))) {
@@ -164,6 +164,20 @@ async function ensureLegacyWorkbench(page: Page): Promise<void> {
     const gate = page.getByLabel('启用单点登录门控')
     if (await gate.isChecked()) await gate.uncheck()
     await page.getByRole('button', { name: '保存并进入工作台', exact: true }).click()
+  }
+}
+
+async function ensureLegacyWorkbench(page: Page): Promise<void> {
+  await enterWorkbench(page)
+  // 修改意见(1) makes a fresh install open with both rails collapsed.  The
+  // layout assertions in this suite use the expanded baseline, so expand the
+  // rails here; the collapse/restore behaviour has its own coverage below.
+  // Wait for the workbench first: the restore buttons only exist after the
+  // shell has finished its initial layout.
+  await waitForWorkbenchReady(page)
+  for (const name of ['展开任务空间', '展开 AI工作区']) {
+    const expand = page.getByRole('button', { name, exact: true })
+    if (await expand.isVisible().catch(() => false)) await expand.click()
   }
 }
 
@@ -1574,6 +1588,33 @@ test('renders two real SSH sessions in separate terminal panes with isolated out
   }
 })
 
+test('opens a fresh install with both rails collapsed', async () => {
+  // The shared launchApp fixture expands the rails for its layout baseline, so
+  // this test starts its own untouched user-data directory.
+  const directories = await createSsoE2eDirectories('terminal-agent-e2e-')
+  let app: ElectronApplication | undefined
+  try {
+    app = await electron.launch({
+      args: [`--user-data-dir=${directories.userDataDir}`, join(process.cwd(), 'out/main/main.js')],
+      env: ssoE2eEnvironment(directories.ssoHomeDir),
+    })
+    const page = await app.firstWindow()
+    await enterWorkbench(page)
+    await waitForWorkbenchReady(page)
+    // 修改意见(1): a fresh install starts collapsed; the layout test covers
+    // restoring the operator's own choice on later launches.
+    await expect(page.getByRole('button', { name: '展开任务空间', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '展开 AI工作区', exact: true })).toBeVisible()
+    await expect.poll(() => page.evaluate(() => window.terminalAgent.settings.appearance.get())).toMatchObject({
+      leftCollapsed: true,
+      rightCollapsed: true,
+    })
+  } finally {
+    await app?.close()
+    await removeSsoE2eDirectories(directories)
+  }
+})
+
 test('temporarily hides host-memory settings while retaining the compatibility API', async ({ launchApp }) => {
   let app: ElectronApplication | undefined
   try {
@@ -1584,6 +1625,18 @@ test('temporarily hides host-memory settings while retaining the compatibility A
     await expect(page.getByRole('heading', { name: '本地主机记忆', exact: true })).toHaveCount(0)
     const memorySettings = await page.evaluate(() => window.terminalAgent.settings.memory.get())
     expect(memorySettings).toMatchObject({ enabled: false })
+  } finally { await app?.close() }
+})
+
+test('temporarily hides the upgrade entry while retaining the upgrade IPC', async ({ launchApp }) => {
+  let app: ElectronApplication | undefined
+  try {
+    app = (await launchApp()).app
+    const page = await app.firstWindow()
+    await expect(page.getByRole('button', { name: '升级', exact: true })).toHaveCount(0)
+    // The rest of the header is untouched, so only the entry itself is hidden.
+    await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+    expect(await page.evaluate(() => typeof window.terminalAgent.updater.check)).toBe('function')
   } finally { await app?.close() }
 })
 

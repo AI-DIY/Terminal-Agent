@@ -43,13 +43,19 @@ const state = vi.hoisted(() => ({
 vi.mock('electron', () => {
   class BrowserWindow {
     static getAllWindows() { return state.windows }
-    private readonly contents = { send: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
+    private readonly contents = { send: vi.fn(), on: vi.fn(), removeListener: vi.fn(), setZoomFactor: vi.fn(), getZoomFactor: vi.fn(() => 1) }
     private readonly listeners = new Map<string, Array<() => void>>()
     loadURL = vi.fn().mockResolvedValue(undefined)
     loadFile = vi.fn().mockResolvedValue(undefined)
     private destroyed = false
     isDestroyed = vi.fn(() => this.destroyed)
     isMinimized = vi.fn(() => false)
+    isMaximized = vi.fn(() => false)
+    isFullScreen = vi.fn(() => false)
+    maximize = vi.fn()
+    setFullScreen = vi.fn()
+    setBounds = vi.fn()
+    getBounds = vi.fn(() => ({ x: 0, y: 0, width: 1200, height: 800 }))
     restore = vi.fn()
     setTitleBarOverlay = vi.fn()
     shown = false
@@ -91,6 +97,7 @@ vi.mock('electron', () => {
     },
     BrowserWindow,
     Menu: { setApplicationMenu: state.setApplicationMenu },
+    screen: { getAllDisplays: () => [{ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }] },
     safeStorage: {
       decryptString: vi.fn(), encryptString: vi.fn(), isEncryptionAvailable: vi.fn(() => true),
     },

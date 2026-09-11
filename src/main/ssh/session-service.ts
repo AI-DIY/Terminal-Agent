@@ -83,7 +83,6 @@ export type SessionCommandCompletion = {
 export const DEFAULT_COMMAND_COMPLETION_TIMEOUT_MS = 5 * 60 * 1_000
 const MAX_RETAINED_COMPLETION_PROBE_FILTERS = 16
 const BASTION_DENIAL_OUTPUT_TAIL_CHARS = 2_048
-const BASTION_PROMPT_RECOVERY_RESET_MS = 1_000
 
 type ActiveSession = {
   connection: SshConnection
@@ -97,10 +96,6 @@ type ActiveSession = {
   recentOutput: string
   completionWaiters: Set<CommandCompletionWaiter>
   denialOutputTail: string
-  promptRecoveryInFlight: boolean
-  promptRecoveryTimer?: ReturnType<typeof setTimeout>
-  /** Whether renderer-originated input has not yet been submitted. */
-  hasPendingInteractiveInput: boolean
 }
 
 type CommandCompletionWaiter = {
@@ -309,8 +304,6 @@ export class SessionService {
       recentOutput: '',
       completionWaiters: new Set(),
       denialOutputTail: '',
-      promptRecoveryInFlight: false,
-      hasPendingInteractiveInput: false,
       ...(connectionIp ? { connectionIp } : {}),
     })
     const historySession: HistoryConnectedSession = { ...summary, connectionType, reconnectReference }
@@ -343,7 +336,6 @@ export class SessionService {
       throw new Error('Unknown terminal session')
     }
     session.shell.write(data)
-    session.hasPendingInteractiveInput = hasUnsubmittedInteractiveInput(session.hasPendingInteractiveInput, data)
     this.publishWrite({ sessionId, data })
   }
 
@@ -618,7 +610,6 @@ export class SessionService {
     for (const waiter of [...session.completionWaiters]) {
       this.finishCompletionWaiter(sessionId, waiter, { completed: false, timedOut: false })
     }
-    this.clearPromptRecovery(session)
     this.sessions.delete(sessionId)
     this.observedHostnames.delete(sessionId)
     this.reconnectDescriptors.markClosed(session.reconnectReference)
@@ -639,7 +630,7 @@ export class SessionService {
     // A bastion can reject the reviewed command and our private `echo` probe
     // together. Resolve before probe filtering so a prompt without a trailing
     // newline remains visible instead of being held in a completion tail.
-    this.recoverPromptAfterBastionDenial(sessionId, session, data)
+    this.failPendingCommandOnBastionDenial(sessionId, session, data)
     let visible = data
     for (const waiter of [...session.completionWaiters]) {
       const consumed = consumeCompletionProbe(waiter, visible)
@@ -655,17 +646,25 @@ export class SessionService {
     for (const listener of this.writeListeners) listener(event)
   }
 
-  private recoverPromptAfterBastionDenial(sessionId: string, session: ActiveSession, data: string): void {
+  /**
+   * Treat a bastion command rejection as a definitive failure of the pending
+   * command.  The remote shell prints its own prompt (and its own rejection
+   * text) in the same output burst, so the terminal stays usable without the
+   * application sending anything.
+   *
+   * We deliberately never re-send input to "recover" a prompt: bastions that
+   * re-print their banner for every incoming line turned that retry into an
+   * endless rejection flood in the SSH window.
+   */
+  private failPendingCommandOnBastionDenial(sessionId: string, session: ActiveSession, data: string): void {
     // Direct SSH servers can legitimately write denial-like diagnostics. The
-    // recovery behavior is specific to AccessClient/bastion terminals.
+    // rejection handling is specific to AccessClient/bastion terminals.
     if (session.connectionType === 'direct-ssh') return
-    const plainData = stripAnsi(data)
-    const output = `${session.denialOutputTail}${plainData}`
+    const output = `${session.denialOutputTail}${stripAnsi(data)}`
     if (!isBastionCommandDenial(output)) {
+      // Keep a bounded rolling suffix so a denial split across transport
+      // chunks is still recognized, while ordinary output cannot grow here.
       session.denialOutputTail = output.slice(-BASTION_DENIAL_OUTPUT_TAIL_CHARS)
-      // A returned prompt or other normal output means a later, independent
-      // denial may request one recovery newline again.
-      if (session.promptRecoveryInFlight && plainData.trim()) this.clearPromptRecovery(session)
       return
     }
 
@@ -673,29 +672,6 @@ export class SessionService {
     for (const waiter of [...session.completionWaiters]) {
       this.finishCompletionWaiter(sessionId, waiter, { completed: false, timedOut: false })
     }
-    // Never submit a partially typed operator command just to request a
-    // prompt. With no queued local input, an empty line is safe and asks the
-    // actual bastion shell to render its own prompt.
-    if (session.promptRecoveryInFlight || session.hasPendingInteractiveInput) return
-
-    session.promptRecoveryInFlight = true
-    try {
-      // Ask the actual remote shell for its prompt. Do not synthesize one in
-      // terminal output, because the prompt format belongs to the bastion.
-      session.shell.write('\n')
-    } catch {
-      // The regular shell-close path will finish outstanding work if the
-      // transport has already gone away.
-    }
-    session.promptRecoveryTimer = setTimeout(() => this.clearPromptRecovery(session), BASTION_PROMPT_RECOVERY_RESET_MS)
-    session.promptRecoveryTimer.unref?.()
-  }
-
-  private clearPromptRecovery(session: ActiveSession): void {
-    if (session.promptRecoveryTimer) clearTimeout(session.promptRecoveryTimer)
-    session.promptRecoveryTimer = undefined
-    session.promptRecoveryInFlight = false
-    session.denialOutputTail = ''
   }
 
   private finishCompletionWaiter(sessionId: string, waiter: CommandCompletionWaiter, result: SessionCommandCompletion): void {
@@ -787,13 +763,6 @@ function normalizeCompletionTimeout(value: number): number {
 function ensureTrailingLineEnding(command: string): string {
   const value = typeof command === 'string' ? command : String(command)
   return /(?:\r\n|\r|\n)$/.test(value) ? value : `${value}\n`
-}
-
-function hasUnsubmittedInteractiveInput(previous: boolean, data: string): boolean {
-  if (!data) return previous
-  const lastLineBreak = Math.max(data.lastIndexOf('\n'), data.lastIndexOf('\r'))
-  if (lastLineBreak >= 0) return lastLineBreak < data.length - 1
-  return previous || data.length > 0
 }
 
 /**

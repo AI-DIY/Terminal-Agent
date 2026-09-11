@@ -453,4 +453,89 @@ describe('StructuredChatAgent', () => {
     })).rejects.toThrow('聊天上下文及技能说明超出当前模型限制')
     expect(complete).not.toHaveBeenCalled()
   })
+
+  it('accepts a fenced action with alternative keys and a missing invocation id', async () => {
+    const document = {
+      id: 'query-system-inspection', name: 'query-system-inspection', description: 'Queries an application system.',
+      content: '---\nname: query-system-inspection\ndescription: Queries an application system.\n---\n\nnode scripts/query-system.js\n',
+    }
+    const runSkillCommand = vi.fn().mockImplementation(async (input: { invocationId: string }) => ({
+      id: 'query-system-inspection', invocationId: input.invocationId, exitCode: 0, stdout: 'application-a', stderr: '', timedOut: false, cancelled: false,
+    }))
+    const complete = vi.fn()
+      // Weaker models wrap the object in a fence and use snake_case keys.
+      .mockResolvedValueOnce('```json\n{"action":{"type":"run_skill_command","skill_id":"query-system-inspection","command":"node scripts/query-system.js --list e0074566"}}\n```')
+      .mockResolvedValueOnce('{"version":1,"reply":"已查询。","plan":null}')
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      messages: [{ role: 'user', content: 'e0074566 归属哪个应用系统？' }],
+      availableHostnames: [],
+      selectedSkillIds: ['query-system-inspection'],
+      skillCatalog: [{ id: 'query-system-inspection', name: 'query-system-inspection', description: document.description, enabled: true }],
+      skillRuntime: { loadSkill: vi.fn().mockResolvedValue(document), readSkillFile: vi.fn(), runSkillCommand },
+    })).resolves.toMatchObject({ reply: '已查询。' })
+
+    const call = runSkillCommand.mock.calls[0]?.[0] as { id: string; invocationId: string; command?: string; executable?: string }
+    expect(call.id).toBe('query-system-inspection')
+    expect(call.command).toBe('node scripts/query-system.js --list e0074566')
+    expect(call.invocationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+  })
+
+  it('splits an argv command and prefers the inline command when both forms are supplied', async () => {
+    const document = {
+      id: 'query-system-inspection', name: 'query-system-inspection', description: 'Queries an application system.',
+      content: '---\nname: query-system-inspection\ndescription: Queries an application system.\n---\n\nnode scripts/query-system.js\n',
+    }
+    const runSkillCommand = vi.fn().mockImplementation(async (input: { invocationId: string }) => ({
+      id: 'query-system-inspection', invocationId: input.invocationId, exitCode: 0, stdout: 'ok', stderr: '', timedOut: false, cancelled: false,
+    }))
+    const complete = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({
+        action: {
+          type: 'run_skill_command',
+          skillId: 'query-system-inspection',
+          // Both forms at once used to fail the strict schema and look like
+          // "no action returned" to the user.
+          command: 'node scripts/query-system.js --list e0074566',
+          executable: 'node',
+          args: ['scripts/query-system.js', '--list', 'e0074566'],
+        },
+      }))
+      .mockResolvedValueOnce('{"version":1,"reply":"已查询。","plan":null}')
+
+    await expect(new StructuredChatAgent({ complete }).run({
+      ...request,
+      availableHostnames: [],
+      selectedSkillIds: ['query-system-inspection'],
+      skillCatalog: [{ id: 'query-system-inspection', name: 'query-system-inspection', description: document.description, enabled: true }],
+      skillRuntime: { loadSkill: vi.fn().mockResolvedValue(document), readSkillFile: vi.fn(), runSkillCommand },
+    })).resolves.toMatchObject({ reply: '已查询。' })
+
+    expect(runSkillCommand.mock.calls[0]?.[0]).toMatchObject({
+      id: 'query-system-inspection',
+      command: 'node scripts/query-system.js --list e0074566',
+    })
+
+    const argvComplete = vi.fn()
+      .mockResolvedValueOnce('{"action":{"type":"run_skill_command","skillId":"query-system-inspection","invocationId":"not-a-uuid","executable":"node","args":"scripts/query-system.js --list e0074566"}}')
+      .mockResolvedValueOnce('{"version":1,"reply":"已查询。","plan":null}')
+    const argvRunner = vi.fn().mockImplementation(async (input: { invocationId: string }) => ({
+      id: 'query-system-inspection', invocationId: input.invocationId, exitCode: 0, stdout: 'ok', stderr: '', timedOut: false, cancelled: false,
+    }))
+
+    await expect(new StructuredChatAgent({ complete: argvComplete }).run({
+      ...request,
+      availableHostnames: [],
+      selectedSkillIds: ['query-system-inspection'],
+      skillCatalog: [{ id: 'query-system-inspection', name: 'query-system-inspection', description: document.description, enabled: true }],
+      skillRuntime: { loadSkill: vi.fn().mockResolvedValue(document), readSkillFile: vi.fn(), runSkillCommand: argvRunner },
+    })).resolves.toMatchObject({ reply: '已查询。' })
+
+    expect(argvRunner.mock.calls[0]?.[0]).toMatchObject({
+      id: 'query-system-inspection',
+      executable: 'node',
+      args: ['scripts/query-system.js', '--list', 'e0074566'],
+    })
+  })
 })

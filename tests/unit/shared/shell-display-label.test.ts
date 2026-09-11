@@ -50,6 +50,58 @@ describe('hostname display labels', () => {
     ])
   })
 
+  it('keys address-labelled bastion targets by the selected target instead of the shared relay IP', () => {
+    expect(sshHostnameDisplayLabels([
+      { hostname: '10.10.10.10', displayName: 'mosh/root@10.14.14.34', stableKey: 'connection-a' },
+      { hostname: '10.10.10.10', displayName: 'mosh/root@10.11.96.34', stableKey: 'connection-b' },
+    ])).toEqual([
+      { displayLabel: 'mosh/root@10.14.14.34', ordinal: 1 },
+      { displayLabel: 'mosh/root@10.11.96.34', ordinal: 1 },
+    ])
+  })
+
+  it('numbers two connections that target the same address-labelled host', () => {
+    expect(sshHostnameDisplayLabels([
+      { hostname: '10.10.10.10', displayName: 'mosh/root@10.14.14.34', stableKey: 'connection-a' },
+      { hostname: '10.10.10.10', displayName: 'mosh/root@10.14.14.34', stableKey: 'connection-b' },
+    ])).toEqual([
+      { displayLabel: 'mosh/root@10.14.14.34 #1', ordinal: 1 },
+      { displayLabel: 'mosh/root@10.14.14.34 #2', ordinal: 2 },
+    ])
+  })
+
+  it('treats a bare target address in the title as the target identity', () => {
+    expect(sshHostnameDisplayLabels([
+      { hostname: '10.10.10.10', displayName: '10.11.96.34', stableKey: 'connection-a' },
+      { hostname: '10.10.10.10', displayName: '10.11.96.35', stableKey: 'connection-b' },
+    ])).toEqual([
+      { displayLabel: '10.11.96.34', ordinal: 1 },
+      { displayLabel: '10.11.96.35', ordinal: 1 },
+    ])
+  })
+
+  it('keys system-labelled bastion targets by the selected target token', () => {
+    expect(sshHostnameDisplayLabels([
+      { hostname: '10.10.10.10', displayName: 'root@AI中台_98.29', stableKey: 'connection-a' },
+      { hostname: '10.10.10.10', displayName: 'root@AI中台_10.54.98.34', stableKey: 'connection-b' },
+      { hostname: '10.10.10.10', displayName: 'mosh/root@AI中台:98.29', stableKey: 'connection-c' },
+    ])).toEqual([
+      { displayLabel: 'root@AI中台_98.29 #1', ordinal: 1 },
+      { displayLabel: 'root@AI中台_10.54.98.34', ordinal: 1 },
+      { displayLabel: 'mosh/root@AI中台:98.29 #2', ordinal: 2 },
+    ])
+  })
+
+  it('ignores a system label that exposes no target token', () => {
+    expect(sshHostnameDisplayLabels([
+      { hostname: '10.10.10.10', displayName: 'root@生产终端', stableKey: 'connection-a' },
+      { hostname: '10.10.10.10', displayName: 'root@生产终端', stableKey: 'connection-b' },
+    ])).toEqual([
+      { displayLabel: 'root@生产终端 #1', ordinal: 1 },
+      { displayLabel: 'root@生产终端 #2', ordinal: 2 },
+    ])
+  })
+
   it('adds badges only when the resolved target hostname is the same', () => {
     expect(sshHostnameDisplayLabels([
       { hostname: '10.10.10.10', observedHostname: 'app-prod-01', stableKey: 'connection-a' },

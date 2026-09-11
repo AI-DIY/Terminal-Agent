@@ -37,6 +37,9 @@ const connectionError = ref('')
 const diagnosticError = ref('')
 const appVersion = ref('')
 const showUpgrade = ref(false)
+// 修改意见(2)：暂时隐藏顶部“升级”入口。升级服务、对话框与相关 IPC 全部保留，
+// 后续把该开关改回 true 即可恢复按钮，无需改动其他逻辑。
+const upgradeEntryVisible = false
 const savedProfiles = ref<Awaited<ReturnType<typeof window.terminalAgent.sessions.listProfiles>>>([])
 const chatStore = createChatWorkspacesStore(window.terminalAgent.chats)
 const shellHistory = createShellHistoryStore(window.terminalAgent.shellHistory)
@@ -1024,7 +1027,7 @@ onBeforeUnmount(() => {
       <button type="button" class="header-button" aria-label="设置" title="设置" @click="emit('showSettings', chatStore.state.selectedId)"><Settings :size="14" aria-hidden="true" /><span>设置</span></button>
       <button type="button" class="header-button" aria-label="DevTools" title="DevTools" @click="openRendererDevTools"><Code2 :size="14" aria-hidden="true" /><span>DevTools</span></button>
       <button type="button" class="header-button" aria-label="Node Inspector" title="Node Inspector" @click="openNodeInspector"><Bug :size="14" aria-hidden="true" /><span>Node Inspector</span></button>
-      <button type="button" class="header-button upgrade-button" aria-label="升级" title="检查并安装升级" @click="openUpgrade"><span>升级</span></button>
+      <button v-if="upgradeEntryVisible" type="button" class="header-button upgrade-button" aria-label="升级" title="检查并安装升级" @click="openUpgrade"><span>升级</span></button>
     </template>
 
     <template #sidebar="{ collapse }">

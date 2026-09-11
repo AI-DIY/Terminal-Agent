@@ -33,7 +33,20 @@ export function sshHostIdentity(entry: HostnameDisplayEntry): string {
   // transport route, otherwise two different hosts behind one bastion receive
   // misleading #1/#2 badges merely because they share an IP address.
   const titleHint = hostHintFromTitle(entry.displayName)
-  if (titleHint && !isIpLiteral(titleHint)) return titleHint.toLowerCase()
+  // The hint is the *target* the user selected, so it stays authoritative even
+  // when the target itself is addressed by IP: bastion entries are commonly
+  // reached as `user@10.x.y.z`. Rejecting an IP hint here collapsed every
+  // relay-routed target onto the shared relay address, which made the #x
+  // duplicate badge appear (and shuffle) between unrelated hosts.
+  if (titleHint) return titleHint.toLowerCase()
+
+  // Titles such as `root@AI中台_98.29` or `mosh/root@AI中台:10.54.98.34` put a
+  // system label in front of the selected target, so the generic title hint
+  // above never sees it. Read that trailing target token here as well: the
+  // transport address is a shared relay, and letting it decide which
+  // connections are the same host is what shuffled the #x badges.
+  const titleTarget = targetTokenFromTitle(entry.displayName)
+  if (titleTarget) return titleTarget.toLowerCase()
 
   const hostname = entry.hostname.trim()
   if (hostname && !isIpLiteral(hostname)) return hostname.toLowerCase()
@@ -191,6 +204,10 @@ export function hostHintFromTitle(value: string | undefined): string | undefined
   const suffix = title.split('_').at(-1)?.trim()
   if (title.includes('_') && suffix && (isHostLikeToken(suffix) || isIpLiteral(suffix))) return suffix
 
+  // Some bastion pickers label the connection with the selected target address
+  // only. That address is the target identity, not the shared relay endpoint.
+  if (isIpLiteral(title)) return title
+
   // A plain DNS-like title is also useful when a provider labels the target
   // directly (for example `web-01.example.com`).  Avoid treating natural
   // language labels such as “primary” as host identities unless they contain
@@ -201,6 +218,30 @@ export function hostHintFromTitle(value: string | undefined): string | undefined
 
 function isHostLikeToken(value: string): boolean {
   return /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$/.test(value) && /[A-Za-z]/.test(value)
+}
+
+/**
+ * Extract the target token from a bastion connection title that hides it
+ * behind a system label, for example `root@AI中台_98.29` or
+ * `mosh/root@AI中台:10.54.98.34`. Only a conservative address- or host-shaped
+ * suffix counts, so a title that is merely a display name never becomes an
+ * identity.
+ */
+function targetTokenFromTitle(value: string | undefined): string | undefined {
+  const title = value?.trim()
+  if (!title) return undefined
+  const atIndex = title.lastIndexOf('@')
+  if (atIndex < 0) return undefined
+  const tail = title.slice(atIndex + 1).trim()
+  const token = tail.split(/[_:/：]/).at(-1)?.trim()
+  if (!token || token === tail || /\s/.test(token)) return undefined
+  return isTargetAddressToken(token) || isHostLikeToken(token) ? token : undefined
+}
+
+/** Accepts full addresses as well as the short `98.29` form bastion catalogues use. */
+function isTargetAddressToken(value: string): boolean {
+  if (isIpLiteral(value)) return true
+  return /^\d{1,3}(?:\.\d{1,3}){1,3}$/.test(value) && value.split('.').every(part => Number(part) <= 255)
 }
 
 function isIpLiteral(value: string): boolean {

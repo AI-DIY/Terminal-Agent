@@ -73,8 +73,10 @@ export function createDefaultWorkbenchPreferences(): WorkbenchPreferences {
     theme: 'pearl',
     leftWidth: 222,
     rightWidth: 390,
-    leftCollapsed: false,
-    rightCollapsed: false,
+    // 修改意见(1)：首次安装进入工作台时任务空间与 AI 工作区保持折叠，
+    // 进入后由用户自行展开；之后每次启动都会恢复上次关闭时的状态。
+    leftCollapsed: true,
+    rightCollapsed: true,
     visibleCount: 3,
     columns: 3,
     rowHeightPercent: 100,

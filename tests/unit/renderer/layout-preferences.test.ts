@@ -134,6 +134,12 @@ describe('renderer layout preferences', () => {
     expect(store.state).toMatchObject({ ready: true, theme: 'graphite' })
   })
 
+  it('keeps both workbench rails collapsed on a fresh install', () => {
+    // 修改意见(1)：首次安装进入工作台时任务空间与 AI 工作区默认折叠；
+    // 之后每次启动恢复用户上次关闭时的折叠状态。
+    expect(createDefaultWorkbenchPreferences()).toMatchObject({ leftCollapsed: true, rightCollapsed: true })
+  })
+
   it('adjusts keyboard separators in the visual direction and clamps both boundaries', () => {
     expect(keyboardSidebarWidth('left', 210, 'ArrowLeft')).toBe(210)
     expect(keyboardSidebarWidth('left', 359, 'ArrowRight')).toBe(360)

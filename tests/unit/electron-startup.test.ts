@@ -6,7 +6,7 @@ describe('electron startup wiring', () => {
   it('configures a hidden title bar overlay without disabling the native frame', () => {
     const source = readFileSync(new URL('../../src/main/main.ts', import.meta.url), 'utf8')
 
-    expect(source).toContain("import { app, BrowserWindow, Menu, session } from 'electron'")
+    expect(source).toContain("import { app, BrowserWindow, Menu, screen, session } from 'electron'")
     expect(source).toContain('Menu.setApplicationMenu(null)')
     expect(source).toContain('autoHideMenuBar: true')
     expect(source).toContain("titleBarStyle: 'hidden'")

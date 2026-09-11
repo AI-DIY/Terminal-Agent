@@ -77,7 +77,7 @@ const state = vi.hoisted(() => {
 vi.mock('electron', () => {
   class BrowserWindow {
     static getAllWindows() { return state.windows }
-    readonly webContents = { send: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
+    readonly webContents = { send: vi.fn(), on: vi.fn(), removeListener: vi.fn(), setZoomFactor: vi.fn(), getZoomFactor: vi.fn(() => 1) }
     private readonly listeners = new Map<string, Array<() => void>>()
     readonly options: MockWindow['options']
 
@@ -91,6 +91,13 @@ vi.mock('electron', () => {
       listeners.push(listener)
       this.listeners.set(event, listeners)
     }
+    isDestroyed = vi.fn(() => false)
+    isMaximized = vi.fn(() => false)
+    isFullScreen = vi.fn(() => false)
+    maximize = vi.fn()
+    setFullScreen = vi.fn()
+    setBounds = vi.fn()
+    getBounds = vi.fn(() => ({ x: 0, y: 0, width: 1200, height: 800 }))
     emitClosed() {
       const index = state.windows.indexOf(this as unknown as MockWindow)
       if (index >= 0) state.windows.splice(index, 1)
@@ -110,6 +117,7 @@ vi.mock('electron', () => {
     },
     BrowserWindow,
     Menu: { setApplicationMenu: state.setApplicationMenu },
+    screen: { getAllDisplays: () => [{ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }] },
     safeStorage: { decryptString: vi.fn(), encryptString: vi.fn(), isEncryptionAvailable: vi.fn(() => true) },
     dialog: { showOpenDialog: vi.fn() },
     ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },

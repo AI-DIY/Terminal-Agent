@@ -492,7 +492,7 @@ describe('SessionService', () => {
     }
   })
 
-  it('recovers a usable prompt after a bastion denies an SSH command without waiting for the private probe timeout', async () => {
+  it('fails the pending command after a bastion denial without re-sending anything', async () => {
     const shell = createShell()
     const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
     const service = new SessionService(client, { load: vi.fn() })
@@ -506,20 +506,24 @@ describe('SessionService', () => {
     const denial = 'TERM You are not allowed to use this command: sudo su\r\nops@bastion$ '
     shell.emitData(Buffer.from(denial))
 
+    // The bastion prints its own prompt in the same burst, so the command is
+    // simply reported as failed and the terminal output is left untouched.
     await expect(completion).resolves.toEqual({ completed: false, timedOut: false })
-    expect(shell.write).toHaveBeenLastCalledWith('\n')
     expect(received).toEqual([{ sessionId: session.id, data: denial }])
 
-    // A repeated denial burst must not write a newline for every packet.
+    // Repeated rejection output must never trigger another write: that retry
+    // is what previously flooded the SSH window with the same banner.
+    const writesAfterDenial = shell.write.mock.calls.length
+    expect(shell.write).not.toHaveBeenCalledWith('\n')
     shell.emitData(Buffer.from(denial))
-    expect(shell.write).toHaveBeenCalledTimes(2)
+    expect(shell.write).toHaveBeenCalledTimes(writesAfterDenial)
     expect(received).toEqual([
       { sessionId: session.id, data: denial },
       { sessionId: session.id, data: denial },
     ])
   })
 
-  it('requests an actual prompt after a Raw bastion session denies a command', async () => {
+  it('publishes a Raw bastion rejection and its prompt without sending input back', async () => {
     const rawShell = createShell()
     const rawClient = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(rawShell) }) }
     const service = new SessionService({ connect: vi.fn() }, { load: vi.fn() }, rawClient)
@@ -532,11 +536,11 @@ describe('SessionService', () => {
 
     rawShell.emitData(Buffer.from(denial))
 
-    expect(rawShell.write).toHaveBeenCalledWith('\n')
+    expect(rawShell.write).not.toHaveBeenCalled()
     expect(received).toEqual([{ sessionId: session.id, data: denial }])
   })
 
-  it('does not submit a partially typed command while recovering an AccessClient prompt', async () => {
+  it('never writes to the shell when a bastion rejects a command with pending local input', async () => {
     const rawShell = createShell()
     const rawClient = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(rawShell) }) }
     const service = new SessionService({ connect: vi.fn() }, { load: vi.fn() }, rawClient)

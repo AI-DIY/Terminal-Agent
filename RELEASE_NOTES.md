@@ -1,3 +1,27 @@
+# Terminal-Agent v3.3.7
+
+Release date: 2026-09-11
+
+## 开源 TA 修改意见微调
+
+- 首次安装进入工作台时“任务空间”和“AI 工作区”默认折叠，之后每次启动都会恢复上次关闭时的折叠状态；窗口的普通尺寸与位置、最大化、全屏和整体缩放也会一并还原展示。
+- 暂时隐藏工作台顶部的“升级”入口；升级服务、对话框与相关 IPC 全部保留，恢复时只需打开该开关。
+- 堡垒机“禁制”后不再重试或重发任何输入，命令按失败收敛，终端仍会正常显示远端命令行提示符，避免重试刷屏和额外的认证负载。
+- SSH 连接窗口右上角的重复主机角标改为按用户选择的目标主机识别（例如 `root@AI中台_98.29`），不再使用堡垒机中继地址，同一主机多次打开才会得到稳定的 #1/#2。
+- 修复显式选择 `query-system-inspection` 技能时无本机动作返回的问题：技能动作信封支持 Markdown 围栏、字段别名、缺省 invocationId 和 argv 形式的 command，同时保留技能 ID、路径与超时等全部安全约束。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-3.3.7.exe`
+- `putty.exe`
+- `快速安装脚本.cmd`
+- `快速安装手册.md`
+- `快速安装手册.pdf`
+- `Terminal-Agent-Quick-Install-3.3.7.zip`
+- `Terminal-Agent-Uninstall-Cleanup-3.3.7.zip`
+
+---
+
 # Terminal-Agent v3.3.6
 
 Release date: 2026-09-11

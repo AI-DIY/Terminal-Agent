@@ -81,8 +81,8 @@ describe('WorkbenchPreferencesService', () => {
       layout: {
         leftWidth: 248,
         rightWidth: 390,
-        leftCollapsed: false,
-        rightCollapsed: false,
+        leftCollapsed: true,
+        rightCollapsed: true,
         visibleCount: 4,
         columns: 2,
         rowHeightPercent: 80,

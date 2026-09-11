@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, session } from 'electron'
+import { app, BrowserWindow, Menu, screen, session } from 'electron'
 import { join } from 'node:path'
 import { registerSessionHandlers } from './ipc/register-handlers'
 import { registerFileTransferHandlers } from './ipc/register-file-transfer-handlers'
@@ -61,6 +61,7 @@ import { registerShellHistoryLifecycle } from './shell-history/register-shell-hi
 import { registerGracefulApplicationShutdown } from './application-shutdown'
 import { chatRuntimeEventSchema, createDefaultWorkbenchPreferences, type WorkbenchTheme } from '../shared/contracts'
 import { titleBarOverlayForTheme } from './windows/title-bar-overlay'
+import { clampZoomFactor, isBoundsVisibleOnDisplays, WindowStateService, type WindowBounds, type WindowState, type WindowStateSnapshot } from './windows/window-state'
 import { DiagnosticsController, publicDiagnosticsError } from './diagnostics/diagnostics-controller'
 import { registerDiagnosticsHandlers } from './diagnostics/register-diagnostics-handlers'
 import { DEFAULT_NUTS_FEED_URL, UpdaterService } from './updater/updater-service'
@@ -137,6 +138,7 @@ const shellHistory = new ShellHistoryService(
 )
 const shellHistoryLifecycle = registerShellHistoryLifecycle(sessions, chats, shellHistory)
 const workbenchPreferences = new WorkbenchPreferencesService(join(app.getPath('userData'), 'workbench-preferences.json'))
+const windowState = new WindowStateService(join(app.getPath('userData'), 'window-state.json'))
 const skills = new SkillService({
   skillsDirectory: resolveSkillsDirectory({
     isPackaged: app.isPackaged,
@@ -384,11 +386,116 @@ const bastionLaunches = new BastionLaunchService(
 )
 sessions.onClosed(event => bastionLaunches.closeSession(event.sessionId))
 
-export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWorkbenchPreferences().theme): BrowserWindow {
+const WINDOW_STATE_SAVE_DELAY_MS = 300
+const WINDOW_ZOOM_STEP = 0.1
+
+/**
+ * Only restore a remembered rectangle that still intersects a current display;
+ * an unplugged monitor would otherwise place the window off-screen.
+ */
+function restoredWindowBounds(state?: WindowState): WindowBounds | undefined {
+  const bounds = state?.bounds
+  if (!bounds) return undefined
+  try {
+    if (typeof screen?.getAllDisplays !== 'function') return undefined
+    const displays = screen.getAllDisplays().map(display => display.workArea ?? display.bounds)
+    if (displays.length === 0) return undefined
+    return isBoundsVisibleOnDisplays(bounds, displays) ? bounds : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export type WindowStateController = {
+  /** Returns true when the input was a zoom accelerator this window consumed. */
+  handleZoomShortcut(input: Electron.Input): boolean
+}
+
+/**
+ * Restore the previous window presentation state (maximized/fullscreen, zoom
+ * and normal geometry) and keep it persisted for the next launch.
+ */
+function attachWindowStateRestore(
+  win: BrowserWindow,
+  service: WindowStateService,
+  initial: WindowState | undefined,
+  restoredZoom: number,
+): WindowStateController {
+  let snapshot: WindowStateSnapshot = {
+    maximized: initial?.maximized ?? false,
+    fullScreen: initial?.fullScreen ?? false,
+    zoomFactor: restoredZoom,
+    ...(initial?.bounds ? { bounds: initial.bounds } : {}),
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  const persist = (): void => { void service.save(snapshot).catch(() => undefined) }
+  const flush = (): void => {
+    if (timer) clearTimeout(timer)
+    timer = undefined
+    persist()
+  }
+  const capture = (immediate: boolean): void => {
+    const maximized = win.isMaximized()
+    const fullScreen = win.isFullScreen()
+    snapshot = {
+      maximized,
+      fullScreen,
+      zoomFactor: clampZoomFactor(win.webContents.getZoomFactor()),
+      // A maximized/fullscreen rectangle describes the screen, not the
+      // window's normal geometry, so keep the last usable restore point.
+      ...(maximized || fullScreen
+        ? (snapshot.bounds ? { bounds: snapshot.bounds } : {})
+        : { bounds: win.getBounds() }),
+    }
+    if (immediate) flush()
+    else {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => { timer = undefined; persist() }, WINDOW_STATE_SAVE_DELAY_MS)
+      timer.unref?.()
+    }
+  }
+
+  if (snapshot.bounds) win.setBounds(snapshot.bounds)
+  if (snapshot.maximized) win.maximize()
+  if (snapshot.fullScreen) win.setFullScreen(true)
+  win.webContents.setZoomFactor(snapshot.zoomFactor)
+
+  win.on('resize', () => capture(false))
+  win.on('move', () => capture(false))
+  win.on('maximize', () => capture(true))
+  win.on('unmaximize', () => capture(true))
+  win.on('enter-full-screen', () => capture(true))
+  win.on('leave-full-screen', () => capture(true))
+  win.webContents.on('zoom-changed', () => capture(true))
+  win.on('close', () => capture(true))
+  win.on('closed', () => { if (timer) clearTimeout(timer); timer = undefined })
+
+  return {
+    handleZoomShortcut(input: Electron.Input): boolean {
+      if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return false
+      const current = clampZoomFactor(win.webContents.getZoomFactor())
+      if (input.key === '+' || input.key === '=') win.webContents.setZoomFactor(clampZoomFactor(current + WINDOW_ZOOM_STEP))
+      else if (input.key === '-' || input.key === '_') win.webContents.setZoomFactor(clampZoomFactor(current - WINDOW_ZOOM_STEP))
+      else if (input.key === '0' || input.key === ')') win.webContents.setZoomFactor(1)
+      else return false
+      capture(true)
+      return true
+    },
+  }
+}
+
+export function createMainWindow(
+  initialTheme: WorkbenchTheme = createDefaultWorkbenchPreferences().theme,
+  initialWindowState?: WindowState,
+): BrowserWindow {
   Menu.setApplicationMenu(null)
+  const restoredBounds = restoredWindowBounds(initialWindowState)
+  const restoredZoom = clampZoomFactor(initialWindowState?.zoomFactor ?? 1)
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: restoredBounds?.width ?? 1200,
+    height: restoredBounds?.height ?? 800,
+    ...(restoredBounds ? { x: restoredBounds.x, y: restoredBounds.y } : {}),
     show: false,
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
@@ -401,6 +508,7 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
     }
   })
   const rendererWindow = mainWindow
+  const windowStateController = attachWindowStateRestore(rendererWindow, windowState, initialWindowState, restoredZoom)
   // The SSO provider uses a short-lived secondary BrowserWindow.  Once its
   // capture succeeds, return attention to this already-created local
   // renderer instead of creating or navigating another application window.
@@ -427,11 +535,16 @@ export function createMainWindow(initialTheme: WorkbenchTheme = createDefaultWor
     const opensDevTools = input.type === 'keyDown'
       && input.control && input.shift && !input.alt && !input.meta
       && input.key.toLowerCase() === 'i'
-    if (!opensDevTools) return
-    event.preventDefault()
-    void windowDiagnostics.openRendererDevTools().catch(error => {
-      if (!rendererWindow.isDestroyed()) rendererWindow.webContents.send('diagnostics:error', publicDiagnosticsError(error))
-    })
+    if (opensDevTools) {
+      event.preventDefault()
+      void windowDiagnostics.openRendererDevTools().catch(error => {
+        if (!rendererWindow.isDestroyed()) rendererWindow.webContents.send('diagnostics:error', publicDiagnosticsError(error))
+      })
+      return
+    }
+    // Overall UI zoom (Ctrl +/-/0) is part of the restored window state; the
+    // default menu is removed, so the accelerators are handled here.
+    if (windowStateController.handleZoomShortcut(input)) event.preventDefault()
   }
   rendererWindow.webContents.on('before-input-event', onBeforeInput)
 
@@ -588,21 +701,22 @@ if (isPrimaryInstance) {
       console.error('Failed to initialize Skills', error)
     })
     const initialPreferences = await workbenchPreferences.load().catch(createDefaultWorkbenchPreferences)
+    const initialWindowState = await windowState.load().catch(() => undefined)
     await recoverChatStreamsBeforeCreatingMainWindow(
       () => chats.recoverInterruptedStreams(),
-      () => createMainWindow(initialPreferences.theme),
+      () => createMainWindow(initialPreferences.theme, initialWindowState),
     )
     void accessClientLaunches.tryOpenFromArgv(process.argv)
 
     app.on('activate', () => {
       if (mainWindow || isRestoringMainWindow) return
       isRestoringMainWindow = true
-      void workbenchPreferences.load()
-        .then(preferences => {
-          if (!mainWindow) createMainWindow(preferences.theme)
-        })
-        .catch(() => {
-          if (!mainWindow) createMainWindow()
+      void Promise.all([
+        workbenchPreferences.load().catch(() => undefined),
+        windowState.load().catch(() => undefined),
+      ])
+        .then(([preferences, restoredState]) => {
+          if (!mainWindow) createMainWindow(preferences?.theme, restoredState)
         })
         .finally(() => { isRestoringMainWindow = false })
     })
