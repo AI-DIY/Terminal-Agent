@@ -376,6 +376,32 @@ describe('registerChatHandlers', () => {
     dispose()
   })
 
+  it('validates cursor paging and avoids re-running session reconciliation for later history pages', async () => {
+    const service = {
+      list: vi.fn(async () => ({ revision: 0, chats: [], liveChatId: null })),
+      create: vi.fn(), get: vi.fn(), resolveSession: vi.fn(), setMode: vi.fn(), remove: vi.fn(),
+      associateSession: vi.fn(), transferSessions: vi.fn(), closeSession: vi.fn(),
+      reconcileSessions: vi.fn(async () => undefined), onChanged: vi.fn(() => () => undefined),
+    }
+    const trusted = { send: vi.fn() }
+    const sessions = { snapshot: vi.fn(() => []), onClosed: vi.fn(() => () => undefined) }
+    const dispose = registerChatHandlers(service as never, trusted as never, sessions as never)
+    const cursor = {
+      id: 'chat-40',
+      createdAt: '2026-08-16T08:00:00.000Z',
+      updatedAt: '2026-08-16T08:01:00.000Z',
+    }
+
+    await handlerFor('chats:list')({ sender: trusted }, { limit: 40 })
+    await handlerFor('chats:list')({ sender: trusted }, { limit: 40, cursor })
+
+    expect(service.reconcileSessions).toHaveBeenCalledTimes(1)
+    expect(service.list).toHaveBeenNthCalledWith(1, { limit: 40 })
+    expect(service.list).toHaveBeenNthCalledWith(2, { limit: 40, cursor })
+    await expect(handlerFor('chats:list')({ sender: trusted }, { offset: 40 })).rejects.toThrow()
+    dispose()
+  })
+
   it('closes transferred ownership when the session disappears before transfer commits', async () => {
     const transferPending = deferred<{ revision: number; chat: { id: string } }>()
     const service = {

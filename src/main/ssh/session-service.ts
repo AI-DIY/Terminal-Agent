@@ -46,6 +46,8 @@ export type TerminalClosedEvent = {
 
 export type AccessSshSessionRequest = {
   host: string
+  /** Logical remote target when `host` is only a bastion/relay endpoint. */
+  hostname?: string
   port: number
   username: string
   password?: string
@@ -57,6 +59,8 @@ export type AccessSshSessionRequest = {
 
 export type RawSessionRequest = {
   host: string
+  /** Logical remote target when `host` is only a local bastion bridge. */
+  hostname?: string
   port: number
   title?: string
   columns?: number
@@ -78,6 +82,8 @@ export type SessionCommandCompletion = {
 
 export const DEFAULT_COMMAND_COMPLETION_TIMEOUT_MS = 5 * 60 * 1_000
 const MAX_RETAINED_COMPLETION_PROBE_FILTERS = 16
+const BASTION_DENIAL_OUTPUT_TAIL_CHARS = 2_048
+const BASTION_PROMPT_RECOVERY_RESET_MS = 1_000
 
 type ActiveSession = {
   connection: SshConnection
@@ -90,6 +96,11 @@ type ActiveSession = {
   connectionIp?: string
   recentOutput: string
   completionWaiters: Set<CommandCompletionWaiter>
+  denialOutputTail: string
+  promptRecoveryInFlight: boolean
+  promptRecoveryTimer?: ReturnType<typeof setTimeout>
+  /** Whether renderer-originated input has not yet been submitted. */
+  hasPendingInteractiveInput: boolean
 }
 
 type CommandCompletionWaiter = {
@@ -198,7 +209,7 @@ export class SessionService {
           username: request.username,
           ...(request.password !== undefined ? { password: request.password } : {}),
         }, {
-          hostname: request.host,
+          hostname: request.hostname ?? request.host,
           title: request.title,
           columns: request.columns,
           rows: request.rows,
@@ -210,7 +221,7 @@ export class SessionService {
         host: request.host,
         port: request.port,
       }, {
-        hostname: request.host,
+        hostname: request.hostname ?? request.host,
         title: request.title,
         columns: request.columns,
         rows: request.rows,
@@ -287,7 +298,21 @@ export class SessionService {
       ...(chatId ? { chatId } : {}),
     }
     const connectionIp = safeConnectionIp(connection.remoteAddress)
-    this.sessions.set(id, { connection, shell, decoder, summary, connectionType, supportsReadOnlyObservation, reconnectReference, recentOutput: '', completionWaiters: new Set(), ...(connectionIp ? { connectionIp } : {}) })
+    this.sessions.set(id, {
+      connection,
+      shell,
+      decoder,
+      summary,
+      connectionType,
+      supportsReadOnlyObservation,
+      reconnectReference,
+      recentOutput: '',
+      completionWaiters: new Set(),
+      denialOutputTail: '',
+      promptRecoveryInFlight: false,
+      hasPendingInteractiveInput: false,
+      ...(connectionIp ? { connectionIp } : {}),
+    })
     const historySession: HistoryConnectedSession = { ...summary, connectionType, reconnectReference }
     for (const listener of this.historyOpenedListeners) {
       listener(historySession)
@@ -318,6 +343,7 @@ export class SessionService {
       throw new Error('Unknown terminal session')
     }
     session.shell.write(data)
+    session.hasPendingInteractiveInput = hasUnsubmittedInteractiveInput(session.hasPendingInteractiveInput, data)
     this.publishWrite({ sessionId, data })
   }
 
@@ -592,6 +618,7 @@ export class SessionService {
     for (const waiter of [...session.completionWaiters]) {
       this.finishCompletionWaiter(sessionId, waiter, { completed: false, timedOut: false })
     }
+    this.clearPromptRecovery(session)
     this.sessions.delete(sessionId)
     this.observedHostnames.delete(sessionId)
     this.reconnectDescriptors.markClosed(session.reconnectReference)
@@ -609,6 +636,10 @@ export class SessionService {
     if (!data) return
     const session = this.sessions.get(sessionId)
     if (!session) return
+    // A bastion can reject the reviewed command and our private `echo` probe
+    // together. Resolve before probe filtering so a prompt without a trailing
+    // newline remains visible instead of being held in a completion tail.
+    this.recoverPromptAfterBastionDenial(sessionId, session, data)
     let visible = data
     for (const waiter of [...session.completionWaiters]) {
       const consumed = consumeCompletionProbe(waiter, visible)
@@ -622,6 +653,49 @@ export class SessionService {
 
   private publishWrite(event: TerminalWriteEvent): void {
     for (const listener of this.writeListeners) listener(event)
+  }
+
+  private recoverPromptAfterBastionDenial(sessionId: string, session: ActiveSession, data: string): void {
+    // Direct SSH servers can legitimately write denial-like diagnostics. The
+    // recovery behavior is specific to AccessClient/bastion terminals.
+    if (session.connectionType === 'direct-ssh') return
+    const plainData = stripAnsi(data)
+    const output = `${session.denialOutputTail}${plainData}`
+    if (!isBastionCommandDenial(output)) {
+      session.denialOutputTail = output.slice(-BASTION_DENIAL_OUTPUT_TAIL_CHARS)
+      // A returned prompt or other normal output means a later, independent
+      // denial may request one recovery newline again.
+      if (session.promptRecoveryInFlight && plainData.trim()) this.clearPromptRecovery(session)
+      return
+    }
+
+    session.denialOutputTail = ''
+    for (const waiter of [...session.completionWaiters]) {
+      this.finishCompletionWaiter(sessionId, waiter, { completed: false, timedOut: false })
+    }
+    // Never submit a partially typed operator command just to request a
+    // prompt. With no queued local input, an empty line is safe and asks the
+    // actual bastion shell to render its own prompt.
+    if (session.promptRecoveryInFlight || session.hasPendingInteractiveInput) return
+
+    session.promptRecoveryInFlight = true
+    try {
+      // Ask the actual remote shell for its prompt. Do not synthesize one in
+      // terminal output, because the prompt format belongs to the bastion.
+      session.shell.write('\n')
+    } catch {
+      // The regular shell-close path will finish outstanding work if the
+      // transport has already gone away.
+    }
+    session.promptRecoveryTimer = setTimeout(() => this.clearPromptRecovery(session), BASTION_PROMPT_RECOVERY_RESET_MS)
+    session.promptRecoveryTimer.unref?.()
+  }
+
+  private clearPromptRecovery(session: ActiveSession): void {
+    if (session.promptRecoveryTimer) clearTimeout(session.promptRecoveryTimer)
+    session.promptRecoveryTimer = undefined
+    session.promptRecoveryInFlight = false
+    session.denialOutputTail = ''
   }
 
   private finishCompletionWaiter(sessionId: string, waiter: CommandCompletionWaiter, result: SessionCommandCompletion): void {
@@ -700,6 +774,11 @@ function appendRecentShellOutput(previous: string, data: string): string {
 
 const COMPLETION_PROBE_TAIL_CHARS = 256
 const ANSI_ESCAPE = String.fromCharCode(0x1b)
+const BASTION_COMMAND_DENIAL_PATTERN = /(?:not\s+allowed\s+to\s+(?:use|run|execute)(?:\s+this)?\s+command|command\s+(?:is\s+)?(?:forbidden|denied)|(?:禁止|不允许|无权(?:限)?).{0,24}(?:执行|使用).{0,24}(?:命令|command))/i
+
+function isBastionCommandDenial(value: string): boolean {
+  return BASTION_COMMAND_DENIAL_PATTERN.test(value)
+}
 
 function normalizeCompletionTimeout(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : DEFAULT_COMMAND_COMPLETION_TIMEOUT_MS
@@ -708,6 +787,13 @@ function normalizeCompletionTimeout(value: number): number {
 function ensureTrailingLineEnding(command: string): string {
   const value = typeof command === 'string' ? command : String(command)
   return /(?:\r\n|\r|\n)$/.test(value) ? value : `${value}\n`
+}
+
+function hasUnsubmittedInteractiveInput(previous: boolean, data: string): boolean {
+  if (!data) return previous
+  const lastLineBreak = Math.max(data.lastIndexOf('\n'), data.lastIndexOf('\r'))
+  if (lastLineBreak >= 0) return lastLineBreak < data.length - 1
+  return previous || data.length > 0
 }
 
 /**

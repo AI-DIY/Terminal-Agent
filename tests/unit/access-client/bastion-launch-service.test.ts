@@ -4,6 +4,7 @@ import {
   UnavailableBastionTargetResolver,
 } from '../../../src/main/access-client/bastion-launch-service'
 import { AccessClientLaunchFailure } from '../../../src/main/access-client/launch-failure'
+import type { BastionLaunchRequest } from '../../../src/shared/contracts'
 
 describe('BastionLaunchService', () => {
   it('reports an unavailable catalog without leaking provider details', async () => {
@@ -42,8 +43,77 @@ describe('BastionLaunchService', () => {
 
     expect(openSsh).toHaveBeenCalledOnce()
     expect(openSsh).toHaveBeenCalledWith({
-      host: '10.0.0.8', port: 22, username: 'ops', title: 'web-01', columns: 80, rows: 24,
+      host: '10.0.0.8', hostname: 'web-01', port: 22, username: 'ops', title: 'web-01', columns: 80, rows: 24,
     })
+  })
+
+  it('opens distinct selected hostnames independently when they share one relay address', async () => {
+    const openSsh = vi.fn()
+      .mockResolvedValueOnce({ id: 'app-session' })
+      .mockResolvedValueOnce({ id: 'db-session' })
+    const resolver = {
+      listSystems: vi.fn(),
+      listHosts: vi.fn(),
+      resolve: vi.fn(async (request: BastionLaunchRequest) => {
+        const hostname = request.kind === 'cmdb' && request.hostId === 'app-host' ? 'app-prod-01' : 'db-prod-01'
+        return {
+          protocol: 'ssh' as const,
+          // Both selections use this same bastion transport endpoint.
+          host: '10.10.10.10',
+          port: 22,
+          username: 'ops',
+          // The resolver need not expose a dedicated hostname field: the
+          // selected target is also present in the bastion session title.
+          title: `ops@${hostname}`,
+          columns: 80,
+          rows: 24,
+        }
+      }),
+    }
+    const service = new BastionLaunchService(resolver, { openSsh, openRaw: vi.fn() })
+
+    await expect(service.launch({ kind: 'cmdb', systemId: 'orders', hostId: 'app-host' }))
+      .resolves.toEqual({ kind: 'opened', sessionId: 'app-session' })
+    await expect(service.launch({ kind: 'cmdb', systemId: 'orders', hostId: 'db-host' }))
+      .resolves.toEqual({ kind: 'opened', sessionId: 'db-session' })
+    await expect(service.launch({ kind: 'cmdb', systemId: 'orders', hostId: 'app-host' }))
+      .resolves.toEqual({ kind: 'focused', sessionId: 'app-session' })
+
+    expect(openSsh).toHaveBeenCalledTimes(2)
+    expect(openSsh).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      host: '10.10.10.10', hostname: 'app-prod-01', title: 'ops@app-prod-01',
+    }))
+    expect(openSsh).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      host: '10.10.10.10', hostname: 'db-prod-01', title: 'ops@db-prod-01',
+    }))
+  })
+
+  it('does not conflate matching hostnames from separate CMDB systems', async () => {
+    const openSsh = vi.fn()
+      .mockResolvedValueOnce({ id: 'orders-web' })
+      .mockResolvedValueOnce({ id: 'payments-web' })
+    const resolver = {
+      listSystems: vi.fn(),
+      listHosts: vi.fn(),
+      resolve: vi.fn(async (request: BastionLaunchRequest) => ({
+        protocol: 'ssh' as const,
+        host: request.kind === 'cmdb' && request.systemId === 'orders' ? '10.10.10.10' : '10.20.20.20',
+        hostname: 'web-01',
+        port: 22,
+        username: 'ops',
+        title: 'ops@web-01',
+        columns: 80,
+        rows: 24,
+      })),
+    }
+    const service = new BastionLaunchService(resolver, { openSsh, openRaw: vi.fn() })
+
+    await expect(service.launch({ kind: 'cmdb', systemId: 'orders', hostId: 'web' }))
+      .resolves.toEqual({ kind: 'opened', sessionId: 'orders-web' })
+    await expect(service.launch({ kind: 'cmdb', systemId: 'payments', hostId: 'web' }))
+      .resolves.toEqual({ kind: 'opened', sessionId: 'payments-web' })
+
+    expect(openSsh).toHaveBeenCalledTimes(2)
   })
 
   it('deduplicates simultaneous launches for the same target', async () => {

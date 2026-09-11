@@ -121,6 +121,27 @@ describe('SessionService', () => {
     expect(opened).toEqual([session])
   })
 
+  it('uses a selected bastion hostname for session identity while connecting to the relay address', async () => {
+    const accessShell = createShell()
+    const rawShell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(accessShell) }) }
+    const rawClient = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(rawShell) }) }
+    const ids = ['access-session', 'raw-session']
+    const service = new SessionService(client, { load: vi.fn() }, rawClient, { createId: () => ids.shift()! })
+
+    const access = await service.connectAccessSsh({
+      host: '10.10.10.10', hostname: 'app-prod-01', port: 22, username: 'ops', title: 'ops@app-prod-01', columns: 80, rows: 24,
+    })
+    const raw = await service.connectRaw({
+      host: '127.0.0.1', hostname: 'db-prod-01', port: 22022, title: 'ops@db-prod-01', columns: 80, rows: 24,
+    })
+
+    expect(client.connect).toHaveBeenCalledWith({ host: '10.10.10.10', port: 22, username: 'ops' })
+    expect(rawClient.connect).toHaveBeenCalledWith({ host: '127.0.0.1', port: 22022 })
+    expect(access).toMatchObject({ hostname: 'app-prod-01', title: 'ops@app-prod-01' })
+    expect(raw).toMatchObject({ hostname: 'db-prod-01', title: 'ops@db-prod-01' })
+  })
+
   it('reports a credential-free connection type to main-process history collectors for direct, AccessClient SSH, and raw sessions', async () => {
     const directShell = createShell()
     const accessShell = createShell()
@@ -469,6 +490,78 @@ describe('SessionService', () => {
       shell.emitData(Buffer.from(`${marker}\n`))
       await expect(completion).resolves.toEqual({ completed: true, timedOut: false })
     }
+  })
+
+  it('recovers a usable prompt after a bastion denies an SSH command without waiting for the private probe timeout', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    const received: Array<{ sessionId: string; data: string }> = []
+    service.onData(event => received.push(event))
+    const session = await service.connectAccessSsh({
+      host: '10.10.10.10', hostname: 'app-prod-01', port: 22, username: 'ops', title: 'ops@app-prod-01', columns: 80, rows: 24,
+    })
+
+    const completion = service.writeAndWaitForCompletion(session.id, 'sudo su', 60_000)
+    const denial = 'TERM You are not allowed to use this command: sudo su\r\nops@bastion$ '
+    shell.emitData(Buffer.from(denial))
+
+    await expect(completion).resolves.toEqual({ completed: false, timedOut: false })
+    expect(shell.write).toHaveBeenLastCalledWith('\n')
+    expect(received).toEqual([{ sessionId: session.id, data: denial }])
+
+    // A repeated denial burst must not write a newline for every packet.
+    shell.emitData(Buffer.from(denial))
+    expect(shell.write).toHaveBeenCalledTimes(2)
+    expect(received).toEqual([
+      { sessionId: session.id, data: denial },
+      { sessionId: session.id, data: denial },
+    ])
+  })
+
+  it('requests an actual prompt after a Raw bastion session denies a command', async () => {
+    const rawShell = createShell()
+    const rawClient = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(rawShell) }) }
+    const service = new SessionService({ connect: vi.fn() }, { load: vi.fn() }, rawClient)
+    const received: Array<{ sessionId: string; data: string }> = []
+    service.onData(event => received.push(event))
+    const session = await service.connectRaw({
+      host: '127.0.0.1', hostname: 'db-prod-01', port: 22022, title: 'ops@db-prod-01', columns: 80, rows: 24,
+    })
+    const denial = 'TERM You are not allowed to use this command: sudo su\r\nops@bastion$ '
+
+    rawShell.emitData(Buffer.from(denial))
+
+    expect(rawShell.write).toHaveBeenCalledWith('\n')
+    expect(received).toEqual([{ sessionId: session.id, data: denial }])
+  })
+
+  it('does not submit a partially typed command while recovering an AccessClient prompt', async () => {
+    const rawShell = createShell()
+    const rawClient = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(rawShell) }) }
+    const service = new SessionService({ connect: vi.fn() }, { load: vi.fn() }, rawClient)
+    const session = await service.connectRaw({
+      host: '127.0.0.1', hostname: 'db-prod-01', port: 22022, title: 'ops@db-prod-01', columns: 80, rows: 24,
+    })
+
+    service.write(session.id, 'rm -rf pending-input')
+    rawShell.emitData(Buffer.from('TERM You are not allowed to use this command: sudo su\r\n'))
+
+    expect(rawShell.write).toHaveBeenCalledTimes(1)
+    expect(rawShell.write).toHaveBeenCalledWith('rm -rf pending-input')
+  })
+
+  it('does not inject a prompt-recovery newline for a direct SSH denial-like diagnostic', async () => {
+    const shell = createShell()
+    const client = { connect: vi.fn().mockResolvedValue({ close: vi.fn(), openShell: vi.fn().mockResolvedValue(shell) }) }
+    const service = new SessionService(client, { load: vi.fn() })
+    await service.connect({
+      host: 'server-a', port: 22, username: 'ops', auth: { kind: 'password', password: 'secret' },
+    })
+
+    shell.emitData(Buffer.from('command denied by a remote application\n'))
+
+    expect(shell.write).not.toHaveBeenCalled()
   })
 
   it('recognizes a completion marker appended to output without a trailing newline', async () => {

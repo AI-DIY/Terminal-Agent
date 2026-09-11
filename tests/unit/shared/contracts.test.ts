@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { terminalAgentNamespace } from '../../../src/preload/api'
-import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema, chatAppendMessageRequestSchema, chatAssociateShellRequestSchema, chatBindSessionRequestSchema, chatChangedEventSchema, chatCloseAssociationRequestSchema, chatCreateConversationSessionRequestSchema, chatCreateRequestSchema, chatConversationSessionListSchema, chatListSnapshotSchema, chatMessageRecordSchema, chatPinRequestSchema, chatRemoveRequestSchema, chatRunRequestSchema, chatRuntimeEventSchema, chatSetModeRequestSchema, chatShellAssociationSchema, chatSummarySchema, chatSwitchConversationSessionRequestSchema, chatTimestampSchema, chatUnpinRequestSchema, chatUpdateMessageRequestSchema, chatUpdateTitleRequestSchema } from '../../../src/shared/contracts'
+import { agentExecutionRequestSchema, agentStartRequestSchema, candidateConfirmationRequestSchema, savedDirectSessionInputSchema, sessionModeSchema, chatAppendMessageRequestSchema, chatAssociateShellRequestSchema, chatBindSessionRequestSchema, chatChangedEventSchema, chatCloseAssociationRequestSchema, chatCreateConversationSessionRequestSchema, chatCreateRequestSchema, chatConversationSessionListSchema, chatListRequestSchema, chatListSnapshotSchema, chatMessageRecordSchema, chatPinRequestSchema, chatRemoveRequestSchema, chatRunRequestSchema, chatRuntimeEventSchema, chatSetModeRequestSchema, chatShellAssociationSchema, chatSummarySchema, chatSwitchConversationSessionRequestSchema, chatTimestampSchema, chatUnpinRequestSchema, chatUpdateMessageRequestSchema, chatUpdateTitleRequestSchema } from '../../../src/shared/contracts'
 
 const { exposeInMainWorld } = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn()
@@ -279,6 +279,15 @@ describe('durable chat navigation contracts', () => {
     expect(() => chatChangedEventSchema.parse({ revision: 4, kind: 'updated', chat })).toThrow()
     expect(() => chatChangedEventSchema.parse({ kind: 'updated', chat })).toThrow()
     expect(() => chatListSnapshotSchema.parse({ revision: -1, chats: [], liveChatId: null })).toThrow()
+  })
+
+  it('accepts only bounded structured cursors for task-list paging', () => {
+    const cursor = { id: chat.id, createdAt: chat.createdAt, updatedAt: chat.updatedAt }
+    expect(chatListRequestSchema.parse({ limit: 40, cursor })).toEqual({ limit: 40, cursor })
+    expect(() => chatListRequestSchema.parse({ limit: 0 })).toThrow()
+    expect(() => chatListRequestSchema.parse({ limit: 101 })).toThrow()
+    expect(() => chatListRequestSchema.parse({ offset: 40 })).toThrow()
+    expect(() => chatListRequestSchema.parse({ cursor: { ...cursor, extra: true } })).toThrow()
   })
 
   it('lets renderer identify only an existing session and never supply shell metadata', () => {

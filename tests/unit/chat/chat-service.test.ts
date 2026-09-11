@@ -96,6 +96,19 @@ describe('ChatService', () => {
     await expect(chatService.list()).resolves.toEqual({ revision: 1, chats: [workspace], liveChatId: workspace.id })
   })
 
+  it('forwards bounded history-page requests to the repository', async () => {
+    const { repository, service: chatService } = service()
+    const cursor = {
+      id: 'chat-40',
+      createdAt: '2026-08-16T08:00:00.000Z',
+      updatedAt: '2026-08-16T08:01:00.000Z',
+    }
+    repository.listSnapshot.mockResolvedValue({ chats: [], liveChatId: null })
+
+    await expect(chatService.list({ limit: 40, cursor })).resolves.toEqual({ revision: 0, chats: [], liveChatId: null })
+    expect(repository.listSnapshot).toHaveBeenCalledWith({ limit: 40, cursor })
+  })
+
   it('revision-stamps task-internal conversation lists and publishes same-task restores', async () => {
     const { repository, service: chatService } = service()
     const active = {

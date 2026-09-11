@@ -75,15 +75,16 @@ import { normalizeChatContextSessionIds } from '../shared/chat-context-selection
 import { normalizeBuiltInSkillIds } from '../shared/built-in-skills'
 import { SsoConfigService, getLegacySsoConfigPath, getPreviousSsoConfigPath, getSsoConfigPath } from './settings/sso-config-service'
 import { isAtomicJsonStoreInvalidDataError } from './persistence/atomic-json-store'
-import { resolveSsoConfigHomeDirectory } from './settings/sso-config-home'
 import { SsoAuthenticationService } from './sso/sso-authentication-service'
 import { registerSsoHandlers } from './sso/register-sso-handlers'
 import { SkillService, resolveSkillsDirectory } from './skills/skill-service'
 import { registerSkillHandlers } from './skills/register-skill-handlers'
+import { configureTerminalAgentUserDataDirectory, migrateLegacyUserDataDirectory } from './settings/user-data-directory'
 
 let mainWindow: BrowserWindow | undefined
 let isRestoringMainWindow = false
 let diagnostics: DiagnosticsController | undefined
+const terminalAgentUserData = configureTerminalAgentUserDataDirectory({ app })
 // SSO and model settings intentionally share the user-scoped
 // `.terminal-agent/user-config.yml` document.  The prior JSON locations are
 // supplied only as one-time migration sources and are never written after the
@@ -91,7 +92,7 @@ let diagnostics: DiagnosticsController | undefined
 // Keeping one resolved path here prevents the two repositories from
 // accidentally writing separate copies when packaged and development homes
 // differ.
-const userConfigHome = resolveSsoConfigHomeDirectory(app.getPath('home'), process.env, app.isPackaged)
+const userConfigHome = terminalAgentUserData.userConfigHomeDirectory ?? terminalAgentUserData.homeDirectory
 const userConfigPath = getSsoConfigPath(userConfigHome)
 const ssoConfig = new SsoConfigService(userConfigPath, {
   legacyPaths: [
@@ -558,6 +559,16 @@ if (isPrimaryInstance) {
     },
   )
   app.whenReady().then(async () => {
+    // Complete the non-destructive profile migration before any repository
+    // reads state from the canonical directory. It is best-effort: the legacy
+    // profile is never modified and the completion marker stays unwritten, so
+    // a failed copy retries on the next launch. Aborting startup here instead
+    // would leave the user with no window at all after an in-place upgrade.
+    try {
+      await migrateLegacyUserDataDirectory(terminalAgentUserData)
+    } catch (error) {
+      console.error('Failed to migrate legacy Terminal-Agent user data', error)
+    }
     void recordPackagedWindowsInstallPath({
       platform: process.platform,
       isPackaged: app.isPackaged,

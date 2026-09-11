@@ -203,7 +203,7 @@ test('keeps a short task history from overflowing during task actions', async ({
   }
 })
 
-test('keeps a long task history scrollable', async ({ launchApp }) => {
+test('loads a long task history incrementally as the sidebar scrolls', async ({ launchApp }) => {
   let app: ElectronApplication | undefined
 
   try {
@@ -212,19 +212,30 @@ test('keeps a long task history scrollable', async ({ launchApp }) => {
     const history = page.getByRole('navigation', { name: '任务空间列表', exact: true })
 
     await page.evaluate(async () => {
-      await Promise.all(Array.from({ length: 16 }, async (_, index) => {
+      await Promise.all(Array.from({ length: 41 }, async (_, index) => {
         await window.terminalAgent.chats.create({ requestId: crypto.randomUUID(), title: `滚动任务 ${index + 1}` })
       }))
     })
-    await expect(page.locator('.history-item')).toHaveCount(17)
+    // The first launch task plus these 41 durable records are all visible
+    // before a reload because their live events were received by this page.
+    await expect(page.locator('.history-item')).toHaveCount(42)
+
+    await page.reload()
+    await waitForWorkbenchReady(page)
+
+    // Startup loads the bounded first history page and then creates its fresh
+    // active task. The final two records are fetched only after scrolling.
+    await expect(page.locator('.history-item')).toHaveCount(41)
 
     const beforeScroll = await historyScrollMetrics(history)
     expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight)
     const afterScroll = await history.evaluate(node => {
       node.scrollTop = node.scrollHeight
+      node.dispatchEvent(new Event('scroll'))
       return node.scrollTop
     })
     expect(afterScroll).toBeGreaterThan(0)
+    await expect(page.locator('.history-item')).toHaveCount(43)
   } finally {
     await app?.close()
   }
@@ -292,7 +303,7 @@ test('persists chat navigation across renderer reload with the task status', asy
   }
 })
 
-test('restores a newly created zero-SSH chat as a connectable live workspace after reload', async ({ launchApp }) => {
+test('opens a fresh zero-SSH workspace after reload while retaining prior tasks', async ({ launchApp }) => {
   const sshServer = await startSshServer()
   let app: ElectronApplication | undefined
 
@@ -312,12 +323,10 @@ test('restores a newly created zero-SSH chat as a connectable live workspace aft
 
     const restoredChat = chatItem(page, chatId)
     await expect(restoredChat).toBeVisible()
-    // A normal reload restores the persisted chat itself.  It no longer
-    // creates a second empty task merely because there is no navigation handoff.
-    await expect(restoredChat).toHaveClass(/active/)
-    // The startup task created on the first launch and this task are both
-    // persisted; reload does not append a third empty task.
-    await expect(page.locator('.history-item')).toHaveCount(2)
+    // Workbench entry always opens a new blank task. Existing tasks remain
+    // selectable history rather than taking focus on a normal reload.
+    await expect(restoredChat).not.toHaveClass(/active/)
+    await expect(page.locator('.history-item')).toHaveCount(3)
     await expect(page.locator('.history-item.active')).toContainText('未开始')
     await expect(page.getByRole('tab', { name: '主机用户名 + 密码连接', exact: true })).toBeVisible()
     await expect(page.getByLabel('任务 SSH 历史回放')).toHaveCount(0)
@@ -671,9 +680,9 @@ test('restores authoritative multi-chat session ownership and fallback layouts',
     await page.reload()
     await waitForWorkbenchReady(page)
 
-    // The two connected tasks and the initial durable task are restored as-is;
-    // startup does not append another empty task on a normal reload.
-    await expect(page.locator('.history-item')).toHaveCount(3)
+    // The two connected tasks and the initial durable task remain available,
+    // while workbench entry adds one newly selected blank task.
+    await expect(page.locator('.history-item')).toHaveCount(4)
     await chatItem(page, secondChatId).getByRole('button', { name: /^选择任务 / }).click()
     await expect(page.locator('.history-item.active .chat-select')).toHaveAttribute('aria-current', 'page')
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.2', exact: true })).toBeVisible()
@@ -703,7 +712,7 @@ test('restores authoritative multi-chat session ownership and fallback layouts',
     await expect(page.getByText('辅助驾驶 - 变更需人工确认', { exact: true })).toHaveCount(0)
 
     await removeActiveTask(page)
-    await expect(page.locator('.history-item')).toHaveCount(2)
+    await expect(page.locator('.history-item')).toHaveCount(3)
     await chatItem(page, firstChatId).getByRole('button', { name: /^选择任务 / }).click()
     await expect(page.locator('.history-item.active .chat-select')).toHaveAttribute('aria-current', 'page')
     await expect(page.getByRole('button', { name: '选择终端会话 127.0.0.1', exact: true })).toBeVisible()

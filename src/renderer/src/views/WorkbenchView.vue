@@ -24,7 +24,6 @@ import { createHostMemoryDisclosureQueue } from '../stores/host-memory-disclosur
 import { createChatWorkspacesStore, createWorkbenchOperationGate, createWorkbenchOpenedSessionHandler, createWorkbenchSessionOwnershipTracker, ensureWorkbenchShellView, focusOwnedWorkbenchSession, initializeWorkbenchTask, isInteractiveWorkbenchWorkspace, restoreWorkbenchSessionOwnership, workbenchSessionAttachmentTarget } from '../stores/chat-workspaces'
 import { getUserPreferencesStore } from '../stores/user-preferences'
 import { getSsoStore } from '../stores/sso'
-import { consumeWorkbenchNavigationHandoff } from '../stores/workbench-navigation-handoff'
 
 const emit = defineEmits<{ showSettings: [selectedChatId: string | null]; showSkills: [selectedChatId: string | null] }>()
 const store = createSessionsStore()
@@ -44,7 +43,6 @@ const shellHistory = createShellHistoryStore(window.terminalAgent.shellHistory)
 const layoutPreferences = getLayoutPreferencesStore()
 const userPreferences = getUserPreferencesStore()
 const sso = getSsoStore()
-const navigationHandoff = consumeWorkbenchNavigationHandoff()
 const welcomeName = computed(() => {
   const identity = sso.identity.value
   return identity ? identity.name + '（' + identity.employeeId + '）' : userPreferences.state.displayName || '朋友'
@@ -405,6 +403,10 @@ async function createChat(invalidateOperation = true): Promise<void> {
   if (chatId) shellViews.set(chatId, { visibleSessionIds: [], activeSessionId: null })
   visibleSessionIds.value = []
   activeSessionId.value = null
+}
+
+function loadMoreChats(): void {
+  void chatStore.loadMore()
 }
 
 async function refreshConversationSessions(chatId = chatStore.state.selectedId): Promise<void> {
@@ -861,16 +863,12 @@ async function initializeWorkbench(): Promise<void> {
   try {
     const failures = await initializeWorkbenchTask({
       load: async () => {
-        await chatStore.load()
-        const selectedChatId = navigationHandoff?.selectedChatId
-        if (selectedChatId && chatStore.state.chats.some(chat => chat.id === selectedChatId)) {
-          await selectChat(selectedChatId, false)
-        }
+        // Listing prior tasks is intentionally non-selecting. The workbench
+        // opens on a new task, while this first page remains available in the
+        // sidebar for explicit history selection.
+        await chatStore.load({ selectInitial: false })
       },
-      // A normal restart has no navigation handoff.  Existing durable tasks
-      // must remain selected by chatStore.load() instead of causing a new,
-      // empty task to be created merely because there was no handoff source.
-      shouldCreate: () => chatStore.state.chats.length === 0,
+      shouldCreate: () => true,
       restore: async () => {
         const selected = chatStore.state.selected
         if (selected) restoreAssociatedShellView(selected)
@@ -1035,13 +1033,17 @@ onBeforeUnmount(() => {
         :current-chat-id="chatStore.state.selectedId"
         :online-chat-ids="onlineChatIds"
         :loading="chatStore.state.loading"
+        :loading-more="chatStore.state.loadingMore"
+        :has-more="chatStore.state.nextCursor !== null"
         :error="chatStore.state.error"
+        :load-more-error="chatStore.state.loadMoreError"
         :rename-task="renameTask"
         :pin-task="pinTask"
         :unpin-task="unpinTask"
         @select="selectChat"
         @remove="removeChat"
         @create="createChat"
+        @load-more="loadMoreChats"
         @collapse="collapse"
       />
     </template>

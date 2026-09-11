@@ -9,7 +9,10 @@ const props = defineProps<{
   currentChatId: string | null
   onlineChatIds?: ReadonlySet<string>
   loading: boolean
+  loadingMore: boolean
+  hasMore: boolean
   error: string
+  loadMoreError: string
   renameTask(chatId: string, title: string): Promise<boolean>
   pinTask(chatId: string): Promise<boolean>
   unpinTask(chatId: string): Promise<boolean>
@@ -19,6 +22,7 @@ const emit = defineEmits<{
   collapse: []
   select: [chatId: string]
   remove: [chatId: string]
+  loadMore: []
 }>()
 
 const openMenuChatId = ref<string | null>(null)
@@ -102,6 +106,12 @@ function removeTask(chatId: string): void {
   openMenuChatId.value = null
   emit('remove', chatId)
 }
+
+function onTaskListScroll(event: Event): void {
+  const element = event.currentTarget
+  if (!(element instanceof HTMLElement)) return
+  if (element.scrollHeight - element.scrollTop - element.clientHeight <= 96) emit('loadMore')
+}
 </script>
 
 <template>
@@ -113,7 +123,7 @@ function removeTask(chatId: string): void {
     <button type="button" class="new-chat" aria-label="新建任务" @click="emit('create')"><Plus :size="14" aria-hidden="true" /><span>新建任务</span></button>
     <p v-if="error" class="status error" role="alert">{{ error }}</p>
     <p v-else-if="loading" class="status">正在读取任务...</p>
-    <nav v-else aria-label="任务空间列表">
+    <nav v-else aria-label="任务空间列表" @scroll.passive="onTaskListScroll">
       <p v-if="!groups.length" class="empty">暂无任务</p>
       <section v-for="group in groups" :key="group.label" class="chat-group" :aria-label="group.label">
         <h2>{{ group.label }}</h2>
@@ -146,6 +156,9 @@ function removeTask(chatId: string): void {
           </div>
         </div>
       </section>
+      <p v-if="loadMoreError" class="load-more-error" role="alert">{{ loadMoreError }}</p>
+      <p v-else-if="loadingMore" class="load-more" role="status">正在加载更多任务...</p>
+      <p v-else-if="hasMore" class="load-more-sentinel" aria-hidden="true" />
     </nav>
   </aside>
 </template>
@@ -165,6 +178,7 @@ nav::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 4px
 nav:hover::-webkit-scrollbar-thumb,nav:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 58%, transparent); }
 nav:hover::-webkit-scrollbar-thumb:hover,nav:focus-within::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .status,.empty { grid-row: 3 / -1; margin: 0; padding: 16px 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.load-more,.load-more-error { margin: 10px 9px 4px; color: var(--muted); font-size: 10px; line-height: 1.4; text-align: center; }.load-more-error { color: var(--red); }.load-more-sentinel { height: 1px; margin: 0; }
 .error,.rename-error { color: var(--red); }
 .chat-group + .chat-group { margin-top: 11px; }
 .chat-group h2 { margin: 0 0 5px; padding: 11px 9px 0; color: var(--muted); font-size: 10px; font-weight: 650; }

@@ -146,10 +146,23 @@ const standaloneError = computed(() => {
 const actionErrors = reactive<Record<string, string>>({})
 const actionError = computed(() => chatId.value ? actionErrors[chatId.value] ?? '' : '')
 const stepDrafts = reactive<Record<string, string>>({})
+const planActionStates = reactive<Record<string, 'executing' | 'cancelling'>>({})
 // Keep the transcript memo precise: plan-editor changes and connection
 // busy-state updates must still patch their controls, while ordinary composer
 // keystrokes continue to skip unchanged transcript cards.
 const stepDraftRevision = ref(0)
+const planActionRevision = ref(0)
+watch(() => props.chat?.messages, messages => {
+  const id = chatId.value
+  if (!id || props.chat?.id !== id || !messages) return
+  // Task-level message projections can lag behind an explicit conversation
+  // restore. Sync only execution-plan lifecycle fields so a durable plan
+  // cancellation/failure reaches its card without replacing the transcript.
+  store.syncExecutionPlans(id, messages)
+  for (const message of messages) {
+    if (message.executionPlan && isTerminalPlanStatus(message.executionPlan.status)) clearPlanActionState(message.id)
+  }
+}, { deep: true })
 const contextUsed = computed(() => estimateChatMessages(messages.value))
 const contextPercent = computed(() => Math.min(100, Math.round((contextUsed.value / modelContextLimit.value) * 100)))
 const sshContextLines = computed(() => store.state.sshContextLines)
@@ -515,6 +528,28 @@ function assistantReply(content: unknown): string {
 function planStatusLabel(status: string): string {
   return status === 'pending_review' ? '待确认' : status === 'executing' ? '执行中' : status === 'executed' ? '已执行' : status === 'partially_executed' ? '部分执行' : status === 'execution_failed' ? '执行失败' : '已取消'
 }
+function stepSendStateLabel(state: string): string {
+  return state === 'pending' ? '等待执行' : state === 'sent' ? '已发送' : state === 'failed' ? '发送失败' : '未发送'
+}
+function isTerminalPlanStatus(status: string): boolean {
+  return status === 'executed' || status === 'partially_executed' || status === 'execution_failed' || status === 'cancelled'
+}
+function planActionState(messageId: string): 'executing' | 'cancelling' | undefined {
+  return planActionStates[messageId]
+}
+function planIsExecuting(message: { id: string; executionPlan?: { status: string } }): boolean {
+  return message.executionPlan?.status === 'executing' || planActionState(message.id) !== undefined
+}
+function setPlanActionState(messageId: string, state: 'executing' | 'cancelling'): void {
+  if (planActionStates[messageId] === state) return
+  planActionStates[messageId] = state
+  planActionRevision.value += 1
+}
+function clearPlanActionState(messageId: string): void {
+  if (!(messageId in planActionStates)) return
+  delete planActionStates[messageId]
+  planActionRevision.value += 1
+}
 function stepCommand(step: { finalCommand?: string; originalCommand: string }): string { return step.finalCommand ?? step.originalCommand }
 function planTargetLabel(target: string): string {
   const allShells = props.chat?.shells ?? []
@@ -560,9 +595,18 @@ async function removeStep(messageId: string, stepId: string): Promise<void> {
 }
 async function cancelPlan(messageId: string): Promise<void> {
   const actionChatId = chatId.value
-  if (!actionChatId || props.sessionBusy) return
+  const plan = messages.value.find(item => item.id === messageId)?.executionPlan
+  if (!actionChatId || !plan || (plan.status !== 'pending_review' && plan.status !== 'executing' && !planActionState(messageId))) return
+  if (props.sessionBusy && !planIsExecuting({ id: messageId, executionPlan: plan })) return
   actionErrors[actionChatId] = ''
-  try { await store.cancelPlan(actionChatId, messageId) } catch (error) { reportActionError(actionChatId, error, '计划取消失败') }
+  setPlanActionState(messageId, 'cancelling')
+  try {
+    await store.cancelPlan(actionChatId, messageId)
+  } catch (error) {
+    reportActionError(actionChatId, error, '计划取消失败')
+  } finally {
+    clearPlanActionState(messageId)
+  }
 }
 async function executePlan(messageId: string): Promise<void> {
   const actionChatId = chatId.value
@@ -582,12 +626,15 @@ async function executePlan(messageId: string): Promise<void> {
         if (command !== stepCommand(step)) await editStep(messageId, step.id, command)
       }
     }
+    setPlanActionState(messageId, 'executing')
     // Legacy assertion/documentation: store.executePlan(actionChatId, messageId, selectedContextSessionIds.value, skillIds)
     await runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (
       store.executePlan(actionChatId, messageId, selectedContextSessionIds.value, skillIds, selectedSkillIds.value)
     ))
   } catch (error) {
     reportActionError(actionChatId, error, '计划执行失败')
+  } finally {
+    clearPlanActionState(messageId)
   }
 }
 onMounted(() => {
@@ -646,7 +693,7 @@ onBeforeUnmount(() => {
     </header>
 
     <div ref="messagesElement" class="messages" @scroll="onMessagesScroll">
-      <article v-for="message in messages" v-memo="[message.id, message.role, message.content, message.state, message.retryable, message.messageType, message.executionPlan, props.chat?.shells, props.sessionBusy, stepDraftRevision]" :key="message.id" :class="['message', message.role, { audit: message.messageType === 'execution_audit', 'execution-card': message.messageType === 'execution_audit' }]">
+      <article v-for="message in messages" v-memo="[message.id, message.role, message.content, message.state, message.retryable, message.messageType, message.executionPlan, props.chat?.shells, props.sessionBusy, stepDraftRevision, planActionRevision]" :key="message.id" :class="['message', message.role, { audit: message.messageType === 'execution_audit', 'execution-card': message.messageType === 'execution_audit' }]">
         <span class="message-avatar" aria-hidden="true"><UserRound v-if="message.role === 'user'" :size="14" /><Bot v-else :size="14" /></span>
         <div class="message-content message-bubble">
           <div class="message-meta"><strong>{{ message.messageType === 'execution_audit' ? '执行审计' : message.role === 'user' ? '你' : 'Terminal-Agent' }}</strong><span v-if="message.state === 'streaming'">生成中</span><span v-else-if="message.state === 'error'">未完成</span></div>
@@ -656,21 +703,27 @@ onBeforeUnmount(() => {
             <header class="plan-head plan-heading"><div><strong>{{ message.executionPlan.title }}</strong><span>{{ message.executionPlan.steps.length }} 步 · {{ planStatusLabel(message.executionPlan.status) }}</span></div><span :class="['plan-badge', 'status-chip', message.executionPlan.status]">{{ planStatusLabel(message.executionPlan.status) }}</span></header>
             <p v-if="message.executionPlan.steps.length === 0" class="plan-empty">计划已取消，未执行任何命令。</p>
              <div v-for="step in message.executionPlan.steps" :key="step.id" class="plan-step" :data-plan-step="step.id">
-               <div class="plan-step-head"><strong>{{ planTargetLabel(step.target) }}</strong><span>{{ step.sendState }}</span></div>
+               <div class="plan-step-head"><strong>{{ planTargetLabel(step.target) }}</strong><span>{{ stepSendStateLabel(step.sendState) }}</span></div>
                <p>{{ step.explanation }}</p>
+               <p v-if="step.failure" class="plan-step-failure"><CircleAlert :size="12" aria-hidden="true" /><span>{{ step.failure }}</span></p>
                <div v-if="step.fence" class="plan-risk"><CircleAlert :size="12" aria-hidden="true" /><span>安全围栏：{{ step.fence.ruleName }}（{{ step.fence.ruleId }}）</span></div>
                <label class="plan-command"><span>原始命令</span><code>{{ step.originalCommand }}</code></label>
                <div v-if="message.executionPlan.status === 'pending_review'" class="plan-command-editor">
-                 <label class="plan-command"><span>修改后命令（可编辑）</span><textarea class="plan-edit-input" rows="2" :disabled="sessionBusy" :value="stepDraftValue(message.id, step.id, step)" :aria-label="`编辑 ${planTargetLabel(step.target)} 命令`" @input="setStepDraft(message.id, step.id, $event)" /></label>
+                 <label class="plan-command"><span>修改后命令（可编辑）</span><textarea class="plan-edit-input" rows="2" :disabled="sessionBusy || Boolean(planActionState(message.id))" :value="stepDraftValue(message.id, step.id, step)" :aria-label="`编辑 ${planTargetLabel(step.target)} 命令`" @input="setStepDraft(message.id, step.id, $event)" /></label>
                  <div class="plan-step-actions">
-                   <button type="button" class="icon-button delete-plan-step" :disabled="sessionBusy" aria-label="删除命令" :title="message.executionPlan.steps.length <= 1 ? '删除后将取消计划' : `删除 ${planTargetLabel(step.target)} 步骤`" @click="removeStep(message.id, step.id)"><Trash2 :size="13" aria-hidden="true" /></button>
+                   <button type="button" class="icon-button delete-plan-step" :disabled="sessionBusy || Boolean(planActionState(message.id))" aria-label="删除命令" :title="message.executionPlan.steps.length <= 1 ? '删除后将取消计划' : `删除 ${planTargetLabel(step.target)} 步骤`" @click="removeStep(message.id, step.id)"><Trash2 :size="13" aria-hidden="true" /></button>
                  </div>
                </div>
                <label v-else class="plan-command"><span>修改后命令</span><code>{{ stepCommand(step) }}</code></label>
             </div>
-            <footer v-if="message.executionPlan.status === 'pending_review' && message.executionPlan.steps.length > 0" class="plan-actions">
-               <button type="button" class="secondary-action" :disabled="sessionBusy" @click="cancelPlan(message.id)"><X :size="13" aria-hidden="true" />取消计划</button>
-               <button type="button" class="primary-action" :disabled="sessionBusy" @click="executePlan(message.id)"><Send :size="13" aria-hidden="true" />确认并执行 {{ message.executionPlan.steps.length }} 步</button>
+            <footer v-if="(message.executionPlan.status === 'pending_review' && message.executionPlan.steps.length > 0) || planIsExecuting(message)" class="plan-actions">
+              <template v-if="planIsExecuting(message)">
+                <button type="button" class="secondary-action" :disabled="planActionState(message.id) === 'cancelling'" @click="cancelPlan(message.id)"><Square :size="13" fill="currentColor" aria-hidden="true" />停止后续执行</button>
+              </template>
+              <template v-else>
+                <button type="button" class="secondary-action" :disabled="sessionBusy || Boolean(planActionState(message.id))" @click="cancelPlan(message.id)"><X :size="13" aria-hidden="true" />取消计划</button>
+                <button type="button" class="primary-action" :disabled="sessionBusy || Boolean(planActionState(message.id))" @click="executePlan(message.id)"><Send :size="13" aria-hidden="true" />确认并执行 {{ message.executionPlan.steps.length }} 步</button>
+              </template>
             </footer>
           </section>
         </div>
@@ -735,7 +788,7 @@ onBeforeUnmount(() => {
 .visually-hidden-alert,.visually-hidden-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .progress-message { padding-top: 3px; }.progress-content { padding-top: 8px; padding-bottom: 8px; }.progress-item { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-left: 3px solid var(--accent); border-radius: 5px; background: var(--accent-soft); color: var(--muted); font-size: 10px; }.progress-item svg { color: var(--accent); }.progress-dots { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; min-width: 19px; color: var(--accent); }.progress-dots i { display: block; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .3; animation: chat-progress-dot 1.15s ease-in-out infinite; }.progress-dots i:nth-child(2) { animation-delay: .14s; }.progress-dots i:nth-child(3) { animation-delay: .28s; }
 .message { display: grid; grid-template-columns: 31px minmax(0, 1fr); align-items: start; gap: 9px; min-width: 0; padding: 9px 0; }.message-avatar { display: grid; place-items: center; width: 31px; height: 31px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--muted); }.message.assistant .message-avatar { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); background: var(--accent-soft); color: var(--accent); }.message-content { position: relative; min-width: 0; max-width: 100%; padding: 11px 12px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 2px 8px color-mix(in srgb, var(--text-strong) 4%, transparent); overflow-wrap: anywhere; }.message.assistant .message-content::before { position: absolute; top: 11px; bottom: 11px; left: -1px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); content: ""; }.message.user { grid-template-columns: minmax(0, 1fr) 31px; padding-left: 40px; }.message.user .message-avatar { grid-column: 2; grid-row: 1; background: var(--panel); color: var(--text-strong); }.message.user .message-content { grid-column: 1; grid-row: 1; background: var(--surface-soft); }.message-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }.message-meta strong { color: var(--text-strong); font-size: 10px; }.message.assistant .message-meta strong { color: var(--accent); }.message-meta span { margin-left: auto; }.message p { margin: 0; color: var(--text); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }.message.audit .message-content { border-color: var(--amber-line); background: var(--amber-soft); }.message.audit .message-avatar { color: var(--amber); }
-.execution-plan { display: grid; gap: 8px; margin-top: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }.plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); }.plan-head > div { display: grid; gap: 3px; min-width: 0; }.plan-head strong { color: var(--text-strong); font-size: 11px; overflow-wrap: anywhere; }.plan-head span { color: var(--muted); font-size: 9px; }.plan-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent) !important; font-weight: 650; }.plan-empty { margin: 2px 0; color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-step { display: grid; gap: 5px; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }.plan-step:last-of-type { border-bottom: 0; }.plan-step-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; }.plan-step-head strong { color: var(--text-strong); font-size: 10px; }.plan-step-head span { color: var(--muted); font-size: 9px; }.plan-step p { color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-risk { display: flex; align-items: flex-start; gap: 5px; color: var(--amber); font-size: 9px; line-height: 1.45; }.plan-risk svg { flex: 0 0 auto; margin-top: 1px; }.plan-command { display: grid; gap: 3px; min-width: 0; }.plan-command span { color: var(--faint); font-size: 8px; }.plan-command code { display: block; min-width: 0; overflow: auto; padding: 5px 6px; border: 1px solid var(--line-soft); background: var(--surface-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-step-actions,.plan-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }.plan-edit-input { min-width: 0; flex: 1; height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; }.icon-button,.secondary-action,.primary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; white-space: nowrap; }.icon-button { width: 27px; padding: 0; }.icon-button:hover,.secondary-action:hover { border-color: var(--focus); color: var(--text-strong); }.delete-plan-step { border-color: var(--amber-line); background: var(--amber-soft); color: var(--amber); }.delete-plan-step:hover:not(:disabled) { border-color: var(--amber); background: var(--amber-soft); color: var(--amber); }.primary-action { border-color: var(--accent); background: var(--accent); color: #fff; }.plan-actions { justify-content: flex-end; padding-top: 2px; }.plan-edit-input:disabled,.icon-button:disabled,.plan-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.execution-plan { display: grid; gap: 8px; margin-top: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }.plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); }.plan-head > div { display: grid; gap: 3px; min-width: 0; }.plan-head strong { color: var(--text-strong); font-size: 11px; overflow-wrap: anywhere; }.plan-head span { color: var(--muted); font-size: 9px; }.plan-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent) !important; font-weight: 650; }.plan-empty { margin: 2px 0; color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-step { display: grid; gap: 5px; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }.plan-step:last-of-type { border-bottom: 0; }.plan-step-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; }.plan-step-head strong { color: var(--text-strong); font-size: 10px; }.plan-step-head span { color: var(--muted); font-size: 9px; }.plan-step p { color: var(--muted); font-size: 9px; line-height: 1.45; }.plan-risk { display: flex; align-items: flex-start; gap: 5px; color: var(--amber); font-size: 9px; line-height: 1.45; }.plan-risk svg { flex: 0 0 auto; margin-top: 1px; }.plan-step-failure { display: flex; align-items: flex-start; gap: 5px; margin: 0; color: var(--red); font-size: 9px; line-height: 1.45; }.plan-step-failure svg { flex: 0 0 auto; margin-top: 1px; }.plan-command { display: grid; gap: 3px; min-width: 0; }.plan-command span { color: var(--faint); font-size: 8px; }.plan-command code { display: block; min-width: 0; overflow: auto; padding: 5px 6px; border: 1px solid var(--line-soft); background: var(--surface-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-step-actions,.plan-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }.plan-edit-input { min-width: 0; flex: 1; height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; }.icon-button,.secondary-action,.primary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 9px; white-space: nowrap; }.icon-button { width: 27px; padding: 0; }.icon-button:hover,.secondary-action:hover { border-color: var(--focus); color: var(--text-strong); }.delete-plan-step { border-color: var(--amber-line); background: var(--amber-soft); color: var(--amber); }.delete-plan-step:hover:not(:disabled) { border-color: var(--amber); background: var(--amber-soft); color: var(--amber); }.primary-action { border-color: var(--accent); background: var(--accent); color: #fff; }.plan-actions { justify-content: flex-end; padding-top: 2px; }.plan-edit-input:disabled,.icon-button:disabled,.plan-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .empty { display: grid; justify-items: center; gap: 7px; margin: auto 0; padding: 42px 18px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); text-align: center; }.empty svg { color: var(--accent); }.empty strong { color: var(--text-strong); font-size: 12px; }.empty span { max-width: 270px; font-size: 10px; line-height: 1.55; }
 .plan-command-editor { display: grid; grid-template-columns: minmax(0, 1fr) 27px; align-items: center; gap: 6px; min-width: 0; }.plan-command-editor .plan-edit-input { display: block; width: 100%; min-width: 0; min-height: 44px; height: auto; padding: 7px; resize: vertical; font: 9px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.plan-command-editor .plan-step-actions { align-self: center; justify-self: end; }
 .error { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0 37px; padding: 9px 10px; border-left: 2px solid var(--red); background: var(--surface); color: var(--red); font-size: 10px; line-height: 1.5; }.error span { min-width: 0; flex: 1; overflow-wrap: anywhere; }.error button { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); }
@@ -804,6 +857,7 @@ onBeforeUnmount(() => {
 .plan-step { padding: 8px 9px; border-bottom: 1px solid var(--line); }
 .plan-step-head strong { font-size: 10px; }
 .plan-step p { margin: 5px 0 6px; font-size: 9px; line-height: 1.45; }
+.plan-step .plan-step-failure { align-items: flex-start; margin: 0 0 6px; color: var(--red); }
 .plan-risk { margin-bottom: 6px; padding: 6px 7px; border-radius: 4px; background: var(--amber-soft); font-size: 9px; }
 .plan-command span { font-size: 9px; font-weight: 700; }
 .plan-command code { padding: 6px 7px; border-color: var(--line); border-radius: 5px; background: var(--terminal); color: var(--terminal-text); font-size: 9px; line-height: 1.4; }

@@ -197,7 +197,7 @@ describe('global chat store', () => {
   it('memoizes unchanged transcript cards while the composer is receiving input', () => {
     const panel = readFileSync(new URL('../../../src/renderer/src/components/chat/GlobalChatPanel.vue', import.meta.url), 'utf8')
 
-    expect(panel).toContain('v-memo="[message.id, message.role, message.content, message.state, message.retryable, message.messageType, message.executionPlan, props.chat?.shells, props.sessionBusy, stepDraftRevision]"')
+    expect(panel).toContain('v-memo="[message.id, message.role, message.content, message.state, message.retryable, message.messageType, message.executionPlan, props.chat?.shells, props.sessionBusy, stepDraftRevision, planActionRevision]"')
   })
 
   it('blocks sends and coalesces duplicate compaction requests while preserving the draft', async () => {
@@ -470,6 +470,39 @@ describe('global chat store', () => {
     expect(store.state.messages.c2?.[0]?.messageType).toBe('execution_audit')
   })
 
+  it('syncs durable plan state without replacing the active transcript or draft', () => {
+    const store = createGlobalChatStore(api())
+    const pendingPlan = {
+      id: 'EP-1', title: '检查服务', status: 'pending_review' as const,
+      steps: [{ id: 'step-1', target: 'web-02', explanation: '查看状态', originalCommand: 'systemctl status api', sendState: 'pending' as const }],
+    }
+    store.hydrate('c1', [{
+      id: 'plan-message', role: 'assistant', content: '本地保留的回复', state: 'complete', executionPlan: pendingPlan,
+    }])
+    store.setDraft('c1', '不要覆盖这个草稿')
+    store.beginRun('c1', 'run-1')
+
+    store.syncExecutionPlans('c1', [
+      {
+        id: 'plan-message',
+        executionPlan: {
+          ...pendingPlan,
+          status: 'execution_failed',
+          steps: [{ ...pendingPlan.steps[0], sendState: 'not_sent', failure: '计划执行过程中发生未预期错误' }],
+        },
+      },
+      { id: 'later-message' },
+    ])
+
+    expect(store.state.messages.c1).toEqual([expect.objectContaining({
+      id: 'plan-message',
+      content: '本地保留的回复',
+      executionPlan: expect.objectContaining({ status: 'execution_failed', steps: [expect.objectContaining({ sendState: 'not_sent' })] }),
+    })])
+    expect(store.draft('c1')).toBe('不要覆盖这个草稿')
+    expect(store.state.runs.c1).toBe('run-1')
+  })
+
   it('keeps Skill progress run-scoped and clears cards on terminal chat events', () => {
     const store = createGlobalChatStore(api())
     const invocationId = '550e8400-e29b-41d4-a716-446655440000'
@@ -511,6 +544,10 @@ describe('global chat store', () => {
     expect(panel).toContain('<span>修改后命令（可编辑）</span>')
     expect(panel).toContain('aria-label="删除命令"')
     expect(panel).toContain('@click="removeStep(message.id, step.id)"')
+    expect(panel).toContain('store.syncExecutionPlans(id, messages)')
+    expect(panel).toContain('停止后续执行')
+    expect(panel).toContain('function stepSendStateLabel(state: string)')
+    expect(panel).toContain('class="plan-step-failure"')
     expect(executePlan).toContain('for (const step of plan.steps)')
     expect(executePlan).toContain('await editStep(messageId, step.id, command)')
     expect(executePlan).toContain('await runChatActionWithSkillGate(props.skillsAvailable, enabledSkillIds.value, skillIds => (')

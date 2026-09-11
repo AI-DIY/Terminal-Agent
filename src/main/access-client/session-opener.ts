@@ -7,6 +7,7 @@ export function createAccessClientSessionOpener(sessions: SessionOpenerPort): Ac
   return {
     openSsh: request => sessions.connectAccessSsh({
       host: request.host,
+      ...(request.hostname ? { hostname: request.hostname } : {}),
       port: request.port,
       username: request.username,
       ...(request.password !== undefined ? { password: request.password } : {}),

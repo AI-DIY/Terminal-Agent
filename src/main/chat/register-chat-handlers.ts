@@ -4,6 +4,7 @@ import {
   chatCreateConversationSessionRequestSchema,
   chatBindSessionRequestSchema,
   chatIdentifierSchema,
+  chatListRequestSchema,
   chatRemoveRequestSchema,
   chatResolveSessionRequestSchema,
   chatSetModeRequestSchema,
@@ -32,10 +33,13 @@ type ChatHandlerOptions = { skillAuthorization?: { isAuthenticated(): boolean } 
 
 export function registerChatHandlers(service: ChatHandlerService, trustedSender: WebContents, sessions: SessionLookup, runtime?: ChatRuntime, plans?: ExecutionPlanService, options: ChatHandlerOptions = {}): () => void {
   plans ??= (runtime as ChatRuntime & { planService?: ExecutionPlanService } | undefined)?.planService
-  ipcMain.handle('chats:list', async event => {
+  ipcMain.handle('chats:list', async (event, request: unknown) => {
     assertTrustedSender(event, trustedSender)
-    await service.reconcileSessions(() => sessions.snapshot())
-    return service.list()
+    const parsed = chatListRequestSchema.parse(request === undefined ? {} : request)
+    // Reconciliation belongs to the startup page. Repeating it for every
+    // history page would turn sidebar scrolling into a session-wide scan.
+    if (!parsed.cursor) await service.reconcileSessions(() => sessions.snapshot())
+    return service.list(parsed)
   })
   ipcMain.handle('chats:create', (event, request: unknown) => {
     assertTrustedSender(event, trustedSender)

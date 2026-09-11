@@ -7,6 +7,7 @@ import {
   chatCreateConversationSessionRequestSchema,
   chatCreateRequestSchema,
   chatIdentifierSchema,
+  chatListRequestSchema,
   chatPinRequestSchema,
   chatRemoveRequestSchema,
   chatSetModeRequestSchema,
@@ -24,6 +25,8 @@ import {
   type ChatConversationSessionSummary,
   type ChatCreateConversationSessionRequest,
   type ChatCreateRequest,
+  type ChatListCursor,
+  type ChatListRequest,
   type ChatMessageRecord,
   type ChatPinRequest,
   type ChatRemoveRequest,
@@ -35,6 +38,7 @@ import {
   type ChatUnpinRequest,
   type ChatUpdateTitleRequest,
   type ChatWorkspace,
+  CHAT_LIST_PAGE_SIZE,
 } from '../../shared/contracts'
 import { AtomicJsonStore, type AtomicJsonStoreOptions } from '../persistence/atomic-json-store'
 import type { ChatMessageContent } from '../../shared/chat-content'
@@ -54,7 +58,7 @@ import {
 } from './chat-contracts'
 
 export type ChatMutation<T> = { value: T; changed: boolean; liveChatId: string | null }
-export type ChatList = { chats: ChatSummary[]; liveChatId: string | null }
+export type ChatList = { chats: ChatSummary[]; liveChatId: string | null; nextCursor?: ChatListCursor | null }
 export type ChatConversationSessionListValue = Omit<ChatConversationSessionList, 'revision'>
 
 const interruptedStreamRecoveryContent = '聊天请求已中断，请重试。'
@@ -108,9 +112,24 @@ export class ChatRepository {
     return summarizeChats(document.chats, document.associations)
   }
 
-  async listSnapshot(): Promise<ChatList> {
+  async listSnapshot(request: ChatListRequest = {}): Promise<ChatList> {
+    const parsed = chatListRequestSchema.parse(request)
     const document = await this.store.load()
-    return { chats: summarizeChats(document.chats, document.associations), liveChatId: document.liveChatId }
+    const chats = summarizeChats(document.chats, document.associations)
+    const pageStart = parsed.cursor
+      ? chats.findIndex(chat => compareChatOrder(chat, parsed.cursor!) > 0)
+      : 0
+    const start = pageStart < 0 ? chats.length : pageStart
+    const limit = parsed.limit ?? CHAT_LIST_PAGE_SIZE
+    const page = chats.slice(start, start + limit)
+    const next = page.length > 0 && start + page.length < chats.length
+      ? chatListCursor(page[page.length - 1]!)
+      : null
+    return {
+      chats: page,
+      liveChatId: document.liveChatId,
+      ...(next ? { nextCursor: next } : {}),
+    }
   }
 
   async get(chatId: string): Promise<ChatWorkspace> {
@@ -1120,9 +1139,20 @@ export function summarizeChats(
 }
 
 function compareChats(left: ChatSummary, right: ChatSummary): number {
+  return compareChatOrder(left, right)
+}
+
+function compareChatOrder(
+  left: Pick<ChatSummary, 'updatedAt' | 'createdAt' | 'id'>,
+  right: Pick<ChatListCursor, 'updatedAt' | 'createdAt' | 'id'>,
+): number {
   return right.updatedAt.localeCompare(left.updatedAt)
     || left.createdAt.localeCompare(right.createdAt)
     || left.id.localeCompare(right.id)
+}
+
+function chatListCursor(chat: ChatSummary): ChatListCursor {
+  return { updatedAt: chat.updatedAt, createdAt: chat.createdAt, id: chat.id }
 }
 
 function markChatStarted(chat: PersistedChat): void {

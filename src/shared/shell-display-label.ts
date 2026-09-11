@@ -174,7 +174,7 @@ function withOrdinal(value: string, ordinal: number): string {
   return `${value.slice(0, Math.max(1, 255 - suffix.length))}${suffix}`
 }
 
-function hostHintFromTitle(value: string | undefined): string | undefined {
+export function hostHintFromTitle(value: string | undefined): string | undefined {
   const title = value?.trim()
   if (!title) return undefined
 

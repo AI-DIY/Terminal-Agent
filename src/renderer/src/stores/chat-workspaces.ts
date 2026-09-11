@@ -1,6 +1,9 @@
 import { reactive } from 'vue'
+import { CHAT_LIST_PAGE_SIZE } from '../../../shared/contracts'
 import type {
   ChatChangedEvent,
+  ChatListCursor,
+  ChatListRequest,
   ChatListSnapshot,
   ChatPinRequest,
   ChatSessionResolution,
@@ -181,7 +184,7 @@ export async function runWorkbenchSessionReconnect<TSession>(options: {
 }
 
 type ChatApi = {
-  list(): Promise<ChatListSnapshot>
+  list(request?: ChatListRequest): Promise<ChatListSnapshot>
   create(request: { requestId: string }): Promise<ChatWorkspaceSnapshot>
   get(chatId: string): Promise<ChatWorkspaceSnapshot>
   resolveSession(request: { sessionId: string }): Promise<ChatSessionResolution>
@@ -195,6 +198,7 @@ type ChatApi = {
 type StoreOptions = {
   now?: () => Date
   requestId?: () => string
+  pageSize?: number
 }
 
 function summaryOf(chat: ChatWorkspace): ChatSummary {
@@ -246,6 +250,7 @@ export function groupChatSummaries(chats: readonly ChatSummary[], now: Date): Ch
 export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = {}) {
   const now = options.now ?? (() => new Date())
   const requestId = options.requestId ?? (() => crypto.randomUUID())
+  const pageSize = options.pageSize ?? CHAT_LIST_PAGE_SIZE
   const workspaces = new Map<string, ChatWorkspace>()
   const workspaceRevisions = new Map<string, number>()
   const removalSequences = new Map<string, number>()
@@ -261,24 +266,68 @@ export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = 
     selected: null as ChatWorkspace | null,
     selectedId: null as string | null,
     liveChatId: null as string | null,
+    nextCursor: null as ChatListCursor | null,
     revision: -1,
     loading: false,
+    loadingMore: false,
     error: '',
+    loadMoreError: '',
   })
 
   function regroup(): void {
     state.groups = groupChatSummaries(state.chats, now())
   }
 
-  function upsert(chat: ChatWorkspace): void {
-    workspaces.set(chat.id, chat)
-    const summary = summaryOf(chat)
-    const index = state.chats.findIndex(item => item.id === chat.id)
+  function upsertSummary(summary: ChatSummary): void {
+    const index = state.chats.findIndex(item => item.id === summary.id)
     if (index < 0) state.chats = [summary, ...state.chats]
     else state.chats[index] = summary
-    state.chats.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
-    if (state.selectedId === chat.id) state.selected = chat
+    state.chats.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)
+      || left.createdAt.localeCompare(right.createdAt)
+      || left.id.localeCompare(right.id))
     regroup()
+  }
+
+  function upsert(chat: ChatWorkspace): void {
+    workspaces.set(chat.id, chat)
+    upsertSummary(summaryOf(chat))
+    if (state.selectedId === chat.id) state.selected = chat
+  }
+
+  function copyListCursor(cursor: ChatListCursor): ChatListCursor {
+    return {
+      updatedAt: cursor.updatedAt,
+      createdAt: cursor.createdAt,
+      id: cursor.id,
+    }
+  }
+
+  function matchesListCursor(left: ChatListCursor | null, right: ChatListCursor): boolean {
+    return left?.updatedAt === right.updatedAt
+      && left.createdAt === right.createdAt
+      && left.id === right.id
+  }
+
+  function mergeListSnapshot(snapshot: ChatListSnapshot, replace: boolean): boolean {
+    if (snapshot.revision < state.revision) return false
+    if (snapshot.revision >= liveChatRevision) {
+      liveChatRevision = snapshot.revision
+      state.liveChatId = snapshot.liveChatId
+    }
+    state.revision = snapshot.revision
+    const chats = replace ? [] as ChatSummary[] : [...state.chats]
+    for (const summary of snapshot.chats) {
+      const index = chats.findIndex(chat => chat.id === summary.id)
+      if (index < 0) chats.push(summary)
+      else chats[index] = summary
+    }
+    chats.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)
+      || left.createdAt.localeCompare(right.createdAt)
+      || left.id.localeCompare(right.id))
+    state.chats = chats
+    state.nextCursor = snapshot.nextCursor ?? null
+    regroup()
+    return true
   }
 
   function commitSelection(chat: ChatWorkspace, sequence: number): void {
@@ -455,25 +504,43 @@ export function createChatWorkspacesStore(api: ChatApi, options: StoreOptions = 
       }
       return null
     },
-    async load(): Promise<void> {
+    async load(options: { selectInitial?: boolean } = {}): Promise<void> {
       const initialNavigationSequence = navigationSequence
       state.loading = true
       state.error = ''
+      state.loadMoreError = ''
       try {
-        let snapshot = await api.list()
-        while (snapshot.revision < state.revision || snapshot.revision < liveChatRevision) snapshot = await api.list()
-        state.revision = snapshot.revision
-        state.chats = [...snapshot.chats]
-        liveChatRevision = snapshot.revision
-        state.liveChatId = snapshot.liveChatId
-        regroup()
+        let snapshot = await api.list({ limit: pageSize })
+        while (snapshot.revision < state.revision || snapshot.revision < liveChatRevision) snapshot = await api.list({ limit: pageSize })
+        if (!mergeListSnapshot(snapshot, true)) return
         if (initialNavigationSequence !== navigationSequence) return
+        if (options.selectInitial === false) return
         const initial = state.liveChatId ?? state.chats[0]?.id
         if (initial) await select(initial)
       } catch (error) {
         state.error = error instanceof Error ? error.message : '无法读取任务列表。'
       } finally {
         state.loading = false
+      }
+    },
+    async loadMore(): Promise<boolean> {
+      const currentCursor = state.nextCursor
+      if (!currentCursor || state.loading || state.loadingMore) return false
+      const cursor = copyListCursor(currentCursor)
+      state.loadingMore = true
+      state.loadMoreError = ''
+      try {
+        let snapshot = await api.list({ cursor, limit: pageSize })
+        while (snapshot.revision < state.revision || snapshot.revision < liveChatRevision) {
+          snapshot = await api.list({ cursor, limit: pageSize })
+        }
+        if (!matchesListCursor(state.nextCursor, cursor)) return false
+        return mergeListSnapshot(snapshot, false)
+      } catch (error) {
+        state.loadMoreError = error instanceof Error ? error.message : '无法读取更多任务。'
+        return false
+      } finally {
+        state.loadingMore = false
       }
     },
     create,

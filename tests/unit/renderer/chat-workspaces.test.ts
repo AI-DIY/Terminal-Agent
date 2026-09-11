@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import type { ChatChangedEvent, ChatSessionResolution, ChatSummary, ChatWorkspace, ChatWorkspaceSnapshot } from '../../../src/shared/contracts'
+import type { ChatChangedEvent, ChatListRequest, ChatListSnapshot, ChatSessionResolution, ChatSummary, ChatWorkspace, ChatWorkspaceSnapshot } from '../../../src/shared/contracts'
 
 const now = new Date('2026-08-16T12:00:00.000Z')
 
@@ -35,7 +35,10 @@ function api(chats: ChatSummary[], workspaces: ChatWorkspace[], revision = 4, li
   const byId = new Map(workspaces.map(chat => [chat.id, chat]))
   const listeners = new Set<(event: ChatChangedEvent) => void>()
   return {
-    list: vi.fn(async () => ({ revision, chats, liveChatId })),
+    list: vi.fn<(request?: ChatListRequest) => Promise<ChatListSnapshot>>(async request => {
+      void request
+      return { revision, chats, liveChatId }
+    }),
     create: vi.fn(async (): Promise<ChatWorkspaceSnapshot> => ({ revision: revision + 1, chat: workspaces.at(-1)!, liveChatId: workspaces.at(-1)!.id })),
     get: vi.fn(async (chatId: string) => ({ revision, chat: byId.get(chatId)!, liveChatId })),
     resolveSession: vi.fn(async (request: { sessionId: string }): Promise<ChatSessionResolution> => ({ revision, sessionId: request.sessionId, chat: null, liveChatId })),
@@ -196,6 +199,108 @@ describe('chat workspaces store', () => {
     const { isInteractiveWorkbenchWorkspace } = await import('../../../src/renderer/src/stores/chat-workspaces')
 
     expect(isInteractiveWorkbenchWorkspace(null, null)).toBe(true)
+  })
+
+  it('loads historical task summaries without selecting one when startup will create a new task', async () => {
+    const { createChatWorkspacesStore } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const history = summary({ id: 'history', title: '历史任务', createdAt: '2026-08-16T02:00:00.000Z' })
+    const chatApi = api([history], [workspace(history)], 4, history.id)
+    const store = createChatWorkspacesStore(chatApi, { now: () => now })
+
+    await store.load({ selectInitial: false })
+
+    expect(store.state.chats).toEqual([history])
+    expect(store.state.selected).toBeNull()
+    expect(store.state.selectedId).toBeNull()
+    expect(chatApi.get).not.toHaveBeenCalled()
+  })
+
+  it('loads task history in bounded cursor pages without replacing previously loaded tasks', async () => {
+    const { createChatWorkspacesStore } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const chats = Array.from({ length: 81 }, (_value, index) => summary({
+      id: `task-${String(index).padStart(3, '0')}`,
+      title: `任务 ${index}`,
+      createdAt: new Date(Date.UTC(2026, 7, 16, 12, 0, 0) - index * 1_000).toISOString(),
+    }))
+    const firstPage = chats.slice(0, 40)
+    const secondPage = chats.slice(40, 80)
+    const finalPage = chats.slice(80)
+    const firstCursor = {
+      id: firstPage.at(-1)!.id,
+      createdAt: firstPage.at(-1)!.createdAt,
+      updatedAt: firstPage.at(-1)!.updatedAt,
+    }
+    const secondCursor = {
+      id: secondPage.at(-1)!.id,
+      createdAt: secondPage.at(-1)!.createdAt,
+      updatedAt: secondPage.at(-1)!.updatedAt,
+    }
+    const chatApi = api(chats, chats.map(chat => workspace(chat)))
+    chatApi.list.mockImplementation(async request => {
+      if (!request?.cursor) return { revision: 4, chats: firstPage, liveChatId: null, nextCursor: firstCursor }
+      if (request.cursor.id === firstCursor.id) return { revision: 4, chats: secondPage, liveChatId: null, nextCursor: secondCursor }
+      return { revision: 4, chats: finalPage, liveChatId: null, nextCursor: null }
+    })
+    const store = createChatWorkspacesStore(chatApi, { now: () => now, pageSize: 40 })
+
+    await store.load({ selectInitial: false })
+    expect(store.state.chats).toHaveLength(40)
+    expect(store.state.nextCursor).toMatchObject(firstCursor)
+
+    await expect(store.loadMore()).resolves.toBe(true)
+    expect(store.state.chats).toHaveLength(80)
+    expect(store.state.nextCursor).toMatchObject(secondCursor)
+
+    await expect(store.loadMore()).resolves.toBe(true)
+    expect(store.state.chats).toHaveLength(81)
+    expect(store.state.nextCursor).toBeNull()
+    await expect(store.loadMore()).resolves.toBe(false)
+
+    expect(chatApi.list).toHaveBeenNthCalledWith(1, { limit: 40 })
+    expect(chatApi.list).toHaveBeenNthCalledWith(2, { cursor: expect.objectContaining(firstCursor), limit: 40 })
+    expect(chatApi.list).toHaveBeenNthCalledWith(3, { cursor: expect.objectContaining(secondCursor), limit: 40 })
+  })
+
+  it('copies reactive page cursors for IPC and rejects a response after the cursor changes', async () => {
+    const { createChatWorkspacesStore } = await import('../../../src/renderer/src/stores/chat-workspaces')
+    const chats = Array.from({ length: 3 }, (_value, index) => summary({
+      id: `page-task-${index}`,
+      title: `分页任务 ${index}`,
+      createdAt: new Date(Date.UTC(2026, 7, 16, 12, 0, 0) - index * 1_000).toISOString(),
+    }))
+    const [first, second, third] = chats
+    const firstCursor = { id: first.id, createdAt: first.createdAt, updatedAt: first.updatedAt }
+    const secondCursor = { id: second.id, createdAt: second.createdAt, updatedAt: second.updatedAt }
+    const firstPage = deferred<ChatListSnapshot>()
+    const secondPage = deferred<ChatListSnapshot>()
+    const chatApi = api(chats, chats.map(chat => workspace(chat)))
+    let pageRequest = 0
+    chatApi.list.mockImplementation(request => {
+      if (!request?.cursor) return Promise.resolve({ revision: 4, chats: [first], liveChatId: null, nextCursor: firstCursor })
+      pageRequest += 1
+      return pageRequest === 1 ? firstPage.promise : secondPage.promise
+    })
+    const store = createChatWorkspacesStore(chatApi, { now: () => now, pageSize: 1 })
+
+    await store.load({ selectInitial: false })
+    const reactiveFirstCursor = store.state.nextCursor!
+    const loadingFirstPage = store.loadMore()
+    const firstRequest = chatApi.list.mock.calls[1]![0]!
+    expect(firstRequest.cursor).toEqual(firstCursor)
+    expect(firstRequest.cursor).not.toBe(reactiveFirstCursor)
+
+    // Vue replaces this nested value with another proxy, but it still names
+    // the same backend page and must not discard its response.
+    store.state.nextCursor = { ...firstCursor }
+    firstPage.resolve({ revision: 4, chats: [second], liveChatId: null, nextCursor: secondCursor })
+    await expect(loadingFirstPage).resolves.toBe(true)
+    expect(store.state.chats).toHaveLength(2)
+
+    const loadingSecondPage = store.loadMore()
+    store.state.nextCursor = { ...secondCursor, id: 'different-page' }
+    secondPage.resolve({ revision: 4, chats: [third], liveChatId: null, nextCursor: null })
+    await expect(loadingSecondPage).resolves.toBe(false)
+    expect(store.state.chats).toHaveLength(2)
   })
 
   it('groups chats into today, current-week calendar dates, and earlier in descending date order', async () => {
@@ -1441,15 +1546,17 @@ describe('durable chat workbench components', () => {
     expect(workbenchOpenedAttachmentTarget(undefined, captured, selected)).toBe('history-task')
   })
 
-  it('creates a fresh workbench task only when no persisted task exists', () => {
+  it('creates a fresh workbench task on every entry without selecting history first', () => {
     const view = readFileSync(new URL('../../../src/renderer/src/views/WorkbenchView.vue', import.meta.url), 'utf8')
     const initialize = view.slice(view.indexOf('async function initializeWorkbench'), view.indexOf('function restoreAssociatedShellView'))
 
     expect(initialize).toContain('initializeWorkbenchTask({')
     expect(initialize).toContain('load: async () =>')
+    expect(initialize).toContain('chatStore.load({ selectInitial: false })')
     expect(initialize).toContain('shouldCreate: () =>')
-    expect(initialize).toContain('chatStore.state.chats.length === 0')
-    expect(initialize).not.toContain('return !selectedChatId')
+    expect(initialize).toContain('shouldCreate: () => true')
+    expect(initialize).not.toContain('chatStore.state.chats.length === 0')
+    expect(initialize).not.toContain('selectedChatId')
     expect(initialize).toContain('restore: async () =>')
     expect(initialize).toContain('create: () => createChat(false)')
   })
@@ -1464,6 +1571,9 @@ describe('durable chat workbench components', () => {
     expect(source).toContain('renameTask')
     expect(source).toContain('pinTask')
     expect(source).toContain('unpinTask')
+    expect(source).toContain('loadMore: []')
+    expect(source).toContain('onTaskListScroll')
+    expect(source).toContain('@scroll.passive="onTaskListScroll"')
     expect(source).toContain('暂无任务')
     expect(source).toContain('input?.select()')
     expect(source).not.toContain('SessionView')

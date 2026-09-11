@@ -135,6 +135,21 @@ describe('chat preload API', () => {
     expect(ipc.removeListener).toHaveBeenCalledWith('chats:changed', wrapper)
   })
 
+  it('validates and forwards bounded task-list page requests', async () => {
+    const ipc = createIpc()
+    ipc.invoke.mockResolvedValue({ revision: 0, chats: [], liveChatId: null })
+    const api = createTerminalAgentApi(ipc)
+    const cursor = {
+      id: 'chat-40',
+      createdAt: '2026-08-16T08:00:00.000Z',
+      updatedAt: '2026-08-16T08:01:00.000Z',
+    }
+
+    await api.chats.list({ limit: 40, cursor })
+    expect(ipc.invoke).toHaveBeenCalledWith('chats:list', { limit: 40, cursor })
+    await expect(api.chats.list({ limit: 101 } as never)).rejects.toThrow()
+  })
+
   it('validates chat runtime events before exposing them to the renderer', () => {
     const ipc = createIpc()
     const api = createTerminalAgentApi(ipc)

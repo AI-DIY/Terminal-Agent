@@ -1,5 +1,5 @@
 import type { ConnectedSession, TerminalClosedEvent, TerminalDataEvent } from '../main/ssh/session-service'
-import { chatRuntimeEventSchema, hostMemoryConsentTokenSchema, hostMemoryDisclosureSchema, hostMemoryInvalidationSchema, hostMemoryRecordSchema, hostMemorySettingsSchema, rendererModelProfileSchema } from '../shared/contracts'
+import { chatListRequestSchema, chatRuntimeEventSchema, hostMemoryConsentTokenSchema, hostMemoryDisclosureSchema, hostMemoryInvalidationSchema, hostMemoryRecordSchema, hostMemorySettingsSchema, rendererModelProfileSchema } from '../shared/contracts'
 import { z } from 'zod'
 import type {
   AgentDeltaEvent,
@@ -15,6 +15,7 @@ import type {
   ChatConversationSessionList,
   ChatCreateRequest,
   ChatCreateConversationSessionRequest,
+  ChatListRequest,
   ChatListSnapshot,
   ChatRemoveRequest,
   ChatPinRequest,
@@ -144,7 +145,7 @@ export const terminalAgentNamespace = 'terminalAgent' as const
 
 export type TerminalAgentApi = {
   chats: {
-    list(): Promise<ChatListSnapshot>
+    list(request?: ChatListRequest): Promise<ChatListSnapshot>
     create(request: ChatCreateRequest): Promise<ChatWorkspaceSnapshot>
     get(chatId: string): Promise<ChatWorkspaceSnapshot>
     listConversationSessions(chatId: string): Promise<ChatConversationSessionList>
@@ -352,7 +353,12 @@ export function createTerminalAgentApi(ipcRenderer: {
   })
   return Object.freeze({
     chats: Object.freeze({
-      list: () => ipcRenderer.invoke('chats:list') as Promise<ChatListSnapshot>,
+      list: async (request?: ChatListRequest) => {
+        const parsed = request === undefined ? undefined : chatListRequestSchema.parse(request)
+        return (parsed === undefined
+          ? await ipcRenderer.invoke('chats:list')
+          : await ipcRenderer.invoke('chats:list', parsed)) as ChatListSnapshot
+      },
       create: (request: ChatCreateRequest) => ipcRenderer.invoke('chats:create', request) as Promise<ChatWorkspaceSnapshot>,
       get: (chatId: string) => ipcRenderer.invoke('chats:get', chatId) as Promise<ChatWorkspaceSnapshot>,
       listConversationSessions: (chatId: string) => ipcRenderer.invoke('chats:conversation-sessions:list', chatId) as Promise<ChatConversationSessionList>,

@@ -8,6 +8,8 @@ export type BastionResolvedConnection =
   | {
       protocol: 'ssh'
       host: string
+      /** Selected remote hostname, distinct from a relay transport endpoint. */
+      hostname?: string
       port: number
       username: string
       password?: string
@@ -18,6 +20,8 @@ export type BastionResolvedConnection =
   | {
       protocol: 'raw'
       host: string
+      /** Selected remote hostname, distinct from a relay transport endpoint. */
+      hostname?: string
       port: number
       title: string
       columns: number

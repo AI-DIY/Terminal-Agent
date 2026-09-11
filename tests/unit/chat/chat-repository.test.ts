@@ -47,6 +47,25 @@ describe('ChatRepository', () => {
     ])
   })
 
+  it('returns ordered task summaries in cursor pages without using a mutable offset', async () => {
+    const repository = await createRepository()
+    const first = (await repository.create({ requestId: 'create-page-1' })).value
+    const second = (await repository.create({ requestId: 'create-page-2' })).value
+    const third = (await repository.create({ requestId: 'create-page-3' })).value
+
+    const initial = await repository.listSnapshot({ limit: 2 })
+    expect(initial.chats.map(chat => chat.id)).toEqual([third.id, second.id])
+    expect(initial.nextCursor).toEqual({
+      id: second.id,
+      createdAt: second.createdAt,
+      updatedAt: second.updatedAt,
+    })
+
+    const remaining = await repository.listSnapshot({ limit: 2, cursor: initial.nextCursor! })
+    expect(remaining.chats.map(chat => chat.id)).toEqual([first.id])
+    expect(remaining.nextCursor).toBeUndefined()
+  })
+
   it('archives a non-empty task conversation without changing its SSH ownership or live task', async () => {
     const repository = await createRepository()
     const chat = (await repository.create({ requestId: 'create-conversation-task' })).value

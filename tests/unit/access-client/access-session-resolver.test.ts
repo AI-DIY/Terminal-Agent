@@ -37,6 +37,44 @@ describe('AccessSessionResolver', () => {
     })
   })
 
+  it('keeps a Raw bastion transport address separate from its target hostname', async () => {
+    const resolver = new AccessSessionResolver(
+      new SavedSessionRepository(),
+      async () => ({
+        host: '127.0.0.1',
+        port: 22022,
+        username: '',
+        protocol: 'raw' as const,
+        title: 'ops@app-prod-01',
+        columns: 80,
+        rows: 24,
+      }),
+    )
+
+    await expect(resolver.resolve({ kind: 'temporary-session', path: 'C:\\temp\\raw.conf' })).resolves.toMatchObject({
+      connection: { host: '127.0.0.1', hostname: 'app-prod-01', port: 22022, protocol: 'raw' },
+    })
+  })
+
+  it('keeps a named bastion relay separate from the target encoded in the session title', async () => {
+    const resolver = new AccessSessionResolver(
+      new SavedSessionRepository(),
+      async () => ({
+        host: 'bastion.internal',
+        port: 22,
+        username: 'ops',
+        protocol: 'ssh' as const,
+        title: 'ops@app-prod-01',
+        columns: 80,
+        rows: 24,
+      }),
+    )
+
+    await expect(resolver.resolve({ kind: 'temporary-session', path: 'C:\\temp\\named-relay.conf' })).resolves.toMatchObject({
+      connection: { host: 'bastion.internal', hostname: 'app-prod-01', port: 22, protocol: 'ssh' },
+    })
+  })
+
   it('reads only supported tmp fields and does not persist the launch password', async () => {
     const profiles = { load: vi.fn(), save: vi.fn() }
     const resolver = createResolver(profiles)

@@ -23,6 +23,7 @@ import {
   type ChatConversationSessionList,
   type ChatCreateConversationSessionRequest,
   type ChatCreateRequest,
+  type ChatListRequest,
   type ChatPinRequest,
   type ChatRemoveRequest,
   type ChatSessionResolution,
@@ -49,11 +50,11 @@ export class ChatService {
 
   constructor(private readonly repository: ChatRepositoryPort) {}
 
-  async list() {
+  async list(request: ChatListRequest = {}) {
     while (true) {
       await this.waitForMutations()
       const revision = this.revision
-      const snapshot = await this.repository.listSnapshot()
+      const snapshot = await this.repository.listSnapshot(request)
       if (revision === this.revision && this.pendingMutations.size === 0) return { revision, ...snapshot }
     }
   }

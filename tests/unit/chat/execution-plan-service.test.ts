@@ -203,6 +203,173 @@ describe('ExecutionPlanService', () => {
     ])
   })
 
+  it('cancels an executing plan without waiting for a swallowed completion probe', async () => {
+    let persistedPlan: ChatExecutionPlan = {
+      ...plan(),
+      steps: [
+        ...plan().steps,
+        { id: 'step-2', target: 'web-01', explanation: '查看最近日志', originalCommand: 'journalctl -n 20 api', sendState: 'pending' },
+      ],
+    }
+    let resolveCompletion!: (result: { completed: boolean; timedOut: boolean }) => void
+    let executionStarted!: () => void
+    const started = new Promise<void>(resolve => { executionStarted = resolve })
+    const writeAndWaitForCompletion = vi.fn(() => {
+      executionStarted()
+      return new Promise<{ completed: boolean; timedOut: boolean }>(resolve => { resolveCompletion = resolve })
+    })
+    const output = { expect: vi.fn(), forget: vi.fn(), complete: vi.fn(), cancel: vi.fn() }
+    const watcher = { watch: vi.fn(() => output) }
+    const updateMessage = vi.fn(async (request: { executionPlan?: ChatExecutionPlan }) => {
+      if (request.executionPlan) persistedPlan = structuredClone(request.executionPlan)
+      return undefined
+    })
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: structuredClone(persistedPlan) }],
+        shells: [{ sessionId: 'session-1', hostname: 'web-01', status: 'open' }],
+      } })),
+      updateMessage,
+    }, {
+      snapshot: () => [{ id: 'session-1', hostname: 'web-01' }],
+      write: vi.fn(),
+      writeAndWaitForCompletion,
+    }, { match: () => null })
+    service.setResultOutputWatcher(watcher)
+
+    const execution = service.execute({ requestId: 'cancel-running', chatId: 'chat-1', messageId: 'message-1' })
+    await started
+    await expect(service.cancel({ requestId: 'cancel-running-now', chatId: 'chat-1', messageId: 'message-1' })).resolves.toBeUndefined()
+
+    expect(persistedPlan).toMatchObject({
+      status: 'cancelled',
+      steps: [
+        { id: 'step-1', sendState: 'sent' },
+        { id: 'step-2', sendState: 'not_sent' },
+      ],
+    })
+    expect(output.cancel).toHaveBeenCalledOnce()
+    await expect(execution).resolves.toBeUndefined()
+
+    // The first command may return after cancellation, but that late result
+    // must never overwrite the durable cancelled record or release step two.
+    resolveCompletion({ completed: true, timedOut: false })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(persistedPlan.status).toBe('cancelled')
+    expect(persistedPlan.steps[1]).toMatchObject({ id: 'step-2', sendState: 'not_sent' })
+    expect(writeAndWaitForCompletion).toHaveBeenCalledOnce()
+  })
+
+  it('persists an execution failure when cancellation storage fails and releases the active plan', async () => {
+    let persistedPlan: ChatExecutionPlan = {
+      ...plan(),
+      steps: [
+        ...plan().steps,
+        { id: 'step-2', target: 'web-01', explanation: '查看最近日志', originalCommand: 'journalctl -n 20 api', sendState: 'pending' },
+      ],
+    }
+    const cancellationError = new Error('cancellation storage unavailable')
+    let resolveCompletion!: (result: { completed: boolean; timedOut: boolean }) => void
+    let executionStarted!: () => void
+    const started = new Promise<void>(resolve => { executionStarted = resolve })
+    const writeAndWaitForCompletion = vi.fn(() => {
+      executionStarted()
+      return new Promise<{ completed: boolean; timedOut: boolean }>(resolve => { resolveCompletion = resolve })
+    })
+    const output = { expect: vi.fn(), forget: vi.fn(), complete: vi.fn(), cancel: vi.fn() }
+    const watcher = { watch: vi.fn(() => output) }
+    const updateMessage = vi.fn(async (request: { requestId: string; executionPlan?: ChatExecutionPlan }) => {
+      if (request.requestId === 'cancel-write-failure') throw cancellationError
+      if (request.executionPlan) persistedPlan = structuredClone(request.executionPlan)
+      return undefined
+    })
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [{ id: 'message-1', role: 'assistant', state: 'complete', content: '{}', executionPlan: structuredClone(persistedPlan) }],
+        shells: [{ sessionId: 'session-1', hostname: 'web-01', status: 'open' }],
+      } })),
+      updateMessage,
+    }, {
+      snapshot: () => [{ id: 'session-1', hostname: 'web-01' }],
+      write: vi.fn(),
+      writeAndWaitForCompletion,
+    }, { match: () => null })
+    service.setResultOutputWatcher(watcher)
+
+    const execution = service.execute({ requestId: 'execute-write-failure', chatId: 'chat-1', messageId: 'message-1' })
+    const executionError = execution.then(() => undefined, error => error)
+    await started
+
+    await expect(service.cancel({ requestId: 'cancel-write-failure', chatId: 'chat-1', messageId: 'message-1' })).rejects.toBe(cancellationError)
+    await expect(executionError).resolves.toBe(cancellationError)
+
+    expect(persistedPlan).toMatchObject({
+      status: 'execution_failed',
+      steps: [
+        { id: 'step-1', sendState: 'sent' },
+        { id: 'step-2', sendState: 'not_sent', failure: expect.any(String) },
+      ],
+    })
+    expect(updateMessage.mock.calls.map(call => call[0].requestId)).toEqual([
+      'execute-write-failure:executing',
+      'cancel-write-failure',
+      'cancel-write-failure:failed',
+    ])
+    expect(output.cancel).toHaveBeenCalledOnce()
+
+    // The failed cancellation must not leave a cached active execution that
+    // replays the storage error instead of reporting the terminal plan state.
+    await expect(service.cancel({ requestId: 'cancel-after-failure', chatId: 'chat-1', messageId: 'message-1' })).rejects.toThrow('计划不可取消')
+
+    // A completion probe that was already in flight may settle late, but it
+    // must not dispatch the next command or overwrite the durable failure.
+    resolveCompletion({ completed: true, timedOut: false })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(writeAndWaitForCompletion).toHaveBeenCalledOnce()
+    expect(persistedPlan.status).toBe('execution_failed')
+    expect(persistedPlan.steps[1]).toMatchObject({ id: 'step-2', sendState: 'not_sent' })
+  })
+
+  it('persists execution_failed after a terminal-save failure and releases later plans', async () => {
+    const plans = new Map<string, ChatExecutionPlan>([
+      ['message-1', plan()],
+      ['message-2', { ...plan(), id: 'plan-2', steps: [{ ...plan().steps[0], id: 'step-2', originalCommand: 'uptime' }] }],
+    ])
+    const updateMessage = vi.fn(async (request: { requestId: string; messageId: string; executionPlan?: ChatExecutionPlan }) => {
+      if (request.requestId === 'persist-fails:result') throw new Error('storage unavailable')
+      if (request.executionPlan) plans.set(request.messageId, structuredClone(request.executionPlan))
+      return undefined
+    })
+    const write = vi.fn(async () => undefined)
+    const service = new ExecutionPlanService({
+      get: vi.fn(async () => ({ chat: {
+        messages: [...plans.entries()].map(([id, executionPlan]) => ({ id, role: 'assistant', state: 'complete', content: '{}', executionPlan: structuredClone(executionPlan) })),
+        shells: [{ sessionId: 'session-1', hostname: 'web-01', status: 'open' }],
+      } })),
+      updateMessage,
+    }, {
+      snapshot: () => [{ id: 'session-1', hostname: 'web-01' }],
+      write,
+    }, { match: () => null })
+
+    await expect(service.execute({ requestId: 'persist-fails', chatId: 'chat-1', messageId: 'message-1' })).rejects.toThrow('storage unavailable')
+    expect(plans.get('message-1')).toMatchObject({
+      status: 'execution_failed',
+      steps: [{ sendState: 'sent' }],
+    })
+    expect(updateMessage.mock.calls.map(call => ((call as unknown as [{ requestId: string }])[0]).requestId)).toEqual([
+      'persist-fails:executing',
+      'persist-fails:result',
+      'persist-fails:failed',
+    ])
+
+    await expect(service.execute({ requestId: 'next-plan', chatId: 'chat-1', messageId: 'message-2' })).resolves.toBeUndefined()
+    expect(plans.get('message-2')).toMatchObject({ status: 'executed', steps: [{ sendState: 'sent' }] })
+    expect(write).toHaveBeenCalledWith('session-1', 'uptime\n')
+  })
+
   it('does not inject a shell completion probe into a Raw TCP session', async () => {
     const write = vi.fn(async () => undefined)
     const writeAndWaitForCompletion = vi.fn()

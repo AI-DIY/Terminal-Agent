@@ -1,3 +1,26 @@
+# Terminal-Agent v3.3.6
+
+Release date: 2026-09-11
+
+## 开源 TA 修改意见微调
+
+- 应用进入工作台时始终新建并选中一个任务，不再自动选中最近一次历史任务；历史任务列表首屏限量展示，后续内容会随着滚动按需加载。
+- Electron 用户数据根目录统一为 `%USERPROFILE%\.terminal-agent`，首次升级会保留旧目录并以不覆盖现有文件的方式迁移历史任务、会话、设置和本地浏览器数据。
+- 堡垒机连接按用户实际选择的主机名识别和复用，同 IP 的不同主机不会再错误聚焦到首次添加的连接。
+- 堡垒机拒绝命令后的 SSH 终端会恢复可用提示符；AI 执行计划的命令失败、取消和后续交互状态均会及时收敛，不再停留在 pending 卡片。
+
+## Windows 发布包
+
+- `Terminal-Agent-Setup-3.3.6.exe`
+- `putty.exe`
+- `快速安装脚本.cmd`
+- `快速安装手册.md`
+- `快速安装手册.pdf`
+- `Terminal-Agent-Quick-Install-3.3.6.zip`
+- `Terminal-Agent-Uninstall-Cleanup-3.3.6.zip`
+
+---
+
 # Terminal-Agent v3.3.5
 
 Release date: 2026-09-10

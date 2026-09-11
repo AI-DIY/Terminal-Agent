@@ -33,6 +33,29 @@ describe('createAccessClientSessionOpener', () => {
     })
     expect(sessions.connect).not.toHaveBeenCalled()
   })
+
+  it('passes a logical bastion hostname through while retaining the relay transport address', async () => {
+    const sessions = createSessions()
+    const opener = createAccessClientSessionOpener(sessions)
+
+    await opener.openRaw({
+      host: '127.0.0.1',
+      hostname: 'app-prod-01',
+      port: 22022,
+      title: 'ops@app-prod-01',
+      columns: 120,
+      rows: 40,
+    })
+
+    expect(sessions.connectRaw).toHaveBeenCalledWith({
+      host: '127.0.0.1',
+      hostname: 'app-prod-01',
+      port: 22022,
+      title: 'ops@app-prod-01',
+      columns: 120,
+      rows: 40,
+    })
+  })
 })
 
 function createSessions() {

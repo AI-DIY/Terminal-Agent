@@ -344,6 +344,25 @@ export function createGlobalChatStore(api: Api) {
       state.activeMessageIds[chatId] = null
       state.runUserMessageIds[chatId] = null
     },
+    /**
+     * Apply plan lifecycle updates without replacing the transcript. A task
+     * update can arrive after an explicit internal-conversation restore, so
+     * rehydrating every message here could discard newer local chat state.
+     */
+    syncExecutionPlans(chatId: string, messages: readonly {
+      id: string
+      executionPlan?: ChatExecutionPlan
+    }[]): void {
+      const localMessages = state.messages[chatId]
+      if (!localMessages) return
+      const incomingPlans = new Map(messages.map(message => [message.id, message.executionPlan] as const))
+      for (const message of localMessages) {
+        if (!incomingPlans.has(message.id)) continue
+        const executionPlan = incomingPlans.get(message.id)
+        if (executionPlan) message.executionPlan = structuredClone(executionPlan)
+        else delete message.executionPlan
+      }
+    },
     async send(chatId: string, content: any, sessionIds?: readonly string[], skillIds?: readonly BuiltInSkillId[], selectedSkillIds?: readonly SkillId[]): Promise<void> {
       // Keep the draft intact while compaction is in flight.  The runtime also
       // enforces this ordering for non-renderer callers, but guarding here

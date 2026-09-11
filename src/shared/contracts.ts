@@ -103,6 +103,9 @@ export type SessionMode = z.infer<typeof sessionModeSchema>
 
 export const chatIdentifierSchema = z.string().trim().min(1).max(128)
 export const chatRequestIdSchema = z.string().trim().min(1).max(128)
+/** Keep the task sidebar responsive even for long-lived workspaces. */
+export const CHAT_LIST_PAGE_SIZE = 40
+const CHAT_LIST_MAX_PAGE_SIZE = 100
 const canonicalChatTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 export const chatTimestampSchema = z.string().regex(canonicalChatTimestampPattern).refine(timestamp => {
   const milliseconds = Date.parse(timestamp)
@@ -187,10 +190,29 @@ export const chatWorkspaceSnapshotSchema = z.object({
 }).strict()
 export type ChatWorkspaceSnapshot = z.infer<typeof chatWorkspaceSnapshotSchema>
 
+/**
+ * The final item returned by a task-list page. It is structured instead of
+ * using an offset so task updates and deletions cannot make a later page skip
+ * an unrelated historical task.
+ */
+export const chatListCursorSchema = z.object({
+  updatedAt: chatTimestampSchema,
+  createdAt: chatTimestampSchema,
+  id: chatIdentifierSchema,
+}).strict()
+export type ChatListCursor = z.infer<typeof chatListCursorSchema>
+
+export const chatListRequestSchema = z.object({
+  cursor: chatListCursorSchema.optional(),
+  limit: z.number().int().min(1).max(CHAT_LIST_MAX_PAGE_SIZE).optional(),
+}).strict()
+export type ChatListRequest = z.infer<typeof chatListRequestSchema>
+
 export const chatListSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
   chats: z.array(chatSummarySchema),
   liveChatId: chatIdentifierSchema.nullable(),
+  nextCursor: chatListCursorSchema.nullable().optional(),
 }).strict()
 export type ChatListSnapshot = z.infer<typeof chatListSnapshotSchema>
 
